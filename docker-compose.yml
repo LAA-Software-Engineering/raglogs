@@ -1,0 +1,43 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: raglogs
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      RAGLOGS_DB_URL: postgresql+psycopg://postgres:postgres@postgres:5432/raglogs
+      RAGLOGS_LLM_PROVIDER: ${RAGLOGS_LLM_PROVIDER:-disabled}
+      RAGLOGS_LLM_MODEL: ${RAGLOGS_LLM_MODEL:-gpt-4.1-mini}
+      RAGLOGS_OPENAI_API_KEY: ${RAGLOGS_OPENAI_API_KEY:-}
+      RAGLOGS_OPENAI_BASE_URL: ${RAGLOGS_OPENAI_BASE_URL:-https://api.openai.com/v1}
+      RAGLOGS_EMBEDDINGS_PROVIDER: ${RAGLOGS_EMBEDDINGS_PROVIDER:-disabled}
+    command: >
+      sh -c "alembic upgrade head && uvicorn raglogs.api.app:app --host 0.0.0.0 --port 8000"
+    volumes:
+      - ./sample_data:/app/sample_data:ro
+      - ./logs:/app/logs:ro
+
+volumes:
+  postgres_data:
