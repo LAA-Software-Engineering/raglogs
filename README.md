@@ -3,11 +3,10 @@
 Ask your logs what happened.
 
 ```bash
-$ raglogs demo
+$ make demo
 ```
 
-<img width="1244" height="882" alt="image" src="https://github.com/user-attachments/assets/6cbb1db3-e025-42d1-8d73-bad08fa7bc6b" />
-
+<img width="1468" height="933" alt="image" src="https://github.com/user-attachments/assets/93a58a8b-0ecb-4dd4-9901-8faaab3ccea3" />
 
 ## What raglogs does
 
