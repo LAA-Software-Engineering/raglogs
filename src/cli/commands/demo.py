@@ -151,7 +151,7 @@ def demo_cmd(
             ingestion_job_id=uuid.UUID(job_id),
         )
 
-    mode_label = "[dim](LLM)[/dim]" if result.mode == "llm" else "[dim](rules)[/dim]"
+    mode_label = "[dim][/dim]" if result.mode == "llm" else "[dim](rules)[/dim]"
     console.print(Panel(
         result.summary_text,
         title=f"[bold cyan]raglogs explain[/bold cyan] {mode_label}",

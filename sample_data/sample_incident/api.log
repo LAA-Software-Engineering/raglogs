@@ -1,144 +1,144 @@
-{"timestamp": "2026-03-12T22:24:46.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:26:22.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:27:15.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:27:44.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:27:45.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=6314ms (high latency detected)"}
-{"timestamp": "2026-03-12T22:28:17.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:29:56.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:29:59.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:30:08.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:30:31.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=3658ms (high latency detected)"}
-{"timestamp": "2026-03-12T22:30:31.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:31:25.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=3438ms (high latency detected)"}
-{"timestamp": "2026-03-12T22:32:05.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:32:57.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:32:57.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:33:01.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:33:21.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=6560ms (high latency detected)"}
-{"timestamp": "2026-03-12T22:33:24.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:33:51.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:33:55.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:34:13.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=4790ms (high latency detected)"}
-{"timestamp": "2026-03-12T22:35:17.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:35:34.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:35:45.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:35:49.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:36:01.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:36:14.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:36:20.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=5512ms (high latency detected)"}
-{"timestamp": "2026-03-12T22:36:38.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:36:46.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:36:47.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=5727ms (high latency detected)"}
-{"timestamp": "2026-03-12T22:36:55.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=7032ms (high latency detected)"}
-{"timestamp": "2026-03-12T22:37:27.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:38:08.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=4024ms (high latency detected)"}
-{"timestamp": "2026-03-12T22:38:12.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:38:41.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:38:52.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:39:24.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:39:27.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:39:37.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:40:08.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:40:37.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:40:42.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=4422ms (high latency detected)"}
-{"timestamp": "2026-03-12T22:41:12.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:41:18.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=4740ms (high latency detected)"}
-{"timestamp": "2026-03-12T22:41:39.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:42:12.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=3226ms (high latency detected)"}
-{"timestamp": "2026-03-12T22:42:25.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=5768ms (high latency detected)"}
-{"timestamp": "2026-03-12T22:42:32.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:42:45.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:42:46.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:43:18.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:43:48.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=4842ms (high latency detected)"}
-{"timestamp": "2026-03-12T22:43:53.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:45:38.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:46:02.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:46:26.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:46:32.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:46:36.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:46:42.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:46:44.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:46:56.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:47:07.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:47:08.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=6628ms (high latency detected)"}
-{"timestamp": "2026-03-12T22:47:58.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:47:59.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:48:03.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:48:13.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:48:22.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:49:02.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:49:41.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:49:58.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:50:01.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:50:16.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:50:25.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:50:39.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:50:41.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:51:06.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:52:00.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:52:43.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:52:58.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:53:06.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:53:33.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:53:43.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:53:47.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=3696ms (high latency detected)"}
-{"timestamp": "2026-03-12T22:54:06.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:54:51.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:54:57.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:54:59.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:55:02.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:55:12.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=3364ms (high latency detected)"}
-{"timestamp": "2026-03-12T22:55:25.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:56:02.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:57:33.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:57:55.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:57:56.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=6817ms (high latency detected)"}
-{"timestamp": "2026-03-12T22:57:59.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=7945ms (high latency detected)"}
-{"timestamp": "2026-03-12T22:58:15.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:58:17.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:58:21.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:58:58.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:59:09.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T22:59:15.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T22:59:46.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=4343ms (high latency detected)"}
-{"timestamp": "2026-03-12T22:59:52.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T23:00:02.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=7367ms (high latency detected)"}
-{"timestamp": "2026-03-12T23:00:27.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T23:00:59.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T23:01:08.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=4024ms (high latency detected)"}
-{"timestamp": "2026-03-12T23:01:12.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T23:01:37.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T23:02:10.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T23:02:14.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=5318ms (high latency detected)"}
-{"timestamp": "2026-03-12T23:02:24.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T23:02:24.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T23:03:13.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T23:04:09.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T23:04:14.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T23:04:44.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T23:05:15.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T23:05:40.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T23:06:03.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T23:06:38.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T23:06:46.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T23:06:47.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T23:06:58.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T23:06:58.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T23:07:38.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T23:08:02.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T23:08:37.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T23:08:45.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T23:09:22.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T23:09:24.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=6124ms (high latency detected)"}
-{"timestamp": "2026-03-12T23:09:49.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T23:09:54.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T23:10:11.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T23:10:12.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T23:10:47.125963+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=4093ms (high latency detected)"}
-{"timestamp": "2026-03-12T23:10:47.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T23:11:31.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
-{"timestamp": "2026-03-12T23:11:31.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T23:11:37.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T23:11:40.125963+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
-{"timestamp": "2026-03-12T23:15:17.125963+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T22:38:51.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:39:35.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:40:15.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:41:03.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:42:00.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T22:42:23.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:43:07.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:43:17.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T22:43:17.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:43:18.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:44:09.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:44:11.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:44:44.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:44:48.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:45:21.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:45:29.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=3584ms (high latency detected)"}
+{"timestamp": "2026-03-12T22:45:33.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T22:45:57.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:46:56.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:49:37.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=4249ms (high latency detected)"}
+{"timestamp": "2026-03-12T22:49:39.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:49:44.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T22:50:13.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:50:45.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:50:56.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T22:50:59.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:51:02.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:51:11.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:51:44.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:51:46.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:52:46.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T22:53:12.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:53:26.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=6313ms (high latency detected)"}
+{"timestamp": "2026-03-12T22:53:39.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T22:53:49.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T22:53:59.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T22:54:09.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=3152ms (high latency detected)"}
+{"timestamp": "2026-03-12T22:54:24.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T22:54:25.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=4989ms (high latency detected)"}
+{"timestamp": "2026-03-12T22:54:26.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T22:54:39.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:54:41.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T22:54:44.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T22:54:45.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=3078ms (high latency detected)"}
+{"timestamp": "2026-03-12T22:55:38.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:55:50.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=3223ms (high latency detected)"}
+{"timestamp": "2026-03-12T22:57:16.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:57:27.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:57:30.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T22:58:01.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=7142ms (high latency detected)"}
+{"timestamp": "2026-03-12T22:58:38.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:59:05.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T22:59:07.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:59:36.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T22:59:42.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T22:59:50.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:00:25.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:01:18.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=6915ms (high latency detected)"}
+{"timestamp": "2026-03-12T23:01:35.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=6912ms (high latency detected)"}
+{"timestamp": "2026-03-12T23:01:45.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=5632ms (high latency detected)"}
+{"timestamp": "2026-03-12T23:01:59.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:02:06.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=4253ms (high latency detected)"}
+{"timestamp": "2026-03-12T23:02:34.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:03:06.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:03:35.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=5474ms (high latency detected)"}
+{"timestamp": "2026-03-12T23:04:47.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:05:17.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:05:48.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=7393ms (high latency detected)"}
+{"timestamp": "2026-03-12T23:06:05.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=4406ms (high latency detected)"}
+{"timestamp": "2026-03-12T23:06:07.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:06:52.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T23:06:54.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:07:05.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:07:23.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T23:07:24.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:07:56.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T23:08:30.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=6157ms (high latency detected)"}
+{"timestamp": "2026-03-12T23:08:36.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:08:46.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T23:08:56.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:09:05.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T23:09:22.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T23:09:24.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:09:28.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:10:33.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:10:49.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T23:10:55.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:11:09.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:11:10.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T23:11:16.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T23:11:33.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:11:34.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:13:11.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T23:13:32.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:13:36.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:13:47.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:13:57.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T23:14:11.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:14:14.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:14:21.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=7293ms (high latency detected)"}
+{"timestamp": "2026-03-12T23:14:23.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:14:24.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:14:28.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:14:31.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:15:06.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:15:53.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:16:10.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:16:29.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:16:30.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=7904ms (high latency detected)"}
+{"timestamp": "2026-03-12T23:16:44.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:16:58.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:17:48.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=7072ms (high latency detected)"}
+{"timestamp": "2026-03-12T23:18:00.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:18:18.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T23:19:39.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:19:48.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T23:20:42.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:21:04.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T23:21:08.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T23:21:08.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:21:33.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:21:40.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:21:44.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T23:22:19.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=3766ms (high latency detected)"}
+{"timestamp": "2026-03-12T23:22:28.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T23:22:40.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=4780ms (high latency detected)"}
+{"timestamp": "2026-03-12T23:22:43.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:22:44.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:22:46.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T23:23:04.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T23:23:08.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:23:18.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T23:24:43.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:25:16.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:26:03.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:26:09.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T23:26:36.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:27:09.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=6315ms (high latency detected)"}
+{"timestamp": "2026-03-12T23:27:52.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=3513ms (high latency detected)"}
+{"timestamp": "2026-03-12T23:28:14.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=6877ms (high latency detected)"}
+{"timestamp": "2026-03-12T23:28:23.569761+00:00", "level": "info", "service": "api", "message": "POST /api/checkout 200 OK latency=115ms"}
+{"timestamp": "2026-03-12T23:28:25.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
+{"timestamp": "2026-03-12T23:30:19.569761+00:00", "level": "warn", "service": "api", "message": "POST /api/checkout 200 OK latency=3459ms (high latency detected)"}
+{"timestamp": "2026-03-12T23:30:26.569761+00:00", "level": "error", "service": "api", "message": "POST /api/checkout 500 Internal Server Error \u2014 upstream billing error"}
