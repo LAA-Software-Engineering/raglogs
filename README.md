@@ -43,26 +43,29 @@ raglogs explains incidents.
 ## The killer commands
 
 ```bash
-raglogs explain --since 30m
+raglogs explain --since 2h
 ```
 
 ```
-Incident summary
-
-Window: 2026-03-12 22:00:00 UTC → 2026-03-12 22:30:00 UTC
-Services affected: api, billing-worker
-Primary issue: Stripe signature verification failed for endpoint /webhooks/stripe
-Secondary effects: POST /api/checkout 500 Internal Server Error — upstream billing error (39 events)
-Likely trigger: Deploy completed for billing-worker v2.4.1 at 21:58:15 UTC
-
-Evidence:
-- 184 similar errors in billing-worker
-- No comparable error volume in prior 24h baseline
-- First error spike occurred 2m after deploy trigger
-- Endpoint '/webhooks/stripe' referenced in 100% of primary failures
-- 39 checkout 500s in api began after webhook error spike
-
-Confidence: medium-high
+╭──────────────────────────────────────────────────────── raglogs explain  ─────────────────────────────────────────────────────────╮
+│ Incident summary                                                                                                                  │
+│                                                                                                                                   │
+│ Window: 2026-03-12T22:33:30 to 2026-03-12T23:33:30                                                                                │
+│                                                                                                                                   │
+│ Services affected: billing-worker, api                                                                                            │
+│                                                                                                                                   │
+│ Primary issue: A surge of 184 Stripe signature verification failures occurred in the billing-worker service at the                │
+│ /webhooks/stripe endpoint, starting about 2 minutes after deployment of billing-worker version v2.4.1.                            │
+│                                                                                                                                   │
+│ Secondary effects: Following the primary failures, the api service experienced 39 checkout requests returning 500 Internal Server │
+│ Errors due to upstream billing errors, along with 25 checkout requests showing high latency. Additionally, billing-worker logged  │
+│ webhook retry attempts for failed events.                                                                                         │
+│                                                                                                                                   │
+│ Likely trigger: Deployment of billing-worker version v2.4.1 at 22:38:29, immediately followed by application start, appears to    │
+│ have introduced the Stripe signature verification failures.                                                                       │
+│                                                                                                                                   │
+│ Confidence: high                                                                                                                  │
+╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
 ```bash
@@ -70,25 +73,36 @@ raglogs timeline --since 2h
 ```
 
 ```
-Incident timeline  2026-03-12 21:58:00 UTC → 2026-03-12 23:58:00 UTC
+  22:38:29  deploy     Deploy completed for billing-worker version v2.4.1 · deployment-controller
+  22:38:30  startup    Application started billing-worker v2.4.1 on port 8080 · billing-worker
 
-  21:58:14  deploy     Deploy completed for billing-worker version v2.4.1 · deployment-controller
-  21:58:15  startup    Application started billing-worker v2.4.1 on port 8080 · billing-worker
+  22:40:31  error ↑    Stripe signature verification failed for endpoint /webhooks/stripe
+             184 events · billing-worker · 49 min span
 
-  22:00:10  error ↑    Stripe signature verification failed for endpoint /webhooks/stripe
-                       184 events · billing-worker · 49 min span
+  22:42:00  effect     POST /api/checkout 500 Internal Server Error — upstream billing error
+             39 events · api · 48 min span
+  22:42:50  effect     Webhook retries (2 retry events)
+             2 events · billing-worker
 
-  22:01:27  effect     POST /api/checkout 200 OK latency=<duration> (high latency detected)
-                       25 events · api · 43 min span
+  22:45:29  effect     POST /api/checkout 200 OK latency=<duration> (high latency detected)
+             25 events · api · 44 min span
+```
 
-  22:01:49  effect     Webhook retries (2 retry events)
-                       2 events · billing-worker
+```sh
+raglogs ask 'why did stripe fail?'
+```
 
-  22:02:56  effect     POST /api/checkout 500 Internal Server Error — upstream billing error
-                       39 events · api · 45 min span
-
-  22:11:25  symptom    Webhook queue growing, 251 events pending processing
-                       2 events · billing-worker · 30 min span
+```
+╭─────────────────────────────────────────────────────────── raglogs ask ───────────────────────────────────────────────────────────╮
+│ Stripe failed because the signature verification for incoming webhook requests to the /webhooks/stripe endpoint failed            │
+│ repeatedly. This caused the billing-worker service to reject or fail processing Stripe webhook events, likely disrupting payment  │
+│ or billing workflows. The errors were consistently observed between 22:54 and 23:30 UTC on 2026-03-12.                            │
+│                                                                                                                                   │
+│ Key supporting evidence:                                                                                                          │
+│ - 500 errors logged with the message "Stripe signature verification failed for endpoint /webhooks/stripe"                         │
+│ - Errors occurred in the billing-worker service                                                                                   │
+│ - Time window of errors: 2026-03-12T22:54:49 to 2026-03-12T23:30:29 UTC                                                           │
+╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
 `explain` answers **what happened**.
@@ -97,6 +111,8 @@ Incident timeline  2026-03-12 21:58:00 UTC → 2026-03-12 23:58:00 UTC
 Together they work like `git log` and `git blame` — but for incidents.
 
 Both outputs are fully deterministic. No LLM required.
+
+`ask` answers **questions you didn’t think to ask ahead of time**.
 
 ---
 
