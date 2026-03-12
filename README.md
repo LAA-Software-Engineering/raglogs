@@ -6,6 +6,9 @@ Ask your logs what happened.
 $ raglogs demo
 ```
 
+<img width="1244" height="882" alt="image" src="https://github.com/user-attachments/assets/6cbb1db3-e025-42d1-8d73-bad08fa7bc6b" />
+
+
 ## What raglogs does
 
 raglogs analyzes a bounded time window of logs and produces a short
