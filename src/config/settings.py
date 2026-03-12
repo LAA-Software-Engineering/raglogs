@@ -1,5 +1,4 @@
 from typing import Literal
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,13 +19,16 @@ class Settings(BaseSettings):
     llm_provider: Literal["disabled", "openai", "ollama"] = "disabled"
     llm_model: str = "gpt-4.1-mini"
 
-    openai_base_url: str = "https://api.openai.com/v1"
     openai_api_key: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"
     ollama_base_url: str = "http://localhost:11434"
 
     default_baseline_window: str = "24h"
     max_evidence_items: int = 8
     max_clusters_for_explain: int = 10
+
+    # Worker
+    worker_poll_interval: int = 2          # seconds between idle polls
 
     # Cluster scoring weights
     severity_weight_fatal: float = 5.0

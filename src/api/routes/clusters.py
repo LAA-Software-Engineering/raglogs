@@ -1,3 +1,5 @@
+"""Clusters API route with optional ingestion_job_id scoping."""
+import uuid
 from datetime import datetime
 from typing import Optional
 
@@ -14,6 +16,7 @@ class ClustersRequest(BaseModel):
     service: Optional[str] = None
     env: Optional[str] = None
     top: int = 15
+    ingestion_job_id: Optional[str] = None
 
 
 @router.post("/clusters")
@@ -31,6 +34,13 @@ def clusters_endpoint(request: ClustersRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    ingestion_job_id: Optional[uuid.UUID] = None
+    if request.ingestion_job_id:
+        try:
+            ingestion_job_id = uuid.UUID(request.ingestion_job_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid ingestion_job_id")
+
     try:
         with get_db() as db:
             _, clusters = run_clustering(
@@ -41,12 +51,14 @@ def clusters_endpoint(request: ClustersRequest):
                 environment=request.env,
                 max_clusters=request.top,
                 save_to_db=False,
+                ingestion_job_id=ingestion_job_id,
             )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
     return {
         "window": {"start": window_start.isoformat(), "end": window_end.isoformat()},
+        "ingestion_job_id": request.ingestion_job_id,
         "clusters": [
             {
                 "fingerprint": c.fingerprint,
