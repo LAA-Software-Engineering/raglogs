@@ -652,12 +652,6 @@ New source adapters go in `raglogs/adapters/`. Each adapter yields `ParsedLogLin
 
 ## Roadmap
 
-**Phase 2 — Runtime polish**
-- Docker Compose with API + background worker
-- DB-backed job queue and async ingestion
-- Cached cluster runs and explanation persistence
-- Improved config validation and error messages
-
 **Phase 3 — Connectors and richer analysis**
 - Datadog adapter
 - Loki adapter
