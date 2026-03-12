@@ -1,14 +1,37 @@
 # raglogs
 
-**Ask your logs what happened. Get a root-cause summary with evidence.**
+Ask your logs what happened.
 
-raglogs is a self-hosted, open-source incident explanation tool. It ingests your application logs, clusters similar events, compares against a baseline window, detects trigger events, and produces short evidence-backed summaries of what went wrong — with or without an LLM.
+```bash
+$ raglogs explain --since 30m
 
-This is not a log search tool. It is not a dashboard. It is not "chat with your logs."
+Incident summary
 
-It answers one question well:
+Window: 22:00 → 22:30
+Services affected: api, billing-worker
+Primary issue: Stripe signature verification failed
+Likely trigger: Deploy of billing-worker v2.4.1
 
-> **What happened, why do you think that, and what evidence supports it?**
+Evidence:
+- 184 similar errors
+- first occurrence 2m after deploy
+- endpoint '/webhooks/stripe' in 100% of failures
+
+Confidence: medium-high
+```
+
+## What raglogs does
+
+raglogs analyzes a bounded time window of logs and produces a short
+incident explanation backed by evidence.
+
+It is designed for answering one question quickly:
+
+**What happened, why do you think that, and what evidence supports it?**
+
+grep finds lines.
+Datadog shows dashboards.
+raglogs explains incidents.
 
 ---
 
