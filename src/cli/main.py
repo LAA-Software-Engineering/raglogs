@@ -12,6 +12,7 @@ def _build_app() -> typer.Typer:
     from src.cli.commands.status import status_cmd
     from src.cli.commands.config_cmd import config_cmd
     from src.cli.commands.ask import app as ask_app
+    from src.cli.commands.demo import demo_cmd
 
     _app = typer.Typer(
         name="raglogs",
@@ -26,6 +27,7 @@ def _build_app() -> typer.Typer:
     _app.command("clusters")(clusters_cmd)
     _app.command("status")(status_cmd)
     _app.command("config")(config_cmd)
+    _app.command("demo")(demo_cmd)
     _app.add_typer(ask_app, name="ask")
     return _app
 

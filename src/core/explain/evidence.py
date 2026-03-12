@@ -50,6 +50,7 @@ def find_trigger_candidates(
     window_start: datetime,
     window_end: datetime,
     lookback_minutes: int = 10,
+    ingestion_job_id: Optional[uuid.UUID] = None,
 ) -> list[TriggerCandidate]:
     """
     Find likely trigger events in a window slightly before the main window.
@@ -61,7 +62,10 @@ def find_trigger_candidates(
     q = select(LogEntry).where(
         LogEntry.timestamp >= search_start,
         LogEntry.timestamp <= window_end,
-    ).limit(5000)
+    )
+    if ingestion_job_id:
+        q = q.where(LogEntry.ingestion_job_id == ingestion_job_id)
+    q = q.limit(5000)
 
     rows = db.execute(q).scalars().all()
 
@@ -134,11 +138,12 @@ def assemble_evidence(
         significant_clusters = clusters
 
     primary = significant_clusters[0] if significant_clusters else None
-    # Sort secondary by count descending so highest-volume effects list first
-    secondary = sorted(significant_clusters[1:5], key=lambda c: c.count, reverse=True) if len(significant_clusters) > 1 else []
+    # Sort secondary by count descending — surface highest-volume effects first
+    # Take from all remaining significant clusters, not just top-5 by importance
+    secondary = sorted(significant_clusters[1:], key=lambda c: c.count, reverse=True)[:4] if len(significant_clusters) > 1 else []
 
     # Trigger candidates (look back up to 10 min before window start)
-    triggers = find_trigger_candidates(db, window_start, window_end, lookback_minutes=10)
+    triggers = find_trigger_candidates(db, window_start, window_end, lookback_minutes=10, ingestion_job_id=ingestion_job_id)
 
     # Collect affected services
     services_set: set[str] = set()
@@ -178,6 +183,8 @@ def _build_evidence_items(
     window_start: datetime,
     max_items: int = 8,
 ) -> list[str]:
+    import re
+
     items: list[str] = []
 
     if primary is None:
@@ -185,45 +192,59 @@ def _build_evidence_items(
         items.append("No significant error clusters detected")
         return items
 
-    # Primary cluster evidence
-    items.append(f"{primary.count} similar '{_trunc(primary.representative_message, 80)}' events in {_services_str(primary)}")
+    # Primary cluster — concise count + service
+    svc_label = _services_str(primary)
+    items.append(f"{primary.count} similar failures in {svc_label}")
 
+    # Baseline signal
     if primary.baseline_count == 0:
-        items.append(f"Not observed in prior 24h baseline")
+        items.append("Not observed in prior 24h baseline")
     elif primary.change_ratio > 10:
-        items.append(f"Count increased {primary.change_ratio:.0f}x compared to baseline ({primary.baseline_count} baseline events)")
-    elif primary.baseline_count > 0:
+        items.append(f"Count increased {primary.change_ratio:.0f}x vs baseline ({primary.baseline_count} prior events)")
+    else:
         items.append(f"Baseline had {primary.baseline_count} similar events (change ratio: {primary.change_ratio:.1f}x)")
 
-    # Timing relative to triggers
+    # Timing relative to trigger
     if triggers and primary.first_seen:
         earliest_trigger = triggers[0]
         if earliest_trigger.timestamp and primary.first_seen:
             delta = primary.first_seen - earliest_trigger.timestamp
-            minutes = delta.total_seconds() / 60
+            minutes = int(delta.total_seconds() / 60)
             if 0 <= minutes <= 30:
-                items.append(f"First error spike occurred {minutes:.0f}m after trigger event")
+                trigger_label = _trunc(earliest_trigger.message, 50)
+                items.append(f"First error spike occurred {minutes}m after {trigger_label.lower()}")
 
-    # Dominant endpoint/pattern in primary cluster
+    # Dominant endpoint
     if primary.representative_message:
-        import re
         endpoint_match = re.search(r"/\S+", primary.representative_message)
         if endpoint_match:
-            endpoint = endpoint_match.group(0)
-            items.append(f"Endpoint '{endpoint}' appears in primary error cluster")
+            items.append(f"Endpoint '{endpoint_match.group(0)}' appears in the primary error cluster")
 
-    # Secondary cluster connections
-    for sec in secondary[:2]:
+    # Secondary effects — narrative phrasing, no trigger repetition
+    for sec in secondary[:3]:
+        count = sec.count
+        svc = _services_str(sec)
+        msg = _trunc(sec.representative_message, 60)
+
+        # Detect queue-growth messages and reformat
+        queue_match = re.search(r"(\d+)\s+events?\s+pending", sec.representative_message or "")
+        if queue_match:
+            depth = queue_match.group(1)
+            items.append(
+                f"Webhook queue grew to {depth} pending items "
+                f"(observed in {count} {'log event' if count == 1 else 'log events'})"
+            )
+            continue
+
         if sec.first_seen and primary.first_seen and sec.first_seen >= primary.first_seen:
-            items.append(f"Secondary effect: {sec.count} '{_trunc(sec.representative_message, 60)}' events in {_services_str(sec)} (started after primary)")
+            if "500" in msg or "error" in msg.lower():
+                items.append(f"{count} checkout 500s in {svc} started after the primary failure spike")
+            elif "latency" in msg.lower():
+                items.append(f"{count} elevated-latency checkout responses followed the same period")
+            else:
+                items.append(f"{count} '{msg}' events in {svc} (started after primary)")
         else:
-            items.append(f"Related: {sec.count} '{_trunc(sec.representative_message, 60)}' events in {_services_str(sec)}")
-
-    # Trigger evidence
-    for trigger in triggers[:2]:
-        ts_str = trigger.timestamp.strftime("%H:%M:%S") if trigger.timestamp else "unknown time"
-        svc = f" in {trigger.service}" if trigger.service else ""
-        items.append(f"Trigger event detected{svc} at {ts_str}: {_trunc(trigger.message, 80)}")
+            items.append(f"Related: {count} '{msg}' events in {svc}")
 
     return items[:max_items]
 

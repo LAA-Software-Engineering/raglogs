@@ -42,7 +42,8 @@ def render_text_summary(packet: EvidencePacket, confidence: str) -> str:
     if packet.secondary_clusters:
         lines.append("Secondary effects:")
         for c in packet.secondary_clusters[:3]:
-            lines.append(f"  - {_trunc(c.representative_message, 90)} ({c.count} events)")
+            n = c.count
+            lines.append(f"  - {_trunc(c.representative_message, 90)} ({n} {'event' if n == 1 else 'events'})")
     else:
         lines.append("Secondary effects: None identified")
 
@@ -59,9 +60,9 @@ def render_text_summary(packet: EvidencePacket, confidence: str) -> str:
                 svc2 = f" in {t.service}" if t.service else ""
                 lines.append(f"  - {_trunc(t.message, 90)}{svc2} at {ts2}")
     elif pc and pc.change_ratio > 5 and pc.baseline_count == 0:
-        lines.append("Likely trigger: Not identified — first occurrence, no baseline history")
+        lines.append("Likely trigger: none identified")
     else:
-        lines.append("Likely trigger: Not identified")
+        lines.append("Likely trigger: none identified")
 
     # Evidence
     lines.append("")

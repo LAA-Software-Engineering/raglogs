@@ -3,21 +3,7 @@
 Ask your logs what happened.
 
 ```bash
-$ raglogs explain --since 30m
-
-Incident summary
-
-Window: 22:00 → 22:30
-Services affected: api, billing-worker
-Primary issue: Stripe signature verification failed
-Likely trigger: Deploy of billing-worker v2.4.1
-
-Evidence:
-- 184 similar errors
-- first occurrence 2m after deploy
-- endpoint '/webhooks/stripe' in 100% of failures
-
-Confidence: medium-high
+$ raglogs demo
 ```
 
 ## What raglogs does
