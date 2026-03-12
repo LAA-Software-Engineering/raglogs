@@ -172,7 +172,7 @@ make demo
 
 **Requirements**
 
-- Python 3.11+
+- Python 3.10+
 - PostgreSQL 14+ with the [pgvector](https://github.com/pgvector/pgvector) extension
 - Docker (optional, for the bundled Compose setup)
 
