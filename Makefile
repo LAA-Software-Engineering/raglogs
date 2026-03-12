@@ -68,6 +68,7 @@ demo: db-up
 	@sleep 2
 	alembic upgrade head
 	raglogs demo
+	raglogs timeline --since 2h
 
 ingest:
 	raglogs ingest $(SAMPLE)

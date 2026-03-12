@@ -26,7 +26,7 @@ raglogs explains incidents.
 
 ## Contents
 
-- [The killer command](#the-killer-command)
+- [The killer commands](#the-killer-commands)
 - [Why raglogs](#why-raglogs)
 - [Quick start](#quick-start)
 - [Installation](#installation)
@@ -41,7 +41,7 @@ raglogs explains incidents.
 
 ---
 
-## The killer command
+## The killer commands
 
 ```bash
 raglogs explain --since 30m
@@ -66,7 +66,38 @@ Evidence:
 Confidence: medium-high
 ```
 
-This output is deterministic. No LLM required.
+```bash
+raglogs timeline --since 2h
+```
+
+```
+Incident timeline  2026-03-12 21:58:00 UTC → 2026-03-12 23:58:00 UTC
+
+  21:58:14  deploy     Deploy completed for billing-worker version v2.4.1 · deployment-controller
+  21:58:15  startup    Application started billing-worker v2.4.1 on port 8080 · billing-worker
+
+  22:00:10  error ↑    Stripe signature verification failed for endpoint /webhooks/stripe
+                       184 events · billing-worker · 49 min span
+
+  22:01:27  effect     POST /api/checkout 200 OK latency=<duration> (high latency detected)
+                       25 events · api · 43 min span
+
+  22:01:49  effect     Webhook retries (2 retry events)
+                       2 events · billing-worker
+
+  22:02:56  effect     POST /api/checkout 500 Internal Server Error — upstream billing error
+                       39 events · api · 45 min span
+
+  22:11:25  symptom    Webhook queue growing, 251 events pending processing
+                       2 events · billing-worker · 30 min span
+```
+
+`explain` answers **what happened**.
+`timeline` shows **how it unfolded**.
+
+Together they work like `git log` and `git blame` — but for incidents.
+
+Both outputs are fully deterministic. No LLM required.
 
 ---
 
@@ -111,6 +142,7 @@ raglogs init
 # Run the demo
 raglogs ingest ./sample_data/sample_incident
 raglogs explain --since 1h
+raglogs timeline --since 2h
 ```
 
 Or with Make:
@@ -252,6 +284,68 @@ No-LLM mode produces the same structure from deterministic templates. Slightly l
 
 ---
 
+### `raglogs timeline`
+
+Reconstructs the causal sequence of events in an incident window. Shows deploys, service restarts, the primary error spike, downstream effects, and system-level symptoms — sorted chronologically and grouped by causal role.
+
+```bash
+raglogs timeline --since 30m
+raglogs timeline --since 2h
+raglogs timeline --from 2026-03-12T22:00:00Z --to 2026-03-12T22:30:00Z
+raglogs timeline --since 2h --service billing-worker
+raglogs timeline --since 1h --format json
+```
+
+| Flag | Description |
+|---|---|
+| `--since` | Relative window: `30m`, `1h`, `24h`, `7d` |
+| `--from` | Start of window (ISO 8601) |
+| `--to` | End of window (ISO 8601) |
+| `--service` | Filter to one service |
+| `--env` | Filter to one environment |
+| `--format` | `text` or `json` |
+
+**Event categories**
+
+| Label | Meaning |
+|---|---|
+| `deploy` | Deploy, release, or rollout event |
+| `startup` | Service start or port binding |
+| `trigger` | Other pre-error event (config change, migration) |
+| `error ↑` | Primary error cluster — the root cause |
+| `effect` | Downstream failure caused by the primary error |
+| `symptom` | System-level degradation (queue growth, backlog) |
+
+**Output**
+
+```
+Incident timeline  2026-03-12 21:58:00 UTC → 2026-03-12 23:58:00 UTC
+
+  21:58:14  deploy     Deploy completed for billing-worker version v2.4.1 · deployment-controller
+  21:58:15  startup    Application started billing-worker v2.4.1 on port 8080 · billing-worker
+
+  22:00:10  error ↑    Stripe signature verification failed for endpoint /webhooks/stripe
+                       184 events · billing-worker · 49 min span
+
+  22:01:27  effect     POST /api/checkout 200 OK latency=<duration> (high latency detected)
+                       25 events · api · 43 min span
+
+  22:01:49  effect     Webhook retries (2 retry events)
+                       2 events · billing-worker
+
+  22:02:56  effect     POST /api/checkout 500 Internal Server Error — upstream billing error
+                       39 events · api · 45 min span
+
+  22:11:25  symptom    Webhook queue growing, 251 events pending processing
+                       2 events · billing-worker · 30 min span
+```
+
+Point-in-time events (deploys, startups) show the service inline. Volumetric events show a sub-line with event count, service, and cluster duration. Blank lines separate events more than 60 seconds apart. Repeated webhook retry events are deduplicated into a single line.
+
+No LLM required. The timeline is assembled entirely from cluster timestamps and causal classification.
+
+---
+
 ### `raglogs clusters`
 
 Lists the top log clusters in a time window ranked by importance score. Useful for exploration and understanding dominant event families without running a full explain.
@@ -314,7 +408,7 @@ Evidence:
 Total matching log events: 184
 ```
 
-Note: `ask` uses structured keyword retrieval, not semantic search. It works without an embeddings provider. Semantic retrieval via pgvector is planned for Phase 2.
+Note: `ask` uses structured keyword retrieval, not semantic search. It works without an embeddings provider. Semantic retrieval via pgvector is planned for a future release.
 
 ---
 
@@ -488,7 +582,7 @@ Evidence Assembly
 LLM (optional) or Deterministic Templates
     │
     ▼
-Incident Summary
+Incident Summary + Timeline
 ```
 
 ### Normalization
@@ -522,7 +616,7 @@ raglogs scans for log messages matching known trigger patterns in the minutes be
 
 - Deploy started / completed
 - Application or service restart
-- Pod restart / eviction  
+- Pod restart / eviction
 - Configuration reloaded
 - Migration started / completed
 - Queue saturation
@@ -531,6 +625,16 @@ raglogs scans for log messages matching known trigger patterns in the minutes be
 - Auth token expiration bursts
 
 A trigger candidate is promoted to "likely trigger" when it precedes the primary error spike and shares the same or an adjacent service.
+
+### Timeline reconstruction
+
+`raglogs timeline` assembles events into three causal buckets without any ML or LLM:
+
+1. **Pre-error** — trigger candidates (deploys, startups) sorted by timestamp
+2. **Error** — the primary cluster at its first occurrence
+3. **Post-error** — secondary clusters (effects, symptoms) sorted by first occurrence
+
+Secondary clusters are classified by message content: queue/backlog growth becomes `symptom`, 500 errors and latency spikes become `effect`. Repeated webhook retry events (individual `evt_XXXXXX` lines) are deduplicated into a single count. Effects that appear to have started before the primary error — due to data noise — are floored to the primary's first occurrence to preserve causal ordering.
 
 ### Confidence scoring
 
@@ -634,13 +738,14 @@ raglogs/
 │   │   ├── llm/             Provider abstraction (OpenAI, Ollama, noop)
 │   │   ├── normalization/   Message normalization, fingerprinting, trigger patterns
 │   │   ├── parsing/         JSON and text parsers, field extractors, timestamps
-│   │   └── retrieval/       Keyword-based question answering
+│   │   ├── retrieval/       Keyword-based question answering
+│   │   └── timeline/        Causal timeline reconstruction
 │   ├── db/                  SQLAlchemy models, session management
 │   └── utils/               Time window parsing, hashing helpers
 ├── migrations/              Alembic migration scripts
 ├── sample_data/             Demo incident logs (deploy, billing, api)
 └── tests/
-    ├── unit/                49 tests — parsers, normalization, clustering, time
+    ├── unit/                Tests — parsers, normalization, clustering, time
     └── integration/         Full ingest → cluster → explain flow (requires DB)
 ```
 
@@ -652,14 +757,13 @@ New source adapters go in `raglogs/adapters/`. Each adapter yields `ParsedLogLin
 
 ## Roadmap
 
-**Phase 3 — Connectors and richer analysis**
 - Datadog adapter
 - Loki adapter
 - Kubernetes log export ingestion
 - Semantic cluster merging via pgvector
 - `raglogs compare` — diff two time windows
-- Markdown report export
-- Incident timeline visualization
+- Markdown incident report export (`raglogs explain --format markdown > postmortem.md`)
+- `POST /query/timeline` API endpoint
 - Web UI
 
 ---
