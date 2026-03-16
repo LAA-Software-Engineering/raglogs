@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question
+    url: https://github.com/leo-aa88/raglogs/issues/new?labels=question&template=
+    about: Not a bug or feature request? Open a plain issue with the question label.

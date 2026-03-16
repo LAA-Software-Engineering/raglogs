@@ -69,6 +69,7 @@ demo: db-up
 	alembic upgrade head
 	raglogs demo
 	raglogs timeline --since 2h
+	raglogs compare --since 30m --baseline 24h
 
 ingest:
 	raglogs ingest $(SAMPLE)

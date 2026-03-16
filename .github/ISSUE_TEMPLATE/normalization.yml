@@ -1,0 +1,57 @@
+name: Normalization / clustering issue
+description: Log messages that should cluster together are not, or unrelated messages are being grouped
+labels: ["normalization"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Normalization quality directly affects how useful raglogs is.
+        The more concrete examples you provide, the easier this is to fix.
+
+  - type: dropdown
+    id: problem_type
+    attributes:
+      label: Problem type
+      options:
+        - Messages that should cluster together are producing separate clusters
+        - Unrelated messages are being grouped into the same cluster
+        - A dynamic value (ID, IP, timestamp) is not being stripped
+        - A meaningful value is being incorrectly stripped
+    validations:
+      required: true
+
+  - type: textarea
+    id: raw_messages
+    attributes:
+      label: Raw log messages
+      description: Paste the actual log lines as they appear in your logs.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: normalized
+    attributes:
+      label: What they normalize to (if known)
+      description: |
+        You can check normalization with:
+        ```python
+        from src.core.normalization.normalize import normalize_message
+        print(normalize_message("your message here"))
+        ```
+      render: text
+
+  - type: textarea
+    id: expected_normalization
+    attributes:
+      label: What they should normalize to
+      description: The normalized form you would expect, so they fingerprint correctly.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Log format, service type, or anything else that helps.

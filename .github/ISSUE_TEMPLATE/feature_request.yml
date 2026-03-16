@@ -1,0 +1,55 @@
+name: Feature request
+description: Suggest a new command, flag, adapter, or behaviour
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Feature requests are welcome. The most convincing ones include a concrete
+        example of the problem and what the output would look like.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the situation where you hit this limitation.
+      placeholder: "When an incident spans multiple services, I can't easily see..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed solution
+      description: |
+        What would you want the command, flag, or output to look like?
+        A concrete example is more useful than a general description.
+      placeholder: |
+        raglogs compare --service api --service billing-worker --since 30m --baseline 24h
+
+        Output:
+          ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you considered, and why they fall short.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - New CLI command
+        - New flag on existing command
+        - Log source adapter (Datadog, Loki, CloudWatch, etc.)
+        - Normalization / clustering
+        - LLM integration
+        - HTTP API
+        - Output format
+        - Other
+    validations:
+      required: true
