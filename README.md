@@ -88,7 +88,27 @@ raglogs timeline --since 2h
              25 events · api · 44 min span
 ```
 
-```sh
+```bash
+raglogs compare --since 30m --baseline 24h
+```
+
+```
+Incident comparison
+
+  Window A (now):      2026-03-16 15:17:42 UTC → 2026-03-16 15:47:42 UTC
+  Window B (baseline): 2026-03-15 15:17:42 UTC → 2026-03-15 15:47:42 UTC
+
+New error clusters
+  + Stripe signature verification failed for endpoint /webhooks/stripe         86 events
+  + POST /api/checkout 500 Internal Server Error — upstream billing error      20 events
+  + Webhook retries (24 distinct events, 24 total)                             24 events
+  + Webhook queue growing                                                      13 events
+
+Triggers in A not seen in B
+  +⚡ Deploy completed for billing-worker version v2.4.1 · deployment-controller
+```
+
+```bash
 raglogs ask 'why did stripe fail?'
 ```
 
@@ -107,12 +127,11 @@ raglogs ask 'why did stripe fail?'
 
 `explain` answers **what happened**.
 `timeline` shows **how it unfolded**.
+`compare` shows **what changed**.
 
-Together they work like `git log` and `git blame` — but for incidents.
+Together they work like `git log`, `git blame`, `git diff` — but for incidents.
 
-Both outputs are fully deterministic. No LLM required.
-
-`ask` answers **questions you didn’t think to ask ahead of time**.
+All three outputs are fully deterministic. No LLM required.
 
 ---
 
@@ -158,6 +177,8 @@ raglogs init
 raglogs ingest ./sample_data/sample_incident
 raglogs explain --since 1h
 raglogs timeline --since 2h
+raglogs compare --since 30m --baseline 24h
+raglogs ask 'why did stripe fail?'
 ```
 
 Or with Make:
@@ -358,6 +379,65 @@ Incident timeline  2026-03-12 21:58:00 UTC → 2026-03-12 23:58:00 UTC
 Point-in-time events (deploys, startups) show the service inline. Volumetric events show a sub-line with event count, service, and cluster duration. Blank lines separate events more than 60 seconds apart. Repeated webhook retry events are deduplicated into a single line.
 
 No LLM required. The timeline is assembled entirely from cluster timestamps and causal classification.
+
+---
+
+### `raglogs compare`
+
+Diffs two time windows by their cluster sets. Shows exactly which error patterns appeared, disappeared, intensified, or resolved between a current window and a baseline.
+
+```bash
+raglogs compare --since 30m --baseline 24h
+raglogs compare --since 1h --baseline 7d
+raglogs compare --since 2h --baseline 24h --service billing-worker
+raglogs compare \
+  --window-a-from 2026-03-16T14:00:00Z --window-a-to 2026-03-16T14:30:00Z \
+  --window-b-from 2026-03-15T14:00:00Z --window-b-to 2026-03-15T14:30:00Z
+raglogs compare --since 30m --baseline 24h --format json
+```
+
+`--since 30m --baseline 24h` compares the last 30 minutes against the equivalent 30-minute window from 24 hours ago — the most useful form during an active incident.
+
+| Flag | Description |
+|---|---|
+| `--since` | Incident window size, e.g. `30m`, `1h` |
+| `--baseline` | Offset to baseline window, e.g. `24h`, `7d` |
+| `--window-a-from/to` | Explicit start/end for window A (ISO 8601) |
+| `--window-b-from/to` | Explicit start/end for window B (ISO 8601) |
+| `--service` | Filter both windows to one service |
+| `--env` | Filter both windows to one environment |
+| `--format` | `text` or `json` |
+
+**Output sections**
+
+| Symbol | Meaning |
+|---|---|
+| `+` | New cluster — present in A, absent in B |
+| `-` | Disappeared — present in B, gone in A |
+| `↑` | Increased — in both, count grew by more than 50% |
+| `↓` | Decreased — in both, count shrank by more than 50% |
+| `+⚡` | New trigger — deploy or restart only seen in A |
+| `-⚡` | Dropped trigger — deploy or restart only seen in B |
+
+**Output**
+
+```
+Incident comparison
+
+  Window A (now):      2026-03-16 15:17:42 UTC → 2026-03-16 15:47:42 UTC
+  Window B (baseline): 2026-03-15 15:17:42 UTC → 2026-03-15 15:47:42 UTC
+
+New error clusters
+  + Stripe signature verification failed for endpoint /webhooks/stripe         86 events
+  + POST /api/checkout 500 Internal Server Error — upstream billing error      20 events
+  + Webhook retries (24 distinct events, 24 total)                             24 events
+  + Webhook queue growing                                                      13 events
+
+Triggers in A not seen in B
+  +⚡ Deploy completed for billing-worker version v2.4.1 · deployment-controller
+```
+
+Individual webhook retry events (`evt_XXXXXX`) and queue-depth lines are deduplicated into single entries before diffing. No LLM required.
 
 ---
 
@@ -597,7 +677,7 @@ Evidence Assembly
 LLM (optional) or Deterministic Templates
     │
     ▼
-Incident Summary + Timeline
+Incident Summary · Timeline · Diff
 ```
 
 ### Normalization
@@ -650,6 +730,10 @@ A trigger candidate is promoted to "likely trigger" when it precedes the primary
 3. **Post-error** — secondary clusters (effects, symptoms) sorted by first occurrence
 
 Secondary clusters are classified by message content: queue/backlog growth becomes `symptom`, 500 errors and latency spikes become `effect`. Repeated webhook retry events (individual `evt_XXXXXX` lines) are deduplicated into a single count. Effects that appear to have started before the primary error — due to data noise — are floored to the primary's first occurrence to preserve causal ordering.
+
+### Window diffing
+
+`raglogs compare` runs clustering independently on both windows, then diffs the resulting fingerprint sets. Before diffing, each cluster set is collapsed: all `evt_XXXXXX` retry clusters merge into a single entry, and all queue-depth lines merge into one. The collapsed maps are then diffed by fingerprint, with counts compared to determine direction (new, disappeared, increased, decreased). Trigger candidates are normalized by message prefix to handle version strings, so `v2.4.1` and `v2.3.9` both resolve as "deploy" without creating spurious diffs.
 
 ### Confidence scoring
 
@@ -748,6 +832,7 @@ raglogs/
 │   ├── config/              Pydantic settings
 │   ├── core/
 │   │   ├── clustering/      Fingerprint grouping, importance scoring, baseline
+│   │   ├── compare/         Window diffing — new, disappeared, increased, decreased
 │   │   ├── explain/         Evidence assembly, templates, confidence, summarizer
 │   │   ├── ingestion/       Ingestion orchestration and batch persistence
 │   │   ├── llm/             Provider abstraction (OpenAI, Ollama, noop)
@@ -776,9 +861,8 @@ New source adapters go in `raglogs/adapters/`. Each adapter yields `ParsedLogLin
 - Loki adapter
 - Kubernetes log export ingestion
 - Semantic cluster merging via pgvector
-- `raglogs compare` — diff two time windows
 - Markdown incident report export (`raglogs explain --format markdown > postmortem.md`)
-- `POST /query/timeline` API endpoint
+- `POST /query/timeline` and `POST /query/compare` API endpoints
 - Web UI
 
 ---

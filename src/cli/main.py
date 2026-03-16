@@ -15,6 +15,7 @@ def _build_app() -> typer.Typer:
     from src.cli.commands.demo import demo_cmd
     from src.cli.commands.worker import worker_cmd
     from src.cli.commands.timeline import timeline_cmd
+    from src.cli.commands.compare import compare_cmd
 
     _app = typer.Typer(
         name="raglogs",
@@ -32,6 +33,7 @@ def _build_app() -> typer.Typer:
     _app.command("demo")(demo_cmd)
     _app.command("worker")(worker_cmd)
     _app.command("timeline")(timeline_cmd)
+    _app.command("compare")(compare_cmd)
     _app.add_typer(ask_app, name="ask")
     return _app
 
