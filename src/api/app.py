@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import ORJSONResponse
 
-from src.api.routes import ask, clusters, config, explain, health, ingestions
+from src.api.routes import ask, clusters, compare_windows, config, explain, health, ingestions, timeline
 
 
 @asynccontextmanager
@@ -30,4 +30,6 @@ app.include_router(ingestions.router, prefix="/ingestions", tags=["ingestions"])
 app.include_router(explain.router, prefix="/query", tags=["query"])
 app.include_router(ask.router, prefix="/query", tags=["query"])
 app.include_router(clusters.router, prefix="/query", tags=["query"])
+app.include_router(timeline.router, prefix="/query", tags=["query"])
+app.include_router(compare_windows.router, prefix="/query", tags=["query"])
 app.include_router(config.router, prefix="/config", tags=["config"])

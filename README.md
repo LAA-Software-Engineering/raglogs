@@ -768,6 +768,8 @@ make api
 | `POST` | `/query/explain` | Explain a time window |
 | `POST` | `/query/ask` | Answer a natural language question |
 | `POST` | `/query/clusters` | List top clusters |
+| `POST` | `/query/timeline` | Reconstruct incident timeline for a window |
+| `POST` | `/query/compare` | Diff two time windows (same semantics as `raglogs compare`) |
 | `GET` | `/config` | Read effective configuration |
 
 **Example**
@@ -794,6 +796,22 @@ curl -X POST http://localhost:8000/query/explain \
   },
   "evidence": ["184 similar errors in billing-worker", "..."]
 }
+```
+
+**Timeline** — `POST /query/timeline` accepts the same window filters as the CLI (`since` or `from_time`/`to_time`, optional `service`, `env`, `all_ingestions`, `ingestion_job_id`). Set `"format": "text"` to include a plain-text `text` field alongside `events`.
+
+```bash
+curl -X POST http://localhost:8000/query/timeline \
+  -H "Content-Type: application/json" \
+  -d '{"since": "2h", "format": "json"}'
+```
+
+**Compare** — `POST /query/compare` matches `raglogs compare`: either `"since"` + `"baseline"` (durations, window A ends at request time) or explicit `window_a_from` / `window_a_to` / `window_b_from` / `window_b_to`. Optional `"format": "text"` adds a rendered `text` field.
+
+```bash
+curl -X POST http://localhost:8000/query/compare \
+  -H "Content-Type: application/json" \
+  -d '{"since": "30m", "baseline": "24h"}'
 ```
 
 ---
@@ -862,7 +880,6 @@ New source adapters go in `raglogs/adapters/`. Each adapter yields `ParsedLogLin
 - Kubernetes log export ingestion
 - Semantic cluster merging via pgvector
 - Markdown incident report export (`raglogs explain --format markdown > postmortem.md`)
-- `POST /query/timeline` and `POST /query/compare` API endpoints
 - Web UI
 
 ---

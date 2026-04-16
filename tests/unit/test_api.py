@@ -6,7 +6,7 @@ at the source module level (src.db.session, src.core.*, etc.) rather than
 trying to patch the route module's namespace.
 
 Tests: async ingestion flow, explain cache hit/miss, ingestion_job_id
-validation, health queue depth, and 4xx error cases.
+validation, timeline/compare query routes, health queue depth, and 4xx cases.
 """
 import uuid
 import pytest
@@ -281,6 +281,142 @@ class TestClustersEndpoint:
         resp = client.post("/query/clusters", json={
             "since": "1h",
             "ingestion_job_id": "bad-uuid",
+        })
+        assert resp.status_code == 400
+
+
+# ── POST /query/timeline ─────────────────────────────────────────────────────
+
+class TestTimelineEndpoint:
+    def test_returns_events_list(self):
+        from src.core.timeline.builder import TimelineEvent
+
+        events = [
+            TimelineEvent(
+                timestamp=datetime(2026, 3, 12, 22, 0, 0, tzinfo=timezone.utc),
+                category="deploy",
+                label="deploy",
+                description="Deploy completed",
+                count=None,
+                services=["deployment-controller"],
+                duration_minutes=None,
+            ),
+        ]
+        mock_db = _ctx_db()
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db), \
+             patch("src.core.clustering.clusterer.run_clustering", return_value=(None, [])), \
+             patch("src.core.explain.evidence.assemble_evidence", return_value=MagicMock()), \
+             patch("src.core.timeline.builder.build_timeline", return_value=events):
+            resp = client.post("/query/timeline", json={"since": "1h"})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "events" in data
+        assert len(data["events"]) == 1
+        assert data["events"][0]["category"] == "deploy"
+        assert data["events"][0]["label"] == "deploy"
+
+    def test_format_text_includes_rendered_field(self):
+        from src.core.timeline.builder import TimelineEvent
+
+        events = [
+            TimelineEvent(
+                timestamp=datetime(2026, 3, 12, 22, 0, 0, tzinfo=timezone.utc),
+                category="error",
+                label="error ↑",
+                description="Something failed",
+                count=5,
+                services=["api"],
+                duration_minutes=3,
+            ),
+        ]
+        mock_db = _ctx_db()
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db), \
+             patch("src.core.clustering.clusterer.run_clustering", return_value=(None, [])), \
+             patch("src.core.explain.evidence.assemble_evidence", return_value=MagicMock()), \
+             patch("src.core.timeline.builder.build_timeline", return_value=events):
+            resp = client.post("/query/timeline", json={"since": "1h", "format": "text"})
+
+        assert resp.status_code == 200
+        assert "text" in resp.json()
+        assert "Incident timeline" in resp.json()["text"]
+
+    def test_invalid_ingestion_job_id_returns_400(self):
+        resp = client.post("/query/timeline", json={
+            "since": "1h",
+            "ingestion_job_id": "not-a-uuid",
+        })
+        assert resp.status_code == 400
+
+
+# ── POST /query/compare ───────────────────────────────────────────────────────
+
+class TestCompareEndpoint:
+    def _mock_compare_result(self):
+        from src.core.compare.differ import ClusterDiff, CompareResult, TriggerDiff
+
+        return CompareResult(
+            window_a_start=datetime(2026, 3, 16, 15, 17, 42, tzinfo=timezone.utc),
+            window_a_end=datetime(2026, 3, 16, 15, 47, 42, tzinfo=timezone.utc),
+            window_b_start=datetime(2026, 3, 15, 15, 17, 42, tzinfo=timezone.utc),
+            window_b_end=datetime(2026, 3, 15, 15, 47, 42, tzinfo=timezone.utc),
+            new_clusters=[
+                ClusterDiff(
+                    fingerprint="fp1",
+                    message="New error",
+                    services=["api"],
+                    count_a=10,
+                    count_b=None,
+                ),
+            ],
+            new_triggers=[
+                TriggerDiff(message="Deploy done", service="deploy", only_in="a"),
+            ],
+        )
+
+    def test_since_baseline_returns_json(self):
+        mock_db = _ctx_db()
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db), \
+             patch("src.core.clustering.clusterer.run_clustering", return_value=(None, [])), \
+             patch("src.core.explain.evidence.assemble_evidence", return_value=MagicMock()), \
+             patch("src.core.compare.differ.compare_windows", return_value=self._mock_compare_result()):
+            resp = client.post(
+                "/query/compare",
+                json={"since": "30m", "baseline": "24h"},
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["has_changes"] is True
+        assert len(data["new_clusters"]) == 1
+        assert data["new_clusters"][0]["message"] == "New error"
+        assert data["new_triggers"][0]["service"] == "deploy"
+        assert "only_in" in data["new_triggers"][0]
+
+    def test_missing_window_params_returns_400(self):
+        resp = client.post("/query/compare", json={})
+        assert resp.status_code == 400
+
+    def test_format_text_includes_rendered_field(self):
+        mock_db = _ctx_db()
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db), \
+             patch("src.core.clustering.clusterer.run_clustering", return_value=(None, [])), \
+             patch("src.core.explain.evidence.assemble_evidence", return_value=MagicMock()), \
+             patch("src.core.compare.differ.compare_windows", return_value=self._mock_compare_result()):
+            resp = client.post(
+                "/query/compare",
+                json={"since": "30m", "baseline": "24h", "format": "text"},
+            )
+
+        assert resp.status_code == 200
+        assert "text" in resp.json()
+        assert "Incident comparison" in resp.json()["text"]
+
+    def test_invalid_ingestion_job_id_returns_400(self):
+        resp = client.post("/query/compare", json={
+            "since": "30m",
+            "baseline": "24h",
+            "ingestion_job_id": "bad",
         })
         assert resp.status_code == 400
 
