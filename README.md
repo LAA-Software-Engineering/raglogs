@@ -163,7 +163,7 @@ The LLM never sees raw logs. It only sees curated facts. The explanation is grou
 
 ```bash
 # Clone and install
-git clone https://github.com/leo-aa88/raglogs
+git clone https://github.com/LAA-Software-Engineering/raglogs
 cd raglogs
 pip install -e .
 
