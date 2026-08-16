@@ -205,11 +205,15 @@ class TestCreateIngestion:
         Exercises the real registry + LokiSourceAdapter.discover() (no mocking) —
         params validation for loki is local-only, no Loki server needed.
         """
-        resp = client.post("/ingestions", json={
-            "paths": [],
-            "adapter": "loki",
-            "params": {"url": "http://loki:3100"},
-        })
+        from src.config.settings import Settings
+
+        settings = Settings(loki_url="http://loki:3100")
+        with patch("src.config.get_settings", return_value=settings):
+            resp = client.post("/ingestions", json={
+                "paths": [],
+                "adapter": "loki",
+                "params": {},
+            })
 
         assert resp.status_code == 400
         assert resp.json()["detail"]["error_code"] == "ADAPTER_UNAVAILABLE"

@@ -264,8 +264,14 @@ raglogs ingest ./logs/ --format json
 **Loki**
 
 Pull a bounded window from Grafana Loki via LogQL — no intermediate files.
-Auth and the default query come from env (`LOKI_*`); URL,
-tenant, and query can also be passed per ingest.
+Auth and the Loki origin come from env (`LOKI_*`); tenant and query can be
+passed per ingest. Stream labels are mapped onto `service` / `environment` /
+`host` (`app`/`service`/`job`, `namespace`/`env`, `pod`/`instance`).
+
+`query_range`'s `limit` is global across matching streams. Paginating by
+advancing `start` to the latest timestamp in a full page can skip earlier
+lines from other streams in a wide selector — prefer a narrow LogQL query
+when completeness matters.
 
 ```bash
 export LOKI_URL=http://localhost:3100
@@ -283,9 +289,8 @@ curl -X POST http://localhost:8000/ingestions \
 | Param | Description |
 |---|---|
 | `query` / `queries` | LogQL selector (required unless `LOKI_QUERY` is set) |
-| `url` | Override `LOKI_URL` |
 | `tenant` | Override `LOKI_TENANT` (`X-Scope-OrgID`) |
-| `limit` | Page size for `query_range` (default 5000) |
+| `limit` | Page size for `query_range` (default 5000, Loki max) |
 
 **Output**
 

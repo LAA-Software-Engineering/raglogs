@@ -7,8 +7,13 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 from src.adapters.base import LogStreamRef, RawLogLine, SourceSpec, TimeWindow
 from src.core.errors import AdapterUnavailableError
 
-PAGE_SIZE = 5000  # Loki query_range default max per request
+PAGE_SIZE = 5000  # Loki query_range max per request
 QUERY_PATH = "/loki/api/v1/query_range"
+
+# Stream labels → LogEntry fields. First match wins; leftover labels stay in source_ref.
+_SERVICE_LABELS = ("app", "service", "job")
+_ENV_LABELS = ("namespace", "env", "environment")
+_HOST_LABELS = ("pod", "instance", "host", "node")
 
 
 def _query_url(base_url: str) -> str:
@@ -22,6 +27,17 @@ def _query_url(base_url: str) -> str:
 def _format_labels(stream: dict[str, Any]) -> str:
     parts = [f'{key}="{value}"' for key, value in sorted(stream.items())]
     return "{" + ", ".join(parts) + "}"
+
+
+def _label_value(labels: dict[str, Any], keys: tuple[str, ...]) -> Optional[str]:
+    for key in keys:
+        value = labels.get(key)
+        if value is None:
+            continue
+        text = value.strip() if isinstance(value, str) else str(value).strip()
+        if text:
+            return text
+    return None
 
 
 def _ns_from_datetime(dt: datetime) -> int:
@@ -45,9 +61,20 @@ def _is_retryable(exc: BaseException) -> bool:
 class LokiSourceAdapter:
     """SourceAdapter over Grafana Loki's query_range HTTP API.
 
-    Auth is settings-only (Bearer token or basic) — never accepted as SourceSpec
-    params, matching CloudWatch's credential-chain convention. URL, tenant, and
-    default LogQL query may be overridden per request via params.
+    Auth and base URL are settings-only (LOKI_URL, Bearer token or basic) — never
+    accepted as SourceSpec params, matching CloudWatch's credential-chain convention
+    and avoiding SSRF via a caller-supplied URL with env credentials attached.
+    Tenant and LogQL query may be overridden per request via params.
+
+    Stream labels are mapped onto RawLogLine defaults (app/service/job → service,
+    namespace/env/environment → environment, pod/instance/host/node → host) so
+    ingestion can fill LogEntry fields without LogQL-specific branches in core.
+    The full label set is also kept on source_ref.
+
+    Pagination: query_range's `limit` is global across matching streams, not per
+    stream. Advancing `start` to max(timestamp)+1 after a full page can skip
+    earlier lines from other streams that share the selector. Prefer a narrow
+    LogQL query (one app, one namespace) when completeness matters.
     """
 
     name = "loki"
@@ -93,11 +120,9 @@ class LokiSourceAdapter:
                 "(or LOKI_QUERY)"
             )
 
-        url = spec.params.get("url") or spec.params.get("base_url") or self.base_url
-        if not (url or "").strip():
+        if not (self.base_url or "").strip():
             raise AdapterUnavailableError(
-                "loki adapter requires a base URL "
-                "(LOKI_URL or params.url)"
+                "loki adapter requires LOKI_URL"
             )
         tenant = spec.params.get("tenant") or spec.params.get("org_id") or self.tenant
         raw_limit = spec.params.get("limit", PAGE_SIZE)
@@ -109,6 +134,7 @@ class LokiSourceAdapter:
             ) from e
         if limit < 1:
             raise AdapterUnavailableError("loki adapter 'limit' must be >= 1")
+        limit = min(limit, PAGE_SIZE)
 
         for query in queries:
             if not isinstance(query, str) or not query.strip():
@@ -116,23 +142,36 @@ class LokiSourceAdapter:
             yield LogStreamRef(
                 adapter=self.name,
                 stream_id=query.strip(),
-                metadata={"url": url.strip(), "tenant": tenant or "", "limit": limit},
+                metadata={"tenant": tenant or "", "limit": limit},
             )
 
     def read(self, ref: LogStreamRef, window: TimeWindow) -> Iterator[RawLogLine]:
-        base_url = ref.metadata.get("url") or self.base_url
-        if not (base_url or "").strip():
+        if not (self.base_url or "").strip():
             raise AdapterUnavailableError(
-                "loki adapter requires a base URL "
-                "(LOKI_URL or params.url)"
+                "loki adapter requires LOKI_URL"
             )
         tenant = ref.metadata.get("tenant") or self.tenant
-        limit = int(ref.metadata.get("limit") or PAGE_SIZE)
-        url = _query_url(base_url)
+        try:
+            limit = int(ref.metadata.get("limit") or PAGE_SIZE)
+        except (TypeError, ValueError) as e:
+            raise AdapterUnavailableError(
+                f"loki adapter 'limit' must be an integer, got {ref.metadata.get('limit')!r}"
+            ) from e
+        limit = min(max(limit, 1), PAGE_SIZE)
+        url = _query_url(self.base_url)
         headers = self._headers(tenant)
         auth = self._auth()
 
-        start_ns = int(ref.cursor) if ref.cursor else _ns_from_datetime(window.start)
+        if ref.cursor:
+            try:
+                start_ns = int(ref.cursor)
+            except (TypeError, ValueError) as e:
+                raise AdapterUnavailableError(
+                    "loki adapter resume cursor must be an integer "
+                    f"nanosecond timestamp, got {ref.cursor!r}"
+                ) from e
+        else:
+            start_ns = _ns_from_datetime(window.start)
         end_ns = _ns_from_datetime(window.end)
 
         while start_ns < end_ns:
@@ -167,6 +206,9 @@ class LokiSourceAdapter:
             for stream in streams:
                 labels = stream.get("stream") or {}
                 source_ref = _format_labels(labels) if labels else ref.stream_id
+                default_service = _label_value(labels, _SERVICE_LABELS)
+                default_environment = _label_value(labels, _ENV_LABELS)
+                default_host = _label_value(labels, _HOST_LABELS)
                 for ts_raw, line in stream.get("values") or []:
                     try:
                         ts_ns = int(ts_raw)
@@ -178,6 +220,9 @@ class LokiSourceAdapter:
                         text=line,
                         source_ref=source_ref,
                         received_at=_datetime_from_ns(ts_ns),
+                        default_service=default_service,
+                        default_environment=default_environment,
+                        default_host=default_host,
                     )
 
             if page_count < limit:

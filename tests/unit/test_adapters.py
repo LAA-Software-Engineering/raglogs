@@ -328,8 +328,8 @@ class TestLokiSourceAdapter:
         refs = list(adapter.discover(spec))
 
         assert [r.stream_id for r in refs] == ['{app="a"}', '{app="b"}']
-        assert all(r.metadata["url"] == "http://loki:3100" for r in refs)
         assert all(r.metadata["tenant"] == "team-1" for r in refs)
+        assert all("url" not in r.metadata for r in refs)
 
     def test_discover_single_query_param(self):
         from src.adapters.loki.adapter import LokiSourceAdapter
@@ -373,10 +373,11 @@ class TestLokiSourceAdapter:
         from src.adapters.loki.adapter import LokiSourceAdapter
 
         adapter = LokiSourceAdapter()
-        with pytest.raises(AdapterUnavailableError, match="base URL"):
+        with pytest.raises(AdapterUnavailableError, match="LOKI_URL"):
             list(adapter.discover(SourceSpec(adapter="loki", params={"query": '{app="a"}'})))
 
-    def test_discover_honors_url_param_override(self):
+    def test_discover_ignores_url_param(self):
+        """URL is settings-only so a caller cannot SSRF via params.url with env creds."""
         from src.adapters.loki.adapter import LokiSourceAdapter
 
         adapter = LokiSourceAdapter(base_url="http://loki")
@@ -386,7 +387,18 @@ class TestLokiSourceAdapter:
         )
         refs = list(adapter.discover(spec))
 
-        assert refs[0].metadata["url"] == "https://logs.example.com"
+        assert "url" not in refs[0].metadata
+        assert adapter.base_url == "http://loki"
+
+    def test_discover_caps_limit_at_loki_max(self):
+        from src.adapters.loki.adapter import LokiSourceAdapter, PAGE_SIZE
+
+        adapter = LokiSourceAdapter(base_url="http://loki")
+        refs = list(adapter.discover(
+            SourceSpec(adapter="loki", params={"query": '{app="a"}', "limit": PAGE_SIZE + 1})
+        ))
+
+        assert refs[0].metadata["limit"] == PAGE_SIZE
 
     def test_discover_rejects_non_integer_limit(self):
         from src.adapters.loki.adapter import LokiSourceAdapter
@@ -410,11 +422,11 @@ class TestLokiSourceAdapter:
         ref = LogStreamRef(
             adapter="loki",
             stream_id='{app="api"}',
-            metadata={"url": "http://loki", "limit": 5000},
+            metadata={"limit": 5000},
         )
         payload = _loki_streams_payload([
             {
-                "stream": {"app": "api", "namespace": "prod"},
+                "stream": {"app": "api", "namespace": "prod", "pod": "api-7b9"},
                 "values": [[str(event_ns), "line1"]],
             }
         ])
@@ -423,9 +435,31 @@ class TestLokiSourceAdapter:
             raw_lines = list(adapter.read(ref, _WINDOW))
 
         assert [r.text for r in raw_lines] == ["line1"]
-        assert raw_lines[0].source_ref == '{app="api", namespace="prod"}'
+        assert raw_lines[0].source_ref == '{app="api", namespace="prod", pod="api-7b9"}'
         assert raw_lines[0].received_at == datetime(2026, 1, 1, tzinfo=timezone.utc)
+        assert raw_lines[0].default_service == "api"
+        assert raw_lines[0].default_environment == "prod"
+        assert raw_lines[0].default_host == "api-7b9"
         assert ref.cursor is None
+
+    def test_read_maps_job_and_instance_label_fallbacks(self):
+        from src.adapters.loki.adapter import LokiSourceAdapter
+
+        adapter = LokiSourceAdapter(base_url="http://loki")
+        ref = LogStreamRef(adapter="loki", stream_id='{job="prom"}', metadata={"limit": 5000})
+        payload = _loki_streams_payload([
+            {
+                "stream": {"job": "prom", "env": "staging", "instance": "10.0.0.8:9090"},
+                "values": [["1767225600000000000", "up"]],
+            }
+        ])
+
+        with patch.object(adapter, "_query_range", return_value=payload):
+            raw_lines = list(adapter.read(ref, _WINDOW))
+
+        assert raw_lines[0].default_service == "prom"
+        assert raw_lines[0].default_environment == "staging"
+        assert raw_lines[0].default_host == "10.0.0.8:9090"
 
     def test_read_paginates_until_page_is_short(self):
         from src.adapters.loki.adapter import LokiSourceAdapter
@@ -434,7 +468,7 @@ class TestLokiSourceAdapter:
         ref = LogStreamRef(
             adapter="loki",
             stream_id='{app="api"}',
-            metadata={"url": "http://loki", "limit": 2},
+            metadata={"limit": 2},
         )
         # Timestamps must fall inside _WINDOW; otherwise max_ts stays at window.start.
         t1, t2, t3 = "1767225600000000100", "1767225600000000200", "1767225600000000300"
@@ -469,13 +503,50 @@ class TestLokiSourceAdapter:
             adapter="loki",
             stream_id='{app="api"}',
             cursor="999",
-            metadata={"url": "http://loki", "limit": 5000},
+            metadata={"limit": 5000},
         )
 
         with patch.object(adapter, "_query_range", return_value=_loki_streams_payload([])) as mock_query:
             list(adapter.read(ref, _WINDOW))
 
         assert mock_query.call_args.args[1]["start"] == "999"
+
+    def test_read_rejects_non_integer_cursor(self):
+        from src.adapters.loki.adapter import LokiSourceAdapter
+
+        adapter = LokiSourceAdapter(base_url="http://loki")
+        ref = LogStreamRef(
+            adapter="loki",
+            stream_id='{app="api"}',
+            cursor="not-a-ns",
+            metadata={"limit": 5000},
+        )
+
+        with pytest.raises(AdapterUnavailableError, match="cursor"):
+            list(adapter.read(ref, _WINDOW))
+
+    def test_read_ignores_url_in_ref_metadata(self):
+        from src.adapters.loki.adapter import LokiSourceAdapter
+
+        adapter = LokiSourceAdapter(base_url="http://loki")
+        ref = LogStreamRef(
+            adapter="loki",
+            stream_id='{app="api"}',
+            metadata={"url": "https://evil.example", "limit": 5000},
+        )
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = _loki_streams_payload([])
+
+        mock_client = MagicMock()
+        mock_client.get.return_value = mock_response
+        mock_client.__enter__.return_value = mock_client
+        mock_client.__exit__.return_value = False
+
+        with patch("src.adapters.loki.adapter.httpx.Client", return_value=mock_client):
+            list(adapter.read(ref, _WINDOW))
+
+        assert mock_client.get.call_args.args[0] == "http://loki/loki/api/v1/query_range"
 
     def test_read_sets_cursor_when_page_is_full(self):
         """A full page means more results may exist — persist next start as cursor
@@ -486,7 +557,7 @@ class TestLokiSourceAdapter:
         ref = LogStreamRef(
             adapter="loki",
             stream_id='{app="api"}',
-            metadata={"url": "http://loki", "limit": 1},
+            metadata={"limit": 1},
         )
         # Raise on the second page so we can observe the cursor written after
         # the first (full) page — same moment ingest_from_source would snapshot it.
@@ -514,7 +585,7 @@ class TestLokiSourceAdapter:
         ref = LogStreamRef(
             adapter="loki",
             stream_id='{app="api"}',
-            metadata={"url": "http://loki", "tenant": "team-1", "limit": 5000},
+            metadata={"tenant": "team-1", "limit": 5000},
         )
         mock_response = MagicMock()
         mock_response.raise_for_status.return_value = None
@@ -545,7 +616,7 @@ class TestLokiSourceAdapter:
         ref = LogStreamRef(
             adapter="loki",
             stream_id='{app="api"}',
-            metadata={"url": "http://loki", "limit": 5000},
+            metadata={"limit": 5000},
         )
         mock_response = MagicMock()
         mock_response.raise_for_status.return_value = None
@@ -569,7 +640,7 @@ class TestLokiSourceAdapter:
         ref = LogStreamRef(
             adapter="loki",
             stream_id='{app="api"}',
-            metadata={"url": "http://loki", "limit": 5000},
+            metadata={"limit": 5000},
         )
         mock_response = MagicMock()
         mock_response.raise_for_status.return_value = None
@@ -595,7 +666,7 @@ class TestLokiSourceAdapter:
         ref = LogStreamRef(
             adapter="loki",
             stream_id="rate({app=\"api\"}[1m])",
-            metadata={"url": "http://loki", "limit": 5000},
+            metadata={"limit": 5000},
         )
         payload = {"status": "success", "data": {"resultType": "matrix", "result": []}}
 
@@ -612,7 +683,7 @@ class TestLokiSourceAdapter:
         ref = LogStreamRef(
             adapter="loki",
             stream_id='{app="api"}',
-            metadata={"url": "http://loki", "limit": 5000},
+            metadata={"limit": 5000},
         )
         request = httpx.Request("GET", "http://loki/loki/api/v1/query_range")
         response = httpx.Response(400, text="parse error", request=request)
@@ -637,7 +708,7 @@ class TestLokiSourceAdapter:
         ref = LogStreamRef(
             adapter="loki",
             stream_id='{app="api"}',
-            metadata={"url": "http://loki", "limit": 5000},
+            metadata={"limit": 5000},
         )
         request = httpx.Request("GET", "http://loki/loki/api/v1/query_range")
         response = httpx.Response(429, text="too many requests", request=request)
