@@ -161,3 +161,4 @@ class TestTextParser:
         assert result.host == "api-5f6d"
         assert result.environment == "production"
         assert result.timestamp is not None
+        assert "listening on :8080" in result.message

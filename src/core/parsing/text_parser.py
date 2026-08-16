@@ -13,9 +13,23 @@ LEVEL_PATTERN = re.compile(
 )
 
 # Common plain-text log patterns
+_LEVEL = r"FATAL|CRITICAL|ERROR|ERR|WARN(?:ING)?|INFO(?:RMATION(?:AL)?)?|DEBUG|TRACE|VERBOSE"
+
 # Pattern: <timestamp> <LEVEL> <service> <message>
 STRUCTURED_TEXT_PATTERN = re.compile(
-    r"^(?P<ts>\S+(?:\s\S+)?)\s+(?P<level>FATAL|CRITICAL|ERROR|ERR|WARN(?:ING)?|INFO(?:RMATION(?:AL)?)?|DEBUG|TRACE|VERBOSE)\s+(?P<service>\S+)\s+(?P<message>.+)$",
+    rf"^(?P<ts>\S+(?:\s\S+)?)\s+(?P<level>{_LEVEL})\s+(?P<service>\S+)\s+(?P<message>.+)$",
+    re.IGNORECASE,
+)
+
+# CRI-unwrapped / kubectl body: <LEVEL> <service> <message> (no timestamp)
+LEVEL_SERVICE_PATTERN = re.compile(
+    rf"^(?P<level>{_LEVEL})\s+(?P<service>\S+)\s+(?P<message>.+)$",
+    re.IGNORECASE,
+)
+
+# When service is already known (kubectl --prefix): <timestamp> <LEVEL> <message>
+TS_LEVEL_MESSAGE_PATTERN = re.compile(
+    rf"^(?P<ts>\S+(?:\s\S+)?)\s+(?P<level>{_LEVEL})\s+(?P<message>.+)$",
     re.IGNORECASE,
 )
 
@@ -40,6 +54,8 @@ KUBECTL_PREFIX_PATTERN = re.compile(
 def parse_text_line(
     line: str,
     default_service: Optional[str] = None,
+    *,
+    infer_service: bool = True,
 ) -> Optional[ParsedLogLine]:
     """Parse a single plain-text log line."""
     line_stripped = line.strip()
@@ -49,7 +65,11 @@ def parse_text_line(
     cri = CRI_PATTERN.match(line_stripped)
     if cri:
         cri_ts = extract_timestamp(cri.group("ts"))
-        inner = parse_text_line(cri.group("msg"), default_service=default_service)
+        inner = parse_text_line(
+            cri.group("msg"),
+            default_service=default_service,
+            infer_service=infer_service,
+        )
         if inner is None:
             return ParsedLogLine(
                 raw_line=line_stripped,
@@ -69,6 +89,7 @@ def parse_text_line(
         inner = parse_text_line(
             prefix.group("rest"),
             default_service=default_service or container,
+            infer_service=False,
         )
         if inner is None:
             return ParsedLogLine(
@@ -92,13 +113,24 @@ def parse_text_line(
     service: Optional[str] = None
     message: Optional[str] = None
 
-    # Try structured pattern first
-    m = STRUCTURED_TEXT_PATTERN.match(line_stripped)
+    # Try structured pattern first. When service is already known (kubectl --prefix),
+    # skip the service-token patterns so "ERROR connection timeout" keeps its message.
+    m = STRUCTURED_TEXT_PATTERN.match(line_stripped) if infer_service else None
+    m_ls = LEVEL_SERVICE_PATTERN.match(line_stripped) if infer_service and not m else None
+    m_tl = TS_LEVEL_MESSAGE_PATTERN.match(line_stripped) if not infer_service else None
     if m:
         timestamp = extract_timestamp(m.group("ts"))
         level = normalize_level(m.group("level"))
         service = m.group("service")
         message = m.group("message").strip()
+    elif m_ls:
+        level = normalize_level(m_ls.group("level"))
+        service = m_ls.group("service")
+        message = m_ls.group("message").strip()
+    elif m_tl:
+        timestamp = extract_timestamp(m_tl.group("ts"))
+        level = normalize_level(m_tl.group("level"))
+        message = m_tl.group("message").strip()
     else:
         m2 = BRACKET_PATTERN.match(line_stripped)
         if m2:
