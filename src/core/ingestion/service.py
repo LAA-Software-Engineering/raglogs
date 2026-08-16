@@ -60,6 +60,8 @@ def _process_line(
     source_ref: str,
     stats: IngestionStats,
     received_at: Optional[datetime] = None,
+    default_host: Optional[str] = None,
+    extra: Optional[dict] = None,
 ) -> Optional[LogEntry]:
     """Parse, fingerprint, and build a LogEntry for one raw line. Returns None for
     blank/unparseable/error lines (stats are updated either way).
@@ -101,12 +103,12 @@ def _process_line(
         level=parsed.level,
         trace_id=parsed.trace_id,
         request_id=parsed.request_id,
-        host=parsed.host,
+        host=parsed.host or default_host,
         raw_message=parsed.raw_line[:4096] if parsed.raw_line else None,
         normalized_message=normalized[:2048] if normalized else None,
         fingerprint=fp,
         parser_type=parsed.parser_type,
-        extra_json=parsed.extra or None,
+        extra_json={**(extra or {}), **(parsed.extra or {})} or None,
         source_adapter=source_adapter,
         source_ref=source_ref,
     )
@@ -312,9 +314,13 @@ def ingest_from_source(
                 for raw in adapter.read(ref, window):
                     effective_fmt = _resolve_fmt(raw.text, fmt)
                     entry = _process_line(
-                        raw.text, effective_fmt, spec.service, spec.env,
+                        raw.text, effective_fmt,
+                        raw.default_service or spec.service,
+                        raw.default_environment or spec.env,
                         source, job, spec.adapter, raw.source_ref, stats,
                         received_at=raw.received_at,
+                        default_host=raw.default_host,
+                        extra=raw.extra or None,
                     )
                     if entry is None:
                         continue

@@ -87,9 +87,19 @@ def run_ingest_job(db, worker_job) -> dict:
             resume_cursors = (prior.metadata_json or {}).get("cursors")
             resume_completed_streams = (prior.metadata_json or {}).get("completed_streams")
 
+        params = payload.get("params", {})
+        if adapter in ("k8s", "kubernetes"):
+            from src.adapters.k8s.adapter import build_k8s_params
+
+            params = build_k8s_params(
+                params,
+                paths=payload.get("paths"),
+                recursive=payload.get("recursive", False),
+            )
+
         spec = SourceSpec(
             adapter=adapter,
-            params=payload.get("params", {}),
+            params=params,
             service=payload.get("service"),
             env=payload.get("env"),
         )

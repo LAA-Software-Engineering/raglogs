@@ -24,7 +24,7 @@ def ingest_cmd(
     env: Optional[str] = typer.Option(None, "--env", help="Default environment"),
     fmt: str = typer.Option("auto", "--format", help="Log format: json|text|auto"),
     with_embeddings: bool = typer.Option(False, "--with-embeddings/--no-embeddings", help="Generate embeddings"),
-    adapter: str = typer.Option("file", "--adapter", help="Source adapter: file|cloudwatch"),
+    adapter: str = typer.Option("file", "--adapter", help="Source adapter: file|cloudwatch|k8s"),
     param: Optional[List[str]] = typer.Option(None, "--param", help="Adapter param as key=value (repeatable)"),
     since: Optional[str] = typer.Option(None, "--since", help="Window, e.g. 30m, 1h, 24h (non-file adapters)"),
     from_time: Optional[str] = typer.Option(None, "--from", help="Window start, ISO 8601 (non-file adapters)"),
@@ -39,6 +39,8 @@ def ingest_cmd(
         console.print(f"  Paths: {', '.join(paths[:3])}{'...' if len(paths) > 3 else ''}")
     elif adapter != "file":
         console.print(f"  Adapter: {adapter}")
+        if adapter in ("k8s", "kubernetes") and paths:
+            console.print(f"  Paths: {', '.join(paths[:3])}{'...' if len(paths) > 3 else ''}")
 
     with Progress(
         SpinnerColumn(),
@@ -92,9 +94,15 @@ def ingest_cmd(
                         resume_cursors = (prior.metadata_json or {}).get("cursors")
                         resume_completed_streams = (prior.metadata_json or {}).get("completed_streams")
 
+                    params = _parse_params(param)
+                    if adapter in ("k8s", "kubernetes"):
+                        from src.adapters.k8s.adapter import build_k8s_params
+
+                        params = build_k8s_params(params, paths=paths, recursive=recursive)
+
                     spec = SourceSpec(
                         adapter=adapter,
-                        params=_parse_params(param),
+                        params=params,
                         service=service,
                         env=env,
                     )

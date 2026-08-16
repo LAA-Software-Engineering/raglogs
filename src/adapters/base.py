@@ -6,6 +6,7 @@ from typing import Any, Iterable, Iterator, Optional, Protocol, runtime_checkabl
 @dataclass
 class SourceSpec:
     """What integrators send instead of file paths — identifies an adapter and its params."""
+
     adapter: str
     params: dict[str, Any] = field(default_factory=dict)
     service: Optional[str] = None
@@ -21,6 +22,7 @@ class TimeWindow:
 @dataclass
 class LogStreamRef:
     """A concrete stream resolved from a SourceSpec (a log group, label set, or file)."""
+
     adapter: str
     stream_id: str
     cursor: Optional[str] = None
@@ -30,9 +32,16 @@ class LogStreamRef:
 @dataclass
 class RawLogLine:
     """One unparsed line plus its provenance, ready for the parser → normalization pipeline."""
+
     text: str
     source_ref: str
     received_at: Optional[datetime] = None
+    # Adapter-inferred fallbacks (e.g. k8s path / kubectl prefix). The line's own
+    # parsed fields win; these fill in when the payload has no service/env/host.
+    default_service: Optional[str] = None
+    default_environment: Optional[str] = None
+    default_host: Optional[str] = None
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 @runtime_checkable

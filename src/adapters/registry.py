@@ -1,7 +1,7 @@
 from src.adapters.base import SourceAdapter
 from src.core.errors import AdapterUnavailableError
 
-ADAPTER_NAMES = ("file", "cloudwatch")
+ADAPTER_NAMES = ("file", "cloudwatch", "k8s")
 
 
 def get_adapter(name: str, settings) -> SourceAdapter:
@@ -15,4 +15,8 @@ def get_adapter(name: str, settings) -> SourceAdapter:
         from src.adapters.cloudwatch.adapter import CloudWatchSourceAdapter
 
         return CloudWatchSourceAdapter(region=settings.adapter_cloudwatch_region)
+    if name in ("k8s", "kubernetes"):
+        from src.adapters.k8s.adapter import KubernetesExportAdapter
+
+        return KubernetesExportAdapter()
     raise AdapterUnavailableError(f"Unknown adapter: {name!r}")

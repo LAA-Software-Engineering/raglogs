@@ -237,7 +237,7 @@ raglogs init --no-migrate   # skip migrations
 
 ### `raglogs ingest`
 
-Ingests one or more log files into the database. Supports JSON and plain-text formats, single files, directories, and glob patterns.
+Ingests one or more log files into the database. Supports JSON and plain-text formats, single files, directories, and glob patterns. Use `--adapter` for CloudWatch or Kubernetes exports.
 
 ```bash
 raglogs ingest ./logs/app.log
@@ -248,6 +248,19 @@ raglogs ingest ./logs/ --service api --env production
 raglogs ingest ./logs/ --format json
 ```
 
+**Kubernetes log exports** (`--adapter k8s`) — concatenated `kubectl logs`, Fluent Bit / Vector JSON lines, CRI (kubelet) node logs, `.gz` files, and tarballs. Namespace / pod / container map to environment / host / service.
+
+```bash
+# kubectl capture (prefix + timestamps give pod/container and event time)
+kubectl logs -n production -l app=billing-worker --all-containers \
+  --prefix --timestamps --since=1h > /tmp/billing-export.log
+raglogs ingest --adapter k8s /tmp/billing-export.log
+
+# kubelet /var/log/pods dump (path supplies namespace, pod, container)
+raglogs ingest --adapter k8s --recursive ./var/log/pods
+raglogs ingest --adapter k8s ./node-logs.tar.gz
+```
+
 | Flag | Description |
 |---|---|
 | `--recursive` / `-r` | Recurse into subdirectories |
@@ -255,6 +268,8 @@ raglogs ingest ./logs/ --format json
 | `--service` | Default service name when not in logs |
 | `--env` | Default environment |
 | `--format` | `json`, `text`, or `auto` (default) |
+| `--adapter` | `file` (default), `cloudwatch`, or `k8s` |
+| `--param` | Adapter param as `key=value` (repeatable) |
 | `--with-embeddings` | Generate vector embeddings (requires embeddings provider) |
 
 **Output**
@@ -881,6 +896,7 @@ make clean
 raglogs/
 ├── src/
 │   ├── adapters/file/       File discovery and line reading
+│   ├── adapters/k8s/        Kubernetes log-export adapter (kubectl, CRI, tarballs)
 │   ├── api/routes/          FastAPI route handlers
 │   ├── cli/commands/        Typer CLI commands
 │   ├── config/              Pydantic settings
@@ -913,7 +929,6 @@ New source adapters go in `raglogs/adapters/`. Each adapter yields `ParsedLogLin
 
 - Datadog adapter
 - Loki adapter
-- Kubernetes log export ingestion
 - Semantic cluster merging via pgvector
 - Markdown incident report export (`raglogs explain --format markdown > postmortem.md`)
 

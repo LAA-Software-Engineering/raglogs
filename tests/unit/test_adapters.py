@@ -1,12 +1,14 @@
 """
 Tests for src.adapters.base / src.adapters.file.adapter / src.adapters.cloudwatch.adapter
-/ src.adapters.registry.
+/ src.adapters.k8s.adapter / src.adapters.registry.
 
 File adapter tests check that the new SourceAdapter-conforming class produces identical
 output to the pre-existing free functions (discover_files/detect_format/read_lines).
 CloudWatch adapter tests mock the boto3 client boundary, not internals — same convention
 as tests/unit/test_worker.py.
+Kubernetes export tests use tmp_path files and in-memory tarballs — no cluster required.
 """
+
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -24,6 +26,7 @@ _WINDOW = TimeWindow(
 
 # ── FileSourceAdapter ────────────────────────────────────────────────────────
 
+
 class TestFileSourceAdapter:
     def test_conforms_to_protocol(self):
         from src.adapters.file.adapter import FileSourceAdapter
@@ -31,12 +34,18 @@ class TestFileSourceAdapter:
         assert isinstance(FileSourceAdapter(), SourceAdapter)
 
     def test_discover_matches_discover_files_and_detect_format(self, tmp_path):
-        from src.adapters.file.adapter import FileSourceAdapter, detect_format, discover_files
+        from src.adapters.file.adapter import (
+            FileSourceAdapter,
+            detect_format,
+            discover_files,
+        )
 
         (tmp_path / "a.json").write_text('{"message": "x"}\n')
         (tmp_path / "b.log").write_text("plain text\n")
 
-        spec = SourceSpec(adapter="file", params={"paths": [str(tmp_path)], "recursive": False})
+        spec = SourceSpec(
+            adapter="file", params={"paths": [str(tmp_path)], "recursive": False}
+        )
         refs = list(FileSourceAdapter().discover(spec))
 
         expected = discover_files([str(tmp_path)], recursive=False)
@@ -59,6 +68,7 @@ class TestFileSourceAdapter:
 
 
 # ── CloudWatchSourceAdapter ──────────────────────────────────────────────────
+
 
 class TestCloudWatchSourceAdapter:
     def test_conforms_to_protocol(self):
@@ -98,7 +108,9 @@ class TestCloudWatchSourceAdapter:
         from src.adapters.cloudwatch.adapter import CloudWatchSourceAdapter
 
         adapter = CloudWatchSourceAdapter()
-        spec = SourceSpec(adapter="cloudwatch", params={"log_group": "/aws/lambda/my-service"})
+        spec = SourceSpec(
+            adapter="cloudwatch", params={"log_group": "/aws/lambda/my-service"}
+        )
         refs = list(adapter.discover(spec))
 
         assert [r.stream_id for r in refs] == ["/aws/lambda/my-service"]
@@ -121,12 +133,22 @@ class TestCloudWatchSourceAdapter:
 
         mock_client = MagicMock()
         mock_client.filter_log_events.side_effect = [
-            {"events": [{"message": "line1"}, {"message": "line2"}], "nextToken": "tok1"},
-            {"events": [{"message": "line3"}], "nextToken": "tok1"},  # same token -> stop
+            {
+                "events": [{"message": "line1"}, {"message": "line2"}],
+                "nextToken": "tok1",
+            },
+            {
+                "events": [{"message": "line3"}],
+                "nextToken": "tok1",
+            },  # same token -> stop
         ]
 
         adapter = CloudWatchSourceAdapter(region="us-east-1")
-        ref = LogStreamRef(adapter="cloudwatch", stream_id="/aws/lambda/x", metadata={"filter_pattern": ""})
+        ref = LogStreamRef(
+            adapter="cloudwatch",
+            stream_id="/aws/lambda/x",
+            metadata={"filter_pattern": ""},
+        )
 
         with patch("src.adapters.cloudwatch.adapter._client", return_value=mock_client):
             lines = [raw.text for raw in adapter.read(ref, _WINDOW)]
@@ -159,18 +181,24 @@ class TestCloudWatchSourceAdapter:
         mock_client.filter_log_events.return_value = {"events": []}
 
         adapter = CloudWatchSourceAdapter(region="us-east-1")
-        ref = LogStreamRef(adapter="cloudwatch", stream_id="/aws/lambda/x", cursor="resume-tok")
+        ref = LogStreamRef(
+            adapter="cloudwatch", stream_id="/aws/lambda/x", cursor="resume-tok"
+        )
 
         with patch("src.adapters.cloudwatch.adapter._client", return_value=mock_client):
             list(adapter.read(ref, _WINDOW))
 
-        assert mock_client.filter_log_events.call_args.kwargs["nextToken"] == "resume-tok"
+        assert (
+            mock_client.filter_log_events.call_args.kwargs["nextToken"] == "resume-tok"
+        )
 
     def test_discover_honors_region_param_override(self):
         from src.adapters.cloudwatch.adapter import CloudWatchSourceAdapter
 
         adapter = CloudWatchSourceAdapter(region="us-east-1")
-        spec = SourceSpec(adapter="cloudwatch", params={"log_group": "/a", "region": "eu-west-1"})
+        spec = SourceSpec(
+            adapter="cloudwatch", params={"log_group": "/a", "region": "eu-west-1"}
+        )
         refs = list(adapter.discover(spec))
 
         assert refs[0].metadata["region"] == "eu-west-1"
@@ -182,9 +210,13 @@ class TestCloudWatchSourceAdapter:
         mock_client.filter_log_events.return_value = {"events": []}
 
         adapter = CloudWatchSourceAdapter(region="us-east-1")
-        ref = LogStreamRef(adapter="cloudwatch", stream_id="/a", metadata={"region": "eu-west-1"})
+        ref = LogStreamRef(
+            adapter="cloudwatch", stream_id="/a", metadata={"region": "eu-west-1"}
+        )
 
-        with patch("src.adapters.cloudwatch.adapter._client", return_value=mock_client) as mock_get_client:
+        with patch(
+            "src.adapters.cloudwatch.adapter._client", return_value=mock_client
+        ) as mock_get_client:
             list(adapter.read(ref, _WINDOW))
 
         mock_get_client.assert_called_once_with("eu-west-1")
@@ -198,7 +230,12 @@ class TestCloudWatchSourceAdapter:
 
         mock_client = MagicMock()
         mock_client.filter_log_events.side_effect = ClientError(
-            {"Error": {"Code": "ResourceNotFoundException", "Message": "no such log group"}},
+            {
+                "Error": {
+                    "Code": "ResourceNotFoundException",
+                    "Message": "no such log group",
+                }
+            },
             "FilterLogEvents",
         )
 
@@ -292,6 +329,7 @@ class TestCloudWatchSourceAdapter:
 
 # ── registry ──────────────────────────────────────────────────────────────────
 
+
 class TestRegistry:
     def test_get_adapter_file(self):
         from src.adapters.file.adapter import FileSourceAdapter
@@ -309,9 +347,152 @@ class TestRegistry:
         adapter = get_adapter("cloudwatch", get_settings())
         assert isinstance(adapter, CloudWatchSourceAdapter)
 
+    def test_get_adapter_k8s(self):
+        from src.adapters.k8s.adapter import KubernetesExportAdapter
+        from src.adapters.registry import get_adapter
+        from src.config import get_settings
+
+        adapter = get_adapter("k8s", get_settings())
+        assert isinstance(adapter, KubernetesExportAdapter)
+        assert isinstance(
+            get_adapter("kubernetes", get_settings()), KubernetesExportAdapter
+        )
+
     def test_get_adapter_unknown_raises(self):
         from src.adapters.registry import get_adapter
         from src.config import get_settings
 
         with pytest.raises(AdapterUnavailableError):
             get_adapter("does-not-exist", get_settings())
+
+
+# ── KubernetesExportAdapter ───────────────────────────────────────────────────
+
+
+class TestKubernetesExportAdapter:
+    def test_conforms_to_protocol(self):
+        from src.adapters.k8s.adapter import KubernetesExportAdapter
+
+        assert isinstance(KubernetesExportAdapter(), SourceAdapter)
+
+    def test_discover_requires_paths(self):
+        from src.adapters.k8s.adapter import KubernetesExportAdapter
+
+        with pytest.raises(AdapterUnavailableError):
+            list(
+                KubernetesExportAdapter().discover(SourceSpec(adapter="k8s", params={}))
+            )
+
+    def test_discover_splits_comma_separated_paths_string(self, tmp_path):
+        from src.adapters.k8s.adapter import KubernetesExportAdapter
+
+        a = tmp_path / "a.log"
+        b = tmp_path / "b.log"
+        a.write_text("one\n")
+        b.write_text("two\n")
+
+        spec = SourceSpec(adapter="k8s", params={"paths": f"{a},{b}"})
+        refs = list(KubernetesExportAdapter().discover(spec))
+
+        assert {r.stream_id for r in refs} == {str(a), str(b)}
+
+    def test_discover_infers_metadata_from_pods_path(self, tmp_path):
+        from src.adapters.k8s.adapter import KubernetesExportAdapter
+
+        log_path = (
+            tmp_path
+            / "pods"
+            / "production_billing-worker-abc_01234567-89ab-cdef-0123-456789abcdef"
+            / "billing-worker"
+            / "0.log"
+        )
+        log_path.parent.mkdir(parents=True)
+        log_path.write_text("line\n")
+
+        spec = SourceSpec(
+            adapter="k8s", params={"paths": [str(tmp_path)], "recursive": True}
+        )
+        refs = list(KubernetesExportAdapter().discover(spec))
+
+        assert len(refs) == 1
+        assert refs[0].metadata["namespace"] == "production"
+        assert refs[0].metadata["pod"] == "billing-worker-abc"
+        assert refs[0].metadata["container"] == "billing-worker"
+
+    def test_read_sets_defaults_from_path_metadata(self, tmp_path):
+        from src.adapters.k8s.adapter import KubernetesExportAdapter
+
+        log_path = (
+            tmp_path
+            / "pods"
+            / "production_billing-worker-abc_01234567-89ab-cdef-0123-456789abcdef"
+            / "billing-worker"
+            / "0.log"
+        )
+        log_path.parent.mkdir(parents=True)
+        log_path.write_text(
+            "2026-03-12T22:01:10.123456789Z stdout F ERROR connection timeout\n"
+        )
+
+        adapter = KubernetesExportAdapter()
+        spec = SourceSpec(adapter="k8s", params={"paths": [str(log_path)]})
+        ref = list(adapter.discover(spec))[0]
+        raw_lines = list(adapter.read(ref, _WINDOW))
+
+        assert len(raw_lines) == 1
+        assert raw_lines[0].default_service == "billing-worker"
+        assert raw_lines[0].default_environment == "production"
+        assert raw_lines[0].default_host == "billing-worker-abc"
+        assert raw_lines[0].source_ref == "production/billing-worker-abc/billing-worker"
+        assert raw_lines[0].extra["kubernetes"]["pod"] == "billing-worker-abc"
+        assert "stdout F" in raw_lines[0].text
+
+    def test_discover_expands_tarball(self, tmp_path):
+        import tarfile
+
+        from src.adapters.k8s.adapter import KubernetesExportAdapter
+
+        member = "pods/staging_api-xyz_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/api/0.log"
+        inner = tmp_path / "inner.log"
+        inner.write_text("hello from tar\n")
+        archive = tmp_path / "export.tar.gz"
+        with tarfile.open(archive, "w:gz") as tar:
+            tar.add(inner, arcname=member)
+
+        spec = SourceSpec(adapter="k8s", params={"paths": [str(archive)]})
+        refs = list(KubernetesExportAdapter().discover(spec))
+
+        assert len(refs) == 1
+        assert refs[0].metadata["kind"] == "tar"
+        assert refs[0].metadata["namespace"] == "staging"
+        assert refs[0].metadata["container"] == "api"
+
+        raw_lines = list(KubernetesExportAdapter().read(refs[0], _WINDOW))
+        assert [r.text for r in raw_lines] == ["hello from tar"]
+        assert raw_lines[0].default_service == "api"
+
+    def test_read_gzip_file(self, tmp_path):
+        import gzip
+
+        from src.adapters.k8s.adapter import KubernetesExportAdapter
+
+        gz = tmp_path / "capture.log.gz"
+        with gzip.open(gz, "wt", encoding="utf-8") as handle:
+            handle.write("gzipped line\n")
+
+        spec = SourceSpec(adapter="k8s", params={"paths": [str(gz)]})
+        refs = list(KubernetesExportAdapter().discover(spec))
+        raw_lines = list(KubernetesExportAdapter().read(refs[0], _WINDOW))
+
+        assert refs[0].metadata["kind"] == "gzip"
+        assert [r.text for r in raw_lines] == ["gzipped line"]
+
+    def test_build_k8s_params_merges_top_level_paths(self):
+        from src.adapters.k8s.adapter import build_k8s_params
+
+        merged = build_k8s_params({}, paths=["./a.log"], recursive=True)
+        assert merged["paths"] == ["./a.log"]
+        assert merged["recursive"] is True
+
+        already = build_k8s_params({"paths": ["./kept.log"]}, paths=["./ignored.log"])
+        assert already["paths"] == ["./kept.log"]

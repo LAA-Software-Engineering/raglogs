@@ -25,6 +25,17 @@ BRACKET_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# CRI (containerd / kubelet) : <RFC3339> stdout|stderr F|P <message>
+CRI_PATTERN = re.compile(
+    r"^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))\s+"
+    r"(?P<stream>stdout|stderr)\s+(?P<tag>[FP])\s+(?P<msg>.*)$"
+)
+
+# kubectl logs --prefix : [pod/container] or [namespace/pod/container]
+KUBECTL_PREFIX_PATTERN = re.compile(
+    r"^\[(?:(?P<namespace>[\w.-]+)/)?(?P<pod>[\w.-]+)/(?P<container>[\w.-]+)\]\s+(?P<rest>.*)$"
+)
+
 
 def parse_text_line(
     line: str,
@@ -34,6 +45,47 @@ def parse_text_line(
     line_stripped = line.strip()
     if not line_stripped:
         return None
+
+    cri = CRI_PATTERN.match(line_stripped)
+    if cri:
+        cri_ts = extract_timestamp(cri.group("ts"))
+        inner = parse_text_line(cri.group("msg"), default_service=default_service)
+        if inner is None:
+            return ParsedLogLine(
+                raw_line=line_stripped,
+                timestamp=cri_ts,
+                service=default_service,
+                message=cri.group("msg"),
+                parser_type="text",
+            )
+        if inner.timestamp is None:
+            inner.timestamp = cri_ts
+        inner.raw_line = line_stripped
+        return inner
+
+    prefix = KUBECTL_PREFIX_PATTERN.match(line_stripped)
+    if prefix:
+        container = prefix.group("container")
+        inner = parse_text_line(
+            prefix.group("rest"),
+            default_service=default_service or container,
+        )
+        if inner is None:
+            return ParsedLogLine(
+                raw_line=line_stripped,
+                service=default_service or container,
+                host=prefix.group("pod"),
+                environment=prefix.group("namespace"),
+                message=prefix.group("rest"),
+                parser_type="text",
+            )
+        # Prefix is the k8s identity — prefer it over a guessed structured-text service
+        # token (e.g. "connection" in "ERROR connection timeout").
+        inner.service = container or inner.service or default_service
+        inner.host = prefix.group("pod") or inner.host
+        inner.environment = prefix.group("namespace") or inner.environment
+        inner.raw_line = line_stripped
+        return inner
 
     timestamp: Optional[datetime] = None
     level: Optional[str] = None
