@@ -94,9 +94,12 @@ def map_datadog_event(event: dict[str, Any]) -> dict[str, Any]:
     custom attributes. Unknown envelope fields are dropped so core parsing
     stays source-agnostic.
     """
-    attrs = event.get("attributes") if isinstance(event.get("attributes"), dict) else {}
-    nested = attrs.get("attributes") if isinstance(attrs.get("attributes"), dict) else {}
-    tags = attrs.get("tags") if isinstance(attrs.get("tags"), list) else []
+    raw_attrs = event.get("attributes")
+    attrs = raw_attrs if isinstance(raw_attrs, dict) else {}
+    raw_nested = attrs.get("attributes")
+    nested = raw_nested if isinstance(raw_nested, dict) else {}
+    raw_tags = attrs.get("tags")
+    tags = raw_tags if isinstance(raw_tags, list) else []
 
     env = (
         _as_str(attrs.get("env"))
@@ -122,10 +125,14 @@ def map_datadog_event(event: dict[str, Any]) -> dict[str, Any]:
         payload["host"] = host
     if env is not None:
         payload["env"] = env
-    trace_id = _as_str(_lookup(nested, *_TRACE_KEYS) or _lookup(attrs, *_TRACE_KEYS))
+    trace_id = _as_str(
+        _lookup(nested, *_TRACE_KEYS) or _lookup(attrs, *_TRACE_KEYS)
+    )
     if trace_id is not None:
         payload["trace_id"] = trace_id
-    request_id = _as_str(_lookup(nested, *_REQUEST_KEYS) or _lookup(attrs, *_REQUEST_KEYS))
+    request_id = _as_str(
+        _lookup(nested, *_REQUEST_KEYS) or _lookup(attrs, *_REQUEST_KEYS)
+    )
     if request_id is not None:
         payload["request_id"] = request_id
     return payload
@@ -133,7 +140,8 @@ def map_datadog_event(event: dict[str, Any]) -> dict[str, Any]:
 
 def parse_event_timestamp(event: dict[str, Any]) -> Optional[datetime]:
     """Parse the Datadog event timestamp for RawLogLine.received_at."""
-    attrs = event.get("attributes") if isinstance(event.get("attributes"), dict) else {}
+    raw_attrs = event.get("attributes")
+    attrs = raw_attrs if isinstance(raw_attrs, dict) else {}
     raw = attrs.get("timestamp")
     if raw is None:
         return None
@@ -235,7 +243,9 @@ class DatadogSourceAdapter:
         else:
             query = str(query)
         indexes = _indexes_param(spec.params)
-        page_size = _clamp_page_size(_int_param(spec.params, "page_size", self.page_size))
+        page_size = _clamp_page_size(
+            _int_param(spec.params, "page_size", self.page_size)
+        )
         max_rows = max(1, _int_param(spec.params, "max_rows", self.max_rows))
         site = spec.params.get("site") or self.site
         stream_id = f"{','.join(indexes)}|{query}" if indexes else query
@@ -255,7 +265,9 @@ class DatadogSourceAdapter:
         self.check_available()
         query = ref.metadata.get("query") or ref.stream_id or "*"
         indexes = ref.metadata.get("indexes") or []
-        page_size = _clamp_page_size(int(ref.metadata.get("page_size") or self.page_size))
+        page_size = _clamp_page_size(
+            int(ref.metadata.get("page_size") or self.page_size)
+        )
         max_rows = max(1, int(ref.metadata.get("max_rows") or self.max_rows))
         site = ref.metadata.get("site") or self.site
         url = api_base_url(str(site)) + SEARCH_PATH
@@ -310,7 +322,8 @@ class DatadogSourceAdapter:
                 if not after or after == cursor or yielded >= max_rows:
                     # Keep the next-page cursor when we hit max_rows so --resume-job
                     # can continue; clear it when the window is exhausted.
-                    ref.cursor = after if yielded >= max_rows and after and after != cursor else None
+                    keep_cursor = yielded >= max_rows and after and after != cursor
+                    ref.cursor = after if keep_cursor else None
                     break
                 cursor = after
                 ref.cursor = cursor
@@ -331,13 +344,17 @@ class DatadogSourceAdapter:
         retry=retry_if_exception(_is_retryable),
         reraise=True,
     )
-    def _search_logs(self, client: httpx.Client, url: str, payload: dict[str, Any]) -> dict:
+    def _search_logs(
+        self, client: httpx.Client, url: str, payload: dict[str, Any]
+    ) -> dict:
         response = client.post(url, headers=self._headers(), json=payload)
         response.raise_for_status()
         try:
             data = response.json()
         except ValueError as e:
-            raise AdapterUnavailableError(f"Datadog Logs API returned invalid JSON: {e}") from e
+            raise AdapterUnavailableError(
+                f"Datadog Logs API returned invalid JSON: {e}"
+            ) from e
         if not isinstance(data, dict):
             raise AdapterUnavailableError("Datadog Logs API returned a non-object body")
         return data
