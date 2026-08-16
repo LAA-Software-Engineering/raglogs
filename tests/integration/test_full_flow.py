@@ -1,6 +1,6 @@
 """
 Integration tests that run against a real PostgreSQL database.
-Requires RAGLOGS_DB_URL to point to a test database.
+Requires DB_URL to point to a test database.
 """
 import os
 import pytest
@@ -9,8 +9,8 @@ from pathlib import Path
 
 # Skip all integration tests if no DB is configured
 pytestmark = pytest.mark.skipif(
-    not os.getenv("RAGLOGS_DB_URL") and not os.getenv("RAGLOGS_INTEGRATION_TESTS"),
-    reason="Integration tests require RAGLOGS_DB_URL environment variable",
+    not os.getenv("DB_URL") and not os.getenv("INTEGRATION_TESTS"),
+    reason="Integration tests require DB_URL environment variable",
 )
 
 

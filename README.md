@@ -208,7 +208,7 @@ pip install -e .
 
 ```bash
 cp .env.example .env
-# Edit .env — set RAGLOGS_DB_URL at minimum
+# Edit .env — set DB_URL at minimum
 ```
 
 **Initialize the database**
@@ -557,54 +557,54 @@ All settings are read from `.env`, environment variables, or CLI flags. Priority
 
 | Variable | Default | Description |
 |---|---|---|
-| `RAGLOGS_DB_URL` | `postgresql+psycopg://postgres:postgres@localhost:5432/raglogs` | PostgreSQL connection URL |
-| `RAGLOGS_LLM_PROVIDER` | `disabled` | `disabled`, `openai`, `ollama` |
-| `RAGLOGS_LLM_MODEL` | `gpt-4.1-mini` | LLM model name |
-| `RAGLOGS_OPENAI_API_KEY` | _(empty)_ | API key for OpenAI or compatible endpoint |
-| `RAGLOGS_OPENAI_BASE_URL` | `https://api.openai.com/v1` | Base URL for OpenAI-compatible API |
-| `RAGLOGS_OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
-| `RAGLOGS_EMBEDDINGS_PROVIDER` | `disabled` | `disabled`, `openai`, `local` |
-| `RAGLOGS_EMBEDDINGS_MODEL` | `text-embedding-3-small` | Embeddings model name |
-| `RAGLOGS_DEFAULT_BASELINE_WINDOW` | `24h` | How far back to compare for baseline |
-| `RAGLOGS_MAX_CLUSTERS_FOR_EXPLAIN` | `10` | Max clusters sent to the explain pipeline |
-| `RAGLOGS_MAX_EVIDENCE_ITEMS` | `8` | Max evidence lines in output |
-| `RAGLOGS_ADAPTER_CLOUDWATCH_REGION` | `us-east-1` | AWS region for `--adapter cloudwatch` |
-| `RAGLOGS_DATADOG_API_KEY` | _(empty)_ | Datadog API key (`logs_read_data`) |
-| `RAGLOGS_DATADOG_APP_KEY` | _(empty)_ | Datadog application key |
-| `RAGLOGS_DATADOG_SITE` | `datadoghq.com` | Datadog site (`us3.datadoghq.com`, `datadoghq.eu`, …) |
-| `RAGLOGS_DATADOG_PAGE_SIZE` | `1000` | Logs per Datadog page (API max 1000) |
-| `RAGLOGS_DATADOG_MAX_ROWS` | `10000` | Max events pulled in one Datadog ingest run |
+| `DB_URL` | `postgresql+psycopg://postgres:postgres@localhost:5432/raglogs` | PostgreSQL connection URL |
+| `LLM_PROVIDER` | `disabled` | `disabled`, `openai`, `ollama` |
+| `LLM_MODEL` | `gpt-4.1-mini` | LLM model name |
+| `OPENAI_API_KEY` | _(empty)_ | API key for OpenAI or compatible endpoint |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Base URL for OpenAI-compatible API |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
+| `EMBEDDINGS_PROVIDER` | `disabled` | `disabled`, `openai`, `local` |
+| `EMBEDDINGS_MODEL` | `text-embedding-3-small` | Embeddings model name |
+| `DEFAULT_BASELINE_WINDOW` | `24h` | How far back to compare for baseline |
+| `MAX_CLUSTERS_FOR_EXPLAIN` | `10` | Max clusters sent to the explain pipeline |
+| `MAX_EVIDENCE_ITEMS` | `8` | Max evidence lines in output |
+| `ADAPTER_CLOUDWATCH_REGION` | `us-east-1` | AWS region for `--adapter cloudwatch` |
+| `DATADOG_API_KEY` | _(empty)_ | Datadog API key (`logs_read_data`) |
+| `DATADOG_APP_KEY` | _(empty)_ | Datadog application key |
+| `DATADOG_SITE` | `datadoghq.com` | Datadog site (`us3.datadoghq.com`, `datadoghq.eu`, …) |
+| `DATADOG_PAGE_SIZE` | `1000` | Logs per Datadog page (API max 1000) |
+| `DATADOG_MAX_ROWS` | `10000` | Max events pulled in one Datadog ingest run |
 
 ---
 
 ## LLM integration
 
-raglogs is fully useful without any LLM. The `--no-llm` flag (or `RAGLOGS_LLM_PROVIDER=disabled`) activates deterministic template-based summaries.
+raglogs is fully useful without any LLM. The `--no-llm` flag (or `LLM_PROVIDER=disabled`) activates deterministic template-based summaries.
 
 When an LLM is configured, it receives only a small curated evidence packet — not raw logs. The prompt enforces fixed output structure, prohibits fabrication, and requires explicit uncertainty statements when evidence is insufficient.
 
 ### OpenAI
 
 ```env
-RAGLOGS_LLM_PROVIDER=openai
-RAGLOGS_LLM_MODEL=gpt-4.1-mini
-RAGLOGS_OPENAI_API_KEY=sk-...
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-4.1-mini
+OPENAI_API_KEY=sk-...
 ```
 
 ### Ollama (fully local)
 
 ```env
-RAGLOGS_LLM_PROVIDER=ollama
-RAGLOGS_LLM_MODEL=llama3
-RAGLOGS_OLLAMA_BASE_URL=http://localhost:11434
+LLM_PROVIDER=ollama
+LLM_MODEL=llama3
+OLLAMA_BASE_URL=http://localhost:11434
 ```
 
 ### Any OpenAI-compatible endpoint
 
 ```env
-RAGLOGS_LLM_PROVIDER=openai
-RAGLOGS_OPENAI_BASE_URL=http://localhost:1234/v1
-RAGLOGS_OPENAI_API_KEY=not-required
+LLM_PROVIDER=openai
+OPENAI_BASE_URL=http://localhost:1234/v1
+OPENAI_API_KEY=not-required
 ```
 
 ---
@@ -721,7 +721,7 @@ change_ratio = (current_count + 1) / (baseline_count + 1)
 
 A cluster that fires 200 times and usually fires 180 is probably normal. A cluster that fires 5 times but has never appeared before has a change ratio of 6 and ranks much higher. The smoothing term prevents divide-by-zero explosions on new clusters.
 
-Default baseline window is the 24 hours before the incident window. Configurable with `--baseline-window` or `RAGLOGS_DEFAULT_BASELINE_WINDOW`.
+Default baseline window is the 24 hours before the incident window. Configurable with `--baseline-window` or `DEFAULT_BASELINE_WINDOW`.
 
 ### Trigger detection
 
@@ -929,8 +929,8 @@ New source adapters go in `src/adapters/` and implement `SourceAdapter` (`discov
 - Auth: `DD-API-KEY` + `DD-APPLICATION-KEY` (application key needs `logs_read_data`). Keys come from env only — never CLI `--param`.
 - Endpoint: `POST https://api.<site>/api/v2/logs/events/search` with an absolute `from`/`to` window (relative ranges drop events while paginating).
 - Pagination: cursor from `meta.page.after`; resume with `--resume-job`.
-- Page size: default 1000, Datadog hard max 1000 (`--param page_size=N` or `RAGLOGS_DATADOG_PAGE_SIZE`).
-- Max rows per run: default 10000 (`--param max_rows=N` or `RAGLOGS_DATADOG_MAX_ROWS`). Hitting the cap saves the next cursor for resume.
+- Page size: default 1000, Datadog hard max 1000 (`--param page_size=N` or `DATADOG_PAGE_SIZE`).
+- Max rows per run: default 10000 (`--param max_rows=N` or `DATADOG_MAX_ROWS`). Hitting the cap saves the next cursor for resume.
 - Rate limits: HTTP 429 and 5xx are retried up to 3 times with exponential backoff; a persistent failure marks the job `ADAPTER_UNAVAILABLE` (or `partial: true` if some events already landed).
 - Field mapping: Datadog `status` → `level`; `service` / `host` / `message` / `timestamp` pass through; `env` from the `env:` tag or attributes; `trace_id` / `request_id` from nested custom attributes when present.
 

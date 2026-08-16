@@ -128,7 +128,7 @@ test-unit:
 	pytest tests/unit/ -v
 
 test-int:
-	RAGLOGS_INTEGRATION_TESTS=1 pytest tests/integration/ -v
+	INTEGRATION_TESTS=1 pytest tests/integration/ -v
 
 test-cov:
 	pytest tests/unit/ --cov=src --cov-report=term-missing

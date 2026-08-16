@@ -119,7 +119,7 @@ Adapters to build, in priority order:
 
 **Data model.** Add `source_adapter` and `source_ref` columns to the ingestion job + log rows for provenance ("which stream did this cluster come from").
 
-**Config.** Per-adapter blocks under `RAGLOGS_ADAPTER_CLOUDWATCH_*`, etc. Adapters are optional; absent credentials disable the adapter and surface a clear `/health` sub-status.
+**Config.** Per-adapter blocks under `ADAPTER_CLOUDWATCH_*`, `DATADOG_*`, etc. Adapters are optional; absent credentials disable the adapter and surface a clear `/health` sub-status.
 
 **Failure modes.** Adapter unreachable → job fails with a typed error (`ADAPTER_UNAVAILABLE`) and does not partially ingest silently. Partial reads (rate-limited AWS API) → resumable via `LogStreamRef` cursor; job reports `partial: true`.
 
@@ -137,9 +137,9 @@ Middleware runs before every route except `/health` and `/metrics`. Rejected req
 **Config.**
 
 ```
-RAGLOGS_AUTH_ENABLED=true
-RAGLOGS_AUTH_MODE=api_key            # api_key | oidc | both
-RAGLOGS_OIDC_ISSUER=...              # when oidc enabled
+AUTH_ENABLED=true
+AUTH_MODE=api_key            # api_key | oidc | both
+OIDC_ISSUER=...              # when oidc enabled
 ```
 
 **Failure modes.** `AUTH_ENABLED=false` is allowed only when bound to loopback; binding to `0.0.0.0` with auth disabled logs a loud warning and (optionally) refuses to start.
@@ -189,7 +189,7 @@ RAGLOGS_OIDC_ISSUER=...              # when oidc enabled
 
 Delivery uses bounded retries with exponential backoff (max ~5 attempts, jittered); failures are logged and the job status remains queryable so polling still works as a fallback. HMAC signing lets the consumer verify authenticity.
 
-**Config.** `RAGLOGS_WEBHOOK_MAX_RETRIES`, `RAGLOGS_WEBHOOK_TIMEOUT`.
+**Config.** `WEBHOOK_MAX_RETRIES`, `WEBHOOK_TIMEOUT`.
 
 ### 5.6 Ingest idempotency & dedup (G6)
 
@@ -274,7 +274,7 @@ Delivery uses bounded retries with exponential backoff (max ~5 attempts, jittere
 - **Ingest backpressure:** a bounded work queue; when full, `POST /ingestions` returns `429` rather than accepting unbounded work. Tail jobs respect the same ceiling.
 - **LLM concurrency cap:** a semaphore around LLM calls with a global max in flight, independent of API concurrency, so a burst of `explain` calls cannot fan out unbounded requests to the provider.
 
-**Config.** `RAGLOGS_RATELIMIT_*`, `RAGLOGS_INGEST_QUEUE_MAX`, `RAGLOGS_LLM_MAX_CONCURRENCY`.
+**Config.** `RATELIMIT_*`, `INGEST_QUEUE_MAX`, `LLM_MAX_CONCURRENCY`.
 
 ### 5.10 LLM resilience (G10)
 
@@ -284,10 +284,10 @@ Delivery uses bounded retries with exponential backoff (max ~5 attempts, jittere
 
 - **Timeout + bounded retries** (exponential backoff, jitter) around every LLM call.
 - **Automatic fallback:** on timeout/error/exhausted retries, the pipeline falls back to the deterministic template output and sets `llm.fell_back = true` in the response. The request still succeeds. This turns the existing offline mode into an automatic safety net.
-- **Cost/token ceiling:** hard per-request `max_tokens` and an estimated-cost guard; requests exceeding the ceiling either trim evidence (respecting `RAGLOGS_MAX_EVIDENCE_ITEMS`) or fall back.
+- **Cost/token ceiling:** hard per-request `max_tokens` and an estimated-cost guard; requests exceeding the ceiling either trim evidence (respecting `MAX_EVIDENCE_ITEMS`) or fall back.
 - **Circuit breaker:** after N consecutive LLM failures, open the breaker and serve deterministic output for a cool-down period, surfaced in `/health`.
 
-**Config.** `RAGLOGS_LLM_TIMEOUT`, `RAGLOGS_LLM_MAX_RETRIES`, `RAGLOGS_LLM_MAX_TOKENS`, `RAGLOGS_LLM_BREAKER_THRESHOLD`.
+**Config.** `LLM_TIMEOUT`, `LLM_MAX_RETRIES`, `LLM_MAX_TOKENS`, `LLM_BREAKER_THRESHOLD`.
 
 **Invariant preserved:** fallback output is still fact-curated; degradation lowers polish, never grounding.
 
@@ -327,7 +327,7 @@ Delivery uses bounded retries with exponential backoff (max ~5 attempts, jittere
 - **Tiering:** keep compact cluster/evidence summaries and embeddings after raw lines are purged, so historical "have we seen this?" still works cheaply.
 - **Purge job:** a scheduled worker task; emits metrics on rows reclaimed.
 
-**Config.** `RAGLOGS_RETENTION_RAW`, `RAGLOGS_RETENTION_SUMMARY`.
+**Config.** `RETENTION_RAW`, `RETENTION_SUMMARY`.
 
 ### 5.14 Per-request config overrides (G14)
 
@@ -346,7 +346,7 @@ Delivery uses bounded retries with exponential backoff (max ~5 attempts, jittere
 }
 ```
 
-Server defaults (the existing `RAGLOGS_*` vars) apply when a field is omitted. Precedence: request field > per-key default > server default.
+Server defaults (the existing settings env vars) apply when a field is omitted. Precedence: request field > per-key default > server default.
 
 ---
 

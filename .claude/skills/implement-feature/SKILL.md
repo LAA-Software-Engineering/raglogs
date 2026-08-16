@@ -27,7 +27,7 @@ Identify which layer the feature belongs to and read the neighbors first:
 
 - Type-annotate all signatures. Match surrounding style; don't add dependencies
   without a concrete need.
-- Config via `get_settings()` (`src/config/settings.py`, `RAGLOGS_` env prefix)
+- Config via `get_settings()` (`src/config/settings.py`)
   — no hard-coded values.
 - Route any model call through `src/core/llm/provider.py`; keep the `noop`
   provider working so the feature runs without an API key.

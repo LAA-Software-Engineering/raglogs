@@ -23,14 +23,14 @@ def config_cmd(
         table.add_column("Value")
 
         config_items = {
-            "RAGLOGS_DB_URL": settings.db_url,
-            "RAGLOGS_LLM_PROVIDER": settings.llm_provider,
-            "RAGLOGS_LLM_MODEL": settings.llm_model,
-            "RAGLOGS_EMBEDDINGS_PROVIDER": settings.embeddings_provider,
-            "RAGLOGS_EMBEDDINGS_MODEL": settings.embeddings_model,
-            "RAGLOGS_DEFAULT_BASELINE_WINDOW": settings.default_baseline_window,
-            "RAGLOGS_MAX_CLUSTERS_FOR_EXPLAIN": str(settings.max_clusters_for_explain),
-            "RAGLOGS_MAX_EVIDENCE_ITEMS": str(settings.max_evidence_items),
+            "DB_URL": settings.db_url,
+            "LLM_PROVIDER": settings.llm_provider,
+            "LLM_MODEL": settings.llm_model,
+            "EMBEDDINGS_PROVIDER": settings.embeddings_provider,
+            "EMBEDDINGS_MODEL": settings.embeddings_model,
+            "DEFAULT_BASELINE_WINDOW": settings.default_baseline_window,
+            "MAX_CLUSTERS_FOR_EXPLAIN": str(settings.max_clusters_for_explain),
+            "MAX_EVIDENCE_ITEMS": str(settings.max_evidence_items),
         }
 
         for k, v in config_items.items():
