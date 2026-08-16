@@ -932,7 +932,7 @@ New source adapters go in `src/adapters/` and implement `SourceAdapter` (`discov
 - Page size: default 1000, Datadog hard max 1000 (`--param page_size=N` or `DATADOG_PAGE_SIZE`).
 - Max rows per run: default 10000 (`--param max_rows=N` or `DATADOG_MAX_ROWS`). Hitting the cap saves the next cursor for resume.
 - Rate limits: HTTP 429 and 5xx are retried up to 3 times with exponential backoff; a persistent failure marks the job `ADAPTER_UNAVAILABLE` (or `partial: true` if some events already landed).
-- Field mapping: Datadog `status` → `level`; `service` / `host` / `message` / `timestamp` pass through; `env` from the `env:` tag or attributes; `trace_id` / `request_id` from nested custom attributes when present.
+- Field mapping: Datadog `status` → `level`; `service` / `host` / `message` / `timestamp` pass through; `env` from the `env:` tag or attributes; `trace_id` / `request_id` from nested custom attributes when present. Other nested Datadog attributes are dropped so core parsing stays source-agnostic.
 
 ---
 

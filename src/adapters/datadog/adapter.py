@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from typing import Any, Iterable, Iterator, Optional
+from urllib.parse import urlparse
 
 import httpx
 import orjson
@@ -13,6 +14,22 @@ PAGE_SIZE_MAX = 1000
 PAGE_SIZE_DEFAULT = 1000
 MAX_ROWS_DEFAULT = 10000
 SEARCH_PATH = "/api/v2/logs/events/search"
+
+# Canonical Datadog site hostnames (DD_SITE). Always talk to https://api.<site>.
+KNOWN_DATADOG_SITES = frozenset(
+    {
+        "datadoghq.com",
+        "us3.datadoghq.com",
+        "us5.datadoghq.com",
+        "datadoghq.eu",
+        "ap1.datadoghq.com",
+        "ap2.datadoghq.com",
+        "uk1.datadoghq.com",
+        "ddog-gov.com",
+        "us1.ddog-gov.com",
+        "us2.ddog-gov.com",
+    }
+)
 
 _TRACE_KEYS = (
     "trace_id",
@@ -31,22 +48,42 @@ _REQUEST_KEYS = (
 )
 
 
-def api_base_url(site: str) -> str:
-    """Build the Datadog API origin from a site name or full URL.
+def normalize_site(site: str) -> str:
+    """Return a canonical Datadog site hostname, or raise AdapterUnavailableError.
 
     Accepts ``datadoghq.com``, ``us3.datadoghq.com``, ``app.datadoghq.eu``,
-    ``api.datadoghq.com``, or a full ``https://api...`` origin.
+    ``api.datadoghq.com``, or ``https://api.datadoghq.com``. Arbitrary origins
+    are rejected so API keys are never POSTed off-Datadog.
     """
-    site = (site or "").strip().rstrip("/")
-    if not site:
-        site = "datadoghq.com"
-    if site.startswith("https://") or site.startswith("http://"):
-        return site
-    if site.startswith("app."):
-        site = site[4:]
-    if site.startswith("api."):
-        return f"https://{site}"
-    return f"https://api.{site}"
+    raw = (site or "").strip()
+    if not raw:
+        return "datadoghq.com"
+
+    if "://" in raw:
+        parsed = urlparse(raw)
+        if parsed.scheme != "https":
+            raise AdapterUnavailableError(
+                f"unsupported Datadog site {raw!r}: only https Datadog sites are allowed"
+            )
+        host = (parsed.hostname or "").lower().rstrip(".")
+    else:
+        if "/" in raw or "@" in raw:
+            raise AdapterUnavailableError(f"unsupported Datadog site {raw!r}")
+        host = raw.lower().rstrip(".")
+
+    if host.startswith("app.") or host.startswith("api."):
+        host = host[4:]
+    if host not in KNOWN_DATADOG_SITES:
+        raise AdapterUnavailableError(
+            f"unsupported Datadog site {raw!r}; expected a Datadog site hostname "
+            f"(e.g. datadoghq.com, us3.datadoghq.com, datadoghq.eu)"
+        )
+    return host
+
+
+def api_base_url(site: str) -> str:
+    """Build ``https://api.<site>`` from a validated Datadog site hostname."""
+    return f"https://api.{normalize_site(site)}"
 
 
 def _lookup(data: dict[str, Any], *keys: str) -> Any:
@@ -221,7 +258,7 @@ class DatadogSourceAdapter:
     ):
         self.api_key = api_key
         self.app_key = app_key
-        self.site = site or "datadoghq.com"
+        self.site = normalize_site(site)
         self.page_size = _clamp_page_size(page_size)
         self.max_rows = max(1, max_rows)
 
@@ -247,7 +284,7 @@ class DatadogSourceAdapter:
             _int_param(spec.params, "page_size", self.page_size)
         )
         max_rows = max(1, _int_param(spec.params, "max_rows", self.max_rows))
-        site = spec.params.get("site") or self.site
+        site = normalize_site(str(spec.params.get("site") or self.site))
         stream_id = f"{','.join(indexes)}|{query}" if indexes else query
         yield LogStreamRef(
             adapter=self.name,

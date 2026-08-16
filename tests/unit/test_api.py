@@ -257,6 +257,18 @@ class TestCreateIngestion:
         assert resp.status_code == 202
         assert resp.json()["status"] == "pending"
 
+    def test_400_for_datadog_non_datadog_site(self):
+        """params.site must be a Datadog hostname — a full URL must not leak keys."""
+        resp = client.post("/ingestions", json={
+            "paths": [],
+            "adapter": "datadog",
+            "params": {"site": "http://evil.example"},
+            "since": "1h",
+        })
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error_code"] == "ADAPTER_UNAVAILABLE"
+
 
 # ── GET /ingestions/jobs/{id} ─────────────────────────────────────────────────
 

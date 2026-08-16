@@ -430,6 +430,35 @@ class TestDatadogSourceAdapter:
         assert api_base_url("app.datadoghq.eu") == "https://api.datadoghq.eu"
         assert api_base_url("https://api.datadoghq.com") == "https://api.datadoghq.com"
 
+    def test_api_base_url_rejects_non_datadog_origins(self):
+        from src.adapters.datadog.adapter import api_base_url
+
+        for site in (
+            "http://evil.example",
+            "https://evil.example",
+            "https://api.datadoghq.com.evil.example",
+            "evil.example",
+        ):
+            with pytest.raises(AdapterUnavailableError, match="unsupported Datadog site"):
+                api_base_url(site)
+
+    def test_discover_rejects_non_datadog_site_param(self):
+        from src.adapters.datadog.adapter import DatadogSourceAdapter
+
+        adapter = DatadogSourceAdapter(api_key="k", app_key="a")
+        spec = SourceSpec(
+            adapter="datadog",
+            params={"site": "http://evil.example"},
+        )
+        with pytest.raises(AdapterUnavailableError, match="unsupported Datadog site"):
+            list(adapter.discover(spec))
+
+    def test_constructor_rejects_non_datadog_site(self):
+        from src.adapters.datadog.adapter import DatadogSourceAdapter
+
+        with pytest.raises(AdapterUnavailableError, match="unsupported Datadog site"):
+            DatadogSourceAdapter(api_key="k", app_key="a", site="https://evil.example")
+
     def _adapter(self):
         from src.adapters.datadog.adapter import DatadogSourceAdapter
 
