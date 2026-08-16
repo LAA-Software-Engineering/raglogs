@@ -12,6 +12,7 @@ Pipeline:
   6. Fall back to a deterministic text answer when LLM is disabled
 """
 import re
+import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -79,6 +80,7 @@ def search_logs(
     service: Optional[str],
     level_bias: Optional[str],
     limit: int = 500,
+    ingestion_job_id: Optional[uuid.UUID] = None,
 ) -> list[LogEntry]:
     q = select(LogEntry)
 
@@ -94,6 +96,8 @@ def search_logs(
         q = q.where(LogEntry.service == service)
     if level_bias:
         q = q.where(LogEntry.level == level_bias)
+    if ingestion_job_id:
+        q = q.where(LogEntry.ingestion_job_id == ingestion_job_id)
 
     q = q.order_by(LogEntry.timestamp.desc()).limit(limit)
     return list(db.execute(q).scalars().all())
@@ -128,6 +132,7 @@ def fetch_fallback_clusters(
     window_end: datetime,
     service: Optional[str],
     level_bias: Optional[str],
+    ingestion_job_id: Optional[uuid.UUID] = None,
 ) -> list[LogEntry]:
     """
     Fallback: fetch the most significant error/warn logs from the window
@@ -141,6 +146,8 @@ def fetch_fallback_clusters(
     )
     if service:
         q = q.where(LogEntry.service == service)
+    if ingestion_job_id:
+        q = q.where(LogEntry.ingestion_job_id == ingestion_job_id)
 
     q = q.order_by(LogEntry.timestamp.desc()).limit(500)
     return list(db.execute(q).scalars().all())
@@ -174,6 +181,7 @@ def answer_question(
     window_start: Optional[datetime] = None,
     window_end: Optional[datetime] = None,
     service: Optional[str] = None,
+    ingestion_job_id: Optional[uuid.UUID] = None,
 ) -> AskResult:
     from src.config import get_settings
     from src.core.llm.provider import NoopLLMProvider, build_llm_provider
@@ -189,14 +197,18 @@ def answer_question(
 
     # 1. Keyword search
     matching = search_logs(
-        db, keywords, window_start, window_end, service, level_bias
+        db, keywords, window_start, window_end, service, level_bias,
+        ingestion_job_id=ingestion_job_id,
     )
 
     # 2. Fallback: if nothing matched, use all error/warn logs in the window.
     #    The user's terminology may not match log text literally.
     used_fallback = False
     if not matching:
-        matching = fetch_fallback_clusters(db, window_start, window_end, service, level_bias)
+        matching = fetch_fallback_clusters(
+            db, window_start, window_end, service, level_bias,
+            ingestion_job_id=ingestion_job_id,
+        )
         used_fallback = True
 
     if not matching:

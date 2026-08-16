@@ -22,6 +22,17 @@ function confidenceBadge(confidence) {
   return `<span class="badge ${cls}">${escapeHtml(confidence)}</span>`;
 }
 
+// FastAPI error bodies are either {"detail": "message"} (HTTPException) or
+// {"detail": [{"loc": [...], "msg": "...", ...}, ...]} (pydantic 422s).
+function formatErrorDetail(detail, fallback) {
+  if (!detail) return fallback;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail.map((d) => (d && d.msg) || JSON.stringify(d)).join("; ");
+  }
+  return JSON.stringify(detail);
+}
+
 // ── Ingestion picker ─────────────────────────────────────────────────────────
 
 async function loadIngestions() {
@@ -29,6 +40,9 @@ async function loadIngestions() {
   try {
     const resp = await fetch("/ingestions");
     const data = await resp.json();
+    if (!resp.ok) {
+      throw new Error(formatErrorDetail(data.detail, "Failed to load ingestions"));
+    }
     const ingestions = data.ingestions || [];
 
     select.innerHTML = "";
@@ -138,7 +152,7 @@ function initForms() {
         });
         const data = await resp.json();
         if (!resp.ok) {
-          resultEl.innerHTML = `<p class="error-state">${escapeHtml(data.detail || "Request failed")}</p>`;
+          resultEl.innerHTML = `<p class="error-state">${escapeHtml(formatErrorDetail(data.detail, "Request failed"))}</p>`;
           return;
         }
         renderers[renderKey](resultEl, data);

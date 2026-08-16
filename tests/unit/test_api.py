@@ -369,6 +369,66 @@ class TestExplainEndpoint:
         assert resp.status_code == 400
 
 
+# ── POST /query/ask ────────────────────────────────────────────────────────────
+
+class TestAskEndpoint:
+    def _mock_result(self):
+        from src.core.retrieval.question_router import AskResult
+
+        return AskResult(
+            question="why did checkout fail?",
+            answer_text="Stripe signature verification failed for /webhooks/stripe.",
+            evidence_items=["184 events: 'Stripe signature verification failed' in billing-worker"],
+            clusters_used=[{"message": "Stripe signature verification failed", "count": 184, "services": ["billing-worker"]}],
+            total_matches=184,
+        )
+
+    def test_returns_200_with_answer(self):
+        mock_db = _ctx_db()
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db), \
+             patch("src.core.retrieval.question_router.answer_question", return_value=self._mock_result()):
+            resp = client.post("/query/ask", json={"question": "why did checkout fail?", "since": "1h"})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["answer"] == "Stripe signature verification failed for /webhooks/stripe."
+        assert data["total_matches"] == 184
+
+    def test_ingestion_job_id_passed_through(self):
+        """
+        Regression test: the ingestion picker in the web UI sends ingestion_job_id
+        on every request, including Ask. AskRequest previously had no such field,
+        so pydantic silently dropped it and Ask always searched across every
+        ingestion regardless of what the user selected.
+        """
+        ij_id = str(uuid.uuid4())
+        mock_db = _ctx_db()
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db), \
+             patch("src.core.retrieval.question_router.answer_question", return_value=self._mock_result()) as mock_answer:
+            resp = client.post("/query/ask", json={
+                "question": "why did checkout fail?",
+                "since": "1h",
+                "ingestion_job_id": ij_id,
+            })
+
+        assert resp.status_code == 200
+        call_kwargs = mock_answer.call_args.kwargs
+        assert str(call_kwargs["ingestion_job_id"]) == ij_id
+
+    def test_invalid_ingestion_job_id_returns_400(self):
+        resp = client.post("/query/ask", json={
+            "question": "why did checkout fail?",
+            "since": "1h",
+            "ingestion_job_id": "not-a-uuid",
+        })
+        assert resp.status_code == 400
+        assert "ingestion_job_id" in resp.json()["detail"]
+
+    def test_question_required(self):
+        resp = client.post("/query/ask", json={})
+        assert resp.status_code == 422
+
+
 # ── POST /query/clusters ──────────────────────────────────────────────────────
 
 class TestClustersEndpoint:

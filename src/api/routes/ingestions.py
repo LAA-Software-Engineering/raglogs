@@ -177,8 +177,10 @@ def get_worker_job_status(worker_job_id: str):
 def get_latest_ingestion():
     """
     Return the ID of the most recently completed ingestion job, or null if
-    none exists yet. Used by the web UI to scope queries the same way the
-    CLI does by default (latest ingestion, not all ingestions merged).
+    none exists yet — the same default the CLI and GET /ingestions apply
+    (latest ingestion, not all ingestions merged). Not currently called by
+    the web UI (its picker defaults to GET /ingestions[0] instead), but kept
+    as a lighter-weight lookup for other integrations.
 
     Registered before /{ingestion_job_id} so "latest" isn't swallowed by
     that path param.
