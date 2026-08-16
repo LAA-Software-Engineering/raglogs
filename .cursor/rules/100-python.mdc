@@ -1,0 +1,33 @@
+---
+description: Python conventions for raglogs source
+globs: ['src/**/*.py']
+alwaysApply: false
+---
+
+# Python conventions
+
+- Target Python 3.10+. Type-annotate all function signatures and public
+  attributes.
+- Async everywhere DB or HTTP is involved: SQLAlchemy async sessions
+  (`src/db/session.py`), `httpx.AsyncClient`. Don't block the event loop.
+- Read configuration from `src/config/settings.py` (pydantic-settings,
+  `RAGLOGS_` env prefix) — no hard-coded URLs, keys, or paths.
+- Log with `structlog`; render user-facing CLI output with `rich`.
+- Wrap external calls (LLM, network) with `tenacity` retries, as existing code
+  does. All model access goes through `src/core/llm/provider.py`.
+- Keep functions small and explicit. Don't add dependencies or abstractions
+  without a concrete need.
+
+## Example — a new CLI command
+
+```python
+# src/cli/commands/foo.py
+import typer
+from src.config.settings import get_settings
+
+def foo_cmd(since: str = typer.Option("1h", help="Time window, e.g. 2h")) -> None:
+    settings = get_settings()
+    ...
+```
+
+Register it in `src/cli/main.py` with `_app.command("foo")(foo_cmd)`.

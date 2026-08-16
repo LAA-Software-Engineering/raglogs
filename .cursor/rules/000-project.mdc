@@ -1,0 +1,37 @@
+---
+description: raglogs project overview, stack, and boundaries — always applied
+alwaysApply: true
+---
+
+# raglogs — core rules
+
+raglogs analyzes a bounded time window of logs and produces a short,
+evidence-backed incident explanation. CLI (Typer) + FastAPI, Python 3.10+,
+async SQLAlchemy on Postgres + pgvector. Full detail lives in `AGENTS.md`.
+
+## Pipeline (keep it source-agnostic)
+
+ingest → normalize → fingerprint → cluster → baseline compare → evidence
+assembly → explain / timeline / compare. Everything after ingestion is
+source-agnostic — new inputs are **adapters** in `src/adapters/` that yield
+`ParsedLogLine`, never special cases in core.
+
+## Where things go
+
+- CLI command → `src/cli/commands/` (one file per command)
+- API route → `src/api/routes/`
+- Normalization / trigger patterns → `src/core/normalization/patterns.py`
+- LLM calls → only through `src/core/llm/provider.py`
+- Config → env vars (`RAGLOGS_*`) via `src/config/settings.py`
+
+## Must
+
+- Type-annotate every function signature. Prefer explicit over clever.
+- Keep the `noop` LLM provider working — the tool must run without an API key.
+- Add a new Alembic migration; never edit an applied one in `migrations/versions/`.
+- `make lint` and `make test-unit` pass before proposing changes.
+
+## Never touch
+
+`.env`, applied migrations, `sample_data/` fixtures, generated artifacts. Never
+commit secrets.
