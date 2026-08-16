@@ -430,7 +430,7 @@ class TestDatadogSourceAdapter:
         assert api_base_url("app.datadoghq.eu") == "https://api.datadoghq.eu"
         assert api_base_url("https://api.datadoghq.com") == "https://api.datadoghq.com"
 
-    def _adapter(self) -> "DatadogSourceAdapter":
+    def _adapter(self):
         from src.adapters.datadog.adapter import DatadogSourceAdapter
 
         return DatadogSourceAdapter(api_key="api", app_key="app", site="datadoghq.com")
