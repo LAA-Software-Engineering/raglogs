@@ -8,10 +8,11 @@ GET  /ingestions/latest     — most recently completed ingestion job, if any
 GET  /ingestions/{id}       — fetch completed IngestionJob detail by ingestion_job_id
 """
 import uuid
-from typing import Optional
+from datetime import datetime
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 router = APIRouter()
 
@@ -19,12 +20,28 @@ router = APIRouter()
 # ── Schemas ──────────────────────────────────────────────────────────────────
 
 class IngestRequest(BaseModel):
-    paths: list[str]
+    paths: list[str] = []
     recursive: bool = False
     format: str = "auto"
     source_name: Optional[str] = None
     service: Optional[str] = None
     env: Optional[str] = None
+    adapter: str = "file"
+    params: dict[str, Any] = {}
+    # Window for non-file adapters — same since/from_time/to_time contract as
+    # POST /query/explain, resolved via src.utils.time.resolve_window (handles a
+    # single bound and attaches UTC to naive datetimes). Omit all three to default
+    # to the last 1h.
+    since: Optional[str] = None
+    from_time: Optional[datetime] = None
+    to_time: Optional[datetime] = None
+    resume_ingestion_job_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _require_paths_for_file_adapter(self):
+        if self.adapter == "file" and not self.paths:
+            raise ValueError("paths is required when adapter='file'")
+        return self
 
 
 class EnqueuedResponse(BaseModel):
@@ -51,6 +68,8 @@ class IngestionJobDetail(BaseModel):
     parsed_count: int
     error_count: int
     error_message: Optional[str]
+    source_adapter: str
+    source_ref: Optional[str]
     created_at: str
     started_at: Optional[str]
     finished_at: Optional[str]
@@ -80,14 +99,43 @@ def create_ingestion(request: IngestRequest):
     Poll GET /ingestions/jobs/{worker_job_id} for progress.
     When done, use ingestion_job_id from the result to scope /query/explain.
     """
-    from src.adapters.file.adapter import discover_files
     from src.db.models import WorkerJob
     from src.db.session import get_db
 
-    # Validate paths before enqueuing — fail fast
-    files = discover_files(request.paths, recursive=request.recursive)
-    if not files:
-        raise HTTPException(status_code=400, detail="No log files found at the given paths")
+    if request.adapter == "file":
+        from src.adapters.file.adapter import discover_files
+
+        # Validate paths before enqueuing — fail fast
+        files = discover_files(request.paths, recursive=request.recursive)
+        if not files:
+            raise HTTPException(status_code=400, detail="No log files found at the given paths")
+    else:
+        from src.adapters.base import SourceSpec
+        from src.adapters.registry import get_adapter
+        from src.config import get_settings
+        from src.core.errors import AdapterUnavailableError
+
+        try:
+            adapter = get_adapter(request.adapter, get_settings())
+            # Fail fast on missing/invalid params (e.g. no log_group) — discover() for
+            # cloudwatch is local-only validation, no network call.
+            list(adapter.discover(SourceSpec(adapter=request.adapter, params=request.params)))
+        except AdapterUnavailableError as e:
+            raise HTTPException(
+                status_code=400,
+                detail={"error_code": e.error_code, "message": str(e)},
+            )
+
+        if request.since or request.from_time or request.to_time:
+            # Same validation POST /query/explain does at the route level — otherwise
+            # an unparseable `since` (e.g. "not-a-duration") 202s here and only fails
+            # once the worker picks it up.
+            from src.utils.time import resolve_window
+
+            try:
+                resolve_window(since=request.since, from_time=request.from_time, to_time=request.to_time)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
 
     payload = {
         "paths": request.paths,
@@ -96,6 +144,12 @@ def create_ingestion(request: IngestRequest):
         "source_name": request.source_name,
         "service": request.service,
         "env": request.env,
+        "adapter": request.adapter,
+        "params": request.params,
+        "since": request.since,
+        "from_time": request.from_time.isoformat() if request.from_time else None,
+        "to_time": request.to_time.isoformat() if request.to_time else None,
+        "resume_ingestion_job_id": request.resume_ingestion_job_id,
     }
 
     with get_db() as db:
@@ -218,6 +272,8 @@ def get_ingestion_detail(ingestion_job_id: str):
             parsed_count=job.parsed_count,
             error_count=job.error_count,
             error_message=job.error_message,
+            source_adapter=job.source_adapter,
+            source_ref=job.source_ref,
             created_at=job.created_at.isoformat(),
             started_at=job.started_at.isoformat() if job.started_at else None,
             finished_at=job.finished_at.isoformat() if job.finished_at else None,

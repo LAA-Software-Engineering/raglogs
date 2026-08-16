@@ -43,18 +43,66 @@ def claim_next_job(db):
 
 def run_ingest_job(db, worker_job) -> dict:
     """Execute an ingest worker job. Returns result dict."""
-    from src.core.ingestion.service import ingest_files
-
     payload = worker_job.payload_json
-    job, stats = ingest_files(
-        db=db,
-        paths=payload["paths"],
-        recursive=payload.get("recursive", False),
-        source_name=payload.get("source_name"),
-        default_service=payload.get("service"),
-        default_env=payload.get("env"),
-        fmt=payload.get("format", "auto"),
-    )
+    adapter = payload.get("adapter", "file")
+
+    if adapter == "file":
+        from src.core.ingestion.service import ingest_files
+
+        job, stats = ingest_files(
+            db=db,
+            paths=payload["paths"],
+            recursive=payload.get("recursive", False),
+            source_name=payload.get("source_name"),
+            default_service=payload.get("service"),
+            default_env=payload.get("env"),
+            fmt=payload.get("format", "auto"),
+        )
+    else:
+        import uuid
+        from datetime import datetime
+
+        from src.adapters.base import SourceSpec, TimeWindow
+        from src.core.ingestion.service import ingest_from_source
+        from src.db.models import IngestionJob
+        from src.utils.time import resolve_window
+
+        window = None
+        if payload.get("since") or payload.get("from_time") or payload.get("to_time"):
+            from_dt = datetime.fromisoformat(payload["from_time"]) if payload.get("from_time") else None
+            to_dt = datetime.fromisoformat(payload["to_time"]) if payload.get("to_time") else None
+            # resolve_window attaches UTC to naive datetimes and handles a single bound
+            # (from-only -> "from X to now") — same helper /query/explain uses.
+            w_start, w_end = resolve_window(since=payload.get("since"), from_time=from_dt, to_time=to_dt)
+            window = TimeWindow(start=w_start, end=w_end)
+
+        resume_cursors = None
+        resume_completed_streams = None
+        if payload.get("resume_ingestion_job_id"):
+            prior = db.query(IngestionJob).filter(
+                IngestionJob.id == uuid.UUID(payload["resume_ingestion_job_id"])
+            ).first()
+            if prior is None:
+                raise ValueError(f"No ingestion job found with id {payload['resume_ingestion_job_id']}")
+            resume_cursors = (prior.metadata_json or {}).get("cursors")
+            resume_completed_streams = (prior.metadata_json or {}).get("completed_streams")
+
+        spec = SourceSpec(
+            adapter=adapter,
+            params=payload.get("params", {}),
+            service=payload.get("service"),
+            env=payload.get("env"),
+        )
+        job, stats = ingest_from_source(
+            db=db,
+            spec=spec,
+            window=window,
+            source_name=payload.get("source_name"),
+            fmt=payload.get("format", "auto"),
+            resume_cursors=resume_cursors,
+            resume_completed_streams=resume_completed_streams,
+        )
+
     # Link worker job → ingestion job
     worker_job.ingestion_job_id = job.id
 

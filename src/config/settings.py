@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     # Worker
     worker_poll_interval: int = 2          # seconds between idle polls
 
+    # Adapters
+    adapter_cloudwatch_region: str = "us-east-1"
+
     # Cluster scoring weights
     severity_weight_fatal: float = 5.0
     severity_weight_error: float = 4.0

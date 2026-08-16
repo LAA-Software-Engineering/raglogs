@@ -66,6 +66,13 @@ def _mock_worker_job(status="pending", ingestion_job_id=None, error=None, result
 # ── Health ────────────────────────────────────────────────────────────────────
 
 class TestHealth:
+    @pytest.fixture(autouse=True)
+    def _clear_adapter_health_cache(self):
+        from src.api.routes.health import _adapter_health_cache
+        _adapter_health_cache.clear()
+        yield
+        _adapter_health_cache.clear()
+
     def test_health_ok_when_db_connected(self):
         with patch("src.db.session.check_connection", return_value=True), \
              _patch_get_db(execute_scalar=3):
@@ -91,6 +98,26 @@ class TestHealth:
             resp = client.get("/health")
 
         assert resp.json()["worker_queue_depth"] == 7
+
+    def test_health_includes_file_adapter_ok(self):
+        with patch("src.db.session.check_connection", return_value=True), \
+             _patch_get_db(execute_scalar=3):
+            resp = client.get("/health")
+
+        assert resp.json()["adapters"]["file"] == "ok"
+
+    def test_health_reports_cloudwatch_unavailable_without_credentials(self):
+        from src.core.errors import AdapterUnavailableError
+
+        with patch("src.db.session.check_connection", return_value=True), \
+             _patch_get_db(execute_scalar=3), \
+             patch(
+                 "src.adapters.cloudwatch.adapter.CloudWatchSourceAdapter.check_available",
+                 side_effect=AdapterUnavailableError("no AWS credentials resolved via the default credential chain"),
+             ):
+            resp = client.get("/health")
+
+        assert resp.json()["adapters"]["cloudwatch"].startswith("unavailable:")
 
 
 # ── POST /ingestions ──────────────────────────────────────────────────────────
@@ -126,6 +153,78 @@ class TestCreateIngestion:
     def test_paths_required(self):
         resp = client.post("/ingestions", json={})
         assert resp.status_code == 422  # FastAPI validation
+
+    def test_400_when_adapter_unavailable(self):
+        from src.core.errors import AdapterUnavailableError
+
+        with patch(
+            "src.adapters.registry.get_adapter",
+            side_effect=AdapterUnavailableError("no AWS credentials resolved"),
+        ):
+            resp = client.post("/ingestions", json={
+                "paths": [],
+                "adapter": "cloudwatch",
+                "params": {"log_group": "/aws/lambda/x"},
+            })
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error_code"] == "ADAPTER_UNAVAILABLE"
+
+    def test_400_when_cloudwatch_params_missing_log_group(self):
+        """
+        Exercises the real registry + CloudWatchSourceAdapter.discover() (no mocking) —
+        params validation for cloudwatch is local-only, no AWS credentials needed.
+        """
+        resp = client.post("/ingestions", json={
+            "paths": [],
+            "adapter": "cloudwatch",
+            "params": {},
+        })
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error_code"] == "ADAPTER_UNAVAILABLE"
+
+    def test_400_when_since_unparseable(self):
+        """
+        Regression test: an invalid `since` used to be stored as-is and only fail once
+        the worker picked up the job (202 now, 400 later, async). It should fail fast
+        at enqueue time instead, same as POST /query/explain does.
+        """
+        resp = client.post("/ingestions", json={
+            "paths": [],
+            "adapter": "cloudwatch",
+            "params": {"log_group": "/aws/lambda/x"},
+            "since": "not-a-duration",
+        })
+
+        assert resp.status_code == 400
+
+    def test_422_when_paths_omitted_for_file_adapter(self):
+        resp = client.post("/ingestions", json={"adapter": "file"})
+        assert resp.status_code == 422
+
+    def test_202_for_non_file_adapter_when_available(self):
+        wj_id = str(uuid.uuid4())
+        mock_db = _ctx_db()
+
+        def capture_add(obj):
+            obj.id = uuid.UUID(wj_id)
+
+        mock_db.add.side_effect = capture_add
+
+        mock_adapter = MagicMock()
+        mock_adapter.discover.return_value = [MagicMock(stream_id="/aws/lambda/x")]
+
+        with patch("src.adapters.registry.get_adapter", return_value=mock_adapter), \
+             patch("src.db.session.get_db", side_effect=lambda: mock_db):
+            resp = client.post("/ingestions", json={
+                "paths": [],
+                "adapter": "cloudwatch",
+                "params": {"log_group": "/aws/lambda/x"},
+            })
+
+        assert resp.status_code == 202
+        assert resp.json()["status"] == "pending"
 
 
 # ── GET /ingestions/jobs/{id} ─────────────────────────────────────────────────
