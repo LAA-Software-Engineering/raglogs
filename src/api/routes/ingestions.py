@@ -3,6 +3,7 @@ Ingestion API routes.
 
 POST /ingestions            — enqueue async ingest, return worker_job_id immediately
 GET  /ingestions/jobs/{id}  — poll worker job status (pending|running|done|failed)
+GET  /ingestions/latest     — most recently completed ingestion job, if any
 GET  /ingestions/{id}       — fetch completed IngestionJob detail by ingestion_job_id
 """
 import uuid
@@ -52,6 +53,10 @@ class IngestionJobDetail(BaseModel):
     created_at: str
     started_at: Optional[str]
     finished_at: Optional[str]
+
+
+class LatestIngestionResponse(BaseModel):
+    ingestion_job_id: Optional[str]
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────
@@ -124,6 +129,25 @@ def get_worker_job_status(worker_job_id: str):
             finished_at=job.finished_at.isoformat() if job.finished_at else None,
             result=job.result_json,
         )
+
+
+@router.get("/latest", response_model=LatestIngestionResponse)
+def get_latest_ingestion():
+    """
+    Return the ID of the most recently completed ingestion job, or null if
+    none exists yet. Used by the web UI to scope queries the same way the
+    CLI does by default (latest ingestion, not all ingestions merged).
+
+    Registered before /{ingestion_job_id} so "latest" isn't swallowed by
+    that path param.
+    """
+    from src.core.explain.summarizer import get_latest_ingestion_job_id
+    from src.db.session import get_db
+
+    with get_db() as db:
+        job_id = get_latest_ingestion_job_id(db)
+
+    return LatestIngestionResponse(ingestion_job_id=str(job_id) if job_id else None)
 
 
 @router.get("/{ingestion_job_id}", response_model=IngestionJobDetail)

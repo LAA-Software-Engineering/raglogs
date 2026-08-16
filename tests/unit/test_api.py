@@ -173,6 +173,73 @@ class TestGetWorkerJobStatus:
         assert resp.status_code == 400
 
 
+# ── GET /ingestions/latest ────────────────────────────────────────────────────
+
+class TestLatestIngestion:
+    def _ctx_db_with_scalar_one_or_none(self, job):
+        mock_db = MagicMock()
+        mock_db.__enter__ = MagicMock(return_value=mock_db)
+        mock_db.__exit__ = MagicMock(return_value=False)
+        mock_db.execute.return_value.scalar_one_or_none.return_value = job
+        return mock_db
+
+    def test_returns_job_id_when_completed_ingestion_exists(self):
+        job = MagicMock()
+        job.id = uuid.uuid4()
+        mock_db = self._ctx_db_with_scalar_one_or_none(job)
+
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db):
+            resp = client.get("/ingestions/latest")
+
+        assert resp.status_code == 200
+        assert resp.json()["ingestion_job_id"] == str(job.id)
+
+    def test_returns_null_when_no_completed_ingestion(self):
+        mock_db = self._ctx_db_with_scalar_one_or_none(None)
+
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db):
+            resp = client.get("/ingestions/latest")
+
+        assert resp.status_code == 200
+        assert resp.json()["ingestion_job_id"] is None
+
+    def test_not_swallowed_by_ingestion_job_id_path_param(self):
+        """
+        /ingestions/latest must be registered before /{ingestion_job_id},
+        otherwise "latest" is parsed as an invalid UUID and 400s.
+        """
+        mock_db = self._ctx_db_with_scalar_one_or_none(None)
+
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db):
+            resp = client.get("/ingestions/latest")
+
+        assert resp.status_code != 400
+
+
+# ── GET / (web UI shell) ──────────────────────────────────────────────────────
+
+class TestUIShell:
+    def test_index_returns_200_html(self):
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert "text/html" in resp.headers["content-type"]
+        assert "raglogs" in resp.text
+
+    def test_index_includes_all_four_tabs(self):
+        resp = client.get("/")
+        for tab in ("Explain", "Timeline", "Compare", "Ask"):
+            assert tab in resp.text
+
+    def test_static_css_served(self):
+        resp = client.get("/static/css/app.css")
+        assert resp.status_code == 200
+        assert "text/css" in resp.headers["content-type"]
+
+    def test_static_js_served(self):
+        resp = client.get("/static/js/app.js")
+        assert resp.status_code == 200
+
+
 # ── POST /query/explain ───────────────────────────────────────────────────────
 
 class TestExplainEndpoint:

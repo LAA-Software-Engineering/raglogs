@@ -35,6 +35,7 @@ raglogs explains incidents.
 - [Log formats](#log-formats)
 - [How it works](#how-it-works)
 - [HTTP API](#http-api)
+- [Web UI](#web-ui)
 - [Development](#development)
 - [Roadmap](#roadmap)
 
@@ -765,6 +766,7 @@ make api
 | `GET` | `/health` | Service and DB health check |
 | `POST` | `/ingestions` | Ingest log files |
 | `GET` | `/ingestions/{job_id}` | Poll ingestion job status |
+| `GET` | `/ingestions/latest` | ID of the most recently completed ingestion job, if any |
 | `POST` | `/query/explain` | Explain a time window |
 | `POST` | `/query/ask` | Answer a natural language question |
 | `POST` | `/query/clusters` | List top clusters |
@@ -813,6 +815,30 @@ curl -X POST http://localhost:8000/query/compare \
   -H "Content-Type: application/json" \
   -d '{"since": "30m", "baseline": "24h"}'
 ```
+
+---
+
+## Web UI
+
+A minimal browser dashboard for the same explain / timeline / compare / ask
+flows the CLI exposes — no separate build step, served by the API itself.
+
+```bash
+make api
+# open http://localhost:8000/
+```
+
+Pick a time window (presets or a duration like `2h`), then switch between the
+**Explain**, **Timeline**, **Compare**, and **Ask** tabs. Like the CLI, it
+scopes queries to the most recently completed ingestion by default (via
+`GET /ingestions/latest`).
+
+The UI is server-rendered (Jinja2 + vanilla JS/CSS, no CORS, no node/npm) and
+calls the same `/query/*` JSON endpoints listed above.
+
+There is no authentication — fine for local dev. If you deploy raglogs
+anywhere reachable outside your machine, put it behind a reverse proxy
+(nginx, Caddy, etc.) that handles auth.
 
 ---
 
@@ -880,7 +906,6 @@ New source adapters go in `raglogs/adapters/`. Each adapter yields `ParsedLogLin
 - Kubernetes log export ingestion
 - Semantic cluster merging via pgvector
 - Markdown incident report export (`raglogs explain --format markdown > postmortem.md`)
-- Web UI
 
 ---
 
