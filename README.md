@@ -831,7 +831,11 @@ make web
 # something to explain.
 ```
 
-Already have Postgres running, migrated, and your own data ingested? `make api` starts just the server without touching the sample data.
+`make web` always reseeds a fresh sample incident (each run adds a new
+ingestion — same as `make demo`). For repeat runs where you don't want
+that: `make web-serve` starts Postgres, migrates, and serves without
+reseeding. Already have Postgres running and migrated? `make api` starts
+just the server.
 
 Pick a time window (presets or a duration like `2h`), then switch between the
 **Explain**, **Timeline**, **Compare**, and **Ask** tabs. The **ingestion**
