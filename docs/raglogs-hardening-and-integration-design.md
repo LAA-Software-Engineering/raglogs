@@ -119,7 +119,7 @@ Adapters to build, in priority order:
 
 **Data model.** Add `source_adapter` and `source_ref` columns to the ingestion job + log rows for provenance ("which stream did this cluster come from").
 
-**Config.** Per-adapter blocks under `RAGLOGS_ADAPTER_CLOUDWATCH_*`, etc. Adapters are optional; absent credentials disable the adapter and surface a clear `/health` sub-status.
+**Config.** Per-adapter blocks under `RAGLOGS_CLOUDWATCH_*`, `RAGLOGS_LOKI_*`, etc. Adapters are optional; absent credentials disable the adapter and surface a clear `/health` sub-status.
 
 **Failure modes.** Adapter unreachable → job fails with a typed error (`ADAPTER_UNAVAILABLE`) and does not partially ingest silently. Partial reads (rate-limited AWS API) → resumable via `LogStreamRef` cursor; job reports `partial: true`.
 

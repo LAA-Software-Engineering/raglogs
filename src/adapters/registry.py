@@ -14,16 +14,16 @@ def get_adapter(name: str, settings) -> SourceAdapter:
     if name == "cloudwatch":
         from src.adapters.cloudwatch.adapter import CloudWatchSourceAdapter
 
-        return CloudWatchSourceAdapter(region=settings.adapter_cloudwatch_region)
+        return CloudWatchSourceAdapter(region=settings.cloudwatch_region)
     if name == "loki":
         from src.adapters.loki.adapter import LokiSourceAdapter
 
         return LokiSourceAdapter(
-            base_url=settings.adapter_loki_url,
-            tenant=settings.adapter_loki_tenant,
-            bearer_token=settings.adapter_loki_bearer_token,
-            username=settings.adapter_loki_username,
-            password=settings.adapter_loki_password,
-            default_query=settings.adapter_loki_query,
+            base_url=settings.loki_url,
+            tenant=settings.loki_tenant,
+            bearer_token=settings.loki_bearer_token,
+            username=settings.loki_username,
+            password=settings.loki_password,
+            default_query=settings.loki_query,
         )
     raise AdapterUnavailableError(f"Unknown adapter: {name!r}")

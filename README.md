@@ -264,11 +264,11 @@ raglogs ingest ./logs/ --format json
 **Loki**
 
 Pull a bounded window from Grafana Loki via LogQL — no intermediate files.
-Auth and the default query come from env (`RAGLOGS_ADAPTER_LOKI_*`); URL,
+Auth and the default query come from env (`RAGLOGS_LOKI_*`); URL,
 tenant, and query can also be passed per ingest.
 
 ```bash
-export RAGLOGS_ADAPTER_LOKI_URL=http://localhost:3100
+export RAGLOGS_LOKI_URL=http://localhost:3100
 raglogs ingest --adapter loki --param query='{app="api"}' --since 1h
 raglogs ingest --adapter loki --param query='{namespace="prod"}' \
   --from 2026-03-12T22:00:00+00:00 --to 2026-03-12T22:30:00+00:00
@@ -282,9 +282,9 @@ curl -X POST http://localhost:8000/ingestions \
 
 | Param | Description |
 |---|---|
-| `query` / `queries` | LogQL selector (required unless `RAGLOGS_ADAPTER_LOKI_QUERY` is set) |
-| `url` | Override `RAGLOGS_ADAPTER_LOKI_URL` |
-| `tenant` | Override `RAGLOGS_ADAPTER_LOKI_TENANT` (`X-Scope-OrgID`) |
+| `query` / `queries` | LogQL selector (required unless `RAGLOGS_LOKI_QUERY` is set) |
+| `url` | Override `RAGLOGS_LOKI_URL` |
+| `tenant` | Override `RAGLOGS_LOKI_TENANT` (`X-Scope-OrgID`) |
 | `limit` | Page size for `query_range` (default 5000) |
 
 **Output**

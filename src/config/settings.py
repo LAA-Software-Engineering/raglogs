@@ -31,13 +31,13 @@ class Settings(BaseSettings):
     worker_poll_interval: int = 2          # seconds between idle polls
 
     # Adapters
-    adapter_cloudwatch_region: str = "us-east-1"
-    adapter_loki_url: str = ""
-    adapter_loki_tenant: str = ""
-    adapter_loki_bearer_token: str = ""
-    adapter_loki_username: str = ""
-    adapter_loki_password: str = ""
-    adapter_loki_query: str = ""
+    cloudwatch_region: str = "us-east-1"
+    loki_url: str = ""
+    loki_tenant: str = ""
+    loki_bearer_token: str = ""
+    loki_username: str = ""
+    loki_password: str = ""
+    loki_query: str = ""
 
     # Cluster scoring weights
     severity_weight_fatal: float = 5.0
