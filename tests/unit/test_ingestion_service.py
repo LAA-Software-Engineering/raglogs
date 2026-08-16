@@ -6,6 +6,7 @@ exception escaped the main loop; it now transitions to "failed" with error_messa
 Uses unittest.mock for the DB session, matching tests/unit/test_worker.py's convention
 of mocking the I/O boundary rather than internals.
 """
+
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
@@ -49,7 +50,15 @@ class FakeAdapter:
         self.windows_seen.append(window)
         self.cursors_seen.append(ref.cursor)
         for text in self._lines:
-            yield RawLogLine(text=text, source_ref=ref.stream_id, received_at=self._received_at)
+            yield RawLogLine(
+                text=text,
+                source_ref=ref.stream_id,
+                received_at=self._received_at,
+                default_service=getattr(self, "default_service", None),
+                default_environment=getattr(self, "default_environment", None),
+                default_host=getattr(self, "default_host", None),
+                extra=getattr(self, "extra", {}) or {},
+            )
 
 
 class FailingAdapter:
@@ -90,13 +99,18 @@ class PartiallyUnavailableAdapter:
 
 
 def _patch_get_adapter(monkeypatch, adapter):
-    monkeypatch.setattr("src.adapters.registry.get_adapter", lambda name, settings: adapter)
+    monkeypatch.setattr(
+        "src.adapters.registry.get_adapter", lambda name, settings: adapter
+    )
 
 
 class TestIngestFromSource:
     def test_happy_path(self, monkeypatch):
         db = _mock_db()
-        lines = ['{"message": "boom", "level": "error", "service": "api"}', "plain text line"]
+        lines = [
+            '{"message": "boom", "level": "error", "service": "api"}',
+            "plain text line",
+        ]
         _patch_get_adapter(monkeypatch, FakeAdapter(lines))
 
         spec = SourceSpec(adapter="fake", params={})
@@ -107,6 +121,29 @@ class TestIngestFromSource:
         assert stats.lines_read == 2
         assert stats.parsed_count == 2
         assert "api" in stats.services_detected
+
+    def test_raw_line_defaults_fill_service_env_host(self, monkeypatch):
+        db = _mock_db()
+        fake = FakeAdapter(["plain text line without a service token"])
+        fake.default_service = "billing-worker"
+        fake.default_environment = "production"
+        fake.default_host = "billing-worker-abc"
+        fake.extra = {"kubernetes": {"pod": "billing-worker-abc"}}
+        _patch_get_adapter(monkeypatch, fake)
+
+        job, stats = ingest_from_source(
+            db=db, spec=SourceSpec(adapter="fake", params={}), window=_WINDOW
+        )
+
+        assert job.status == "completed"
+        assert stats.parsed_count == 1
+        saved = [c for c in db.bulk_save_objects.call_args_list]
+        assert saved, "expected at least one bulk_save_objects call"
+        entries = saved[0].args[0]
+        assert entries[0].service == "billing-worker"
+        assert entries[0].environment == "production"
+        assert entries[0].host == "billing-worker-abc"
+        assert entries[0].extra_json["kubernetes"]["pod"] == "billing-worker-abc"
 
     def test_defaults_window_when_not_given(self, monkeypatch):
         """
@@ -120,7 +157,9 @@ class TestIngestFromSource:
         fake = FakeAdapter(["a line"])
         _patch_get_adapter(monkeypatch, fake)
 
-        job, stats = ingest_from_source(db=db, spec=SourceSpec(adapter="fake", params={}))
+        job, stats = ingest_from_source(
+            db=db, spec=SourceSpec(adapter="fake", params={})
+        )
 
         assert job.status == "completed"
         seen_window = fake.windows_seen[0]
@@ -149,6 +188,7 @@ class TestIngestFromSource:
         duplicates every row it already produced. Completed streams must be skipped
         entirely; only genuinely partial streams get their cursor applied.
         """
+
         class ResumeTrackingAdapter:
             name = "resume"
 
@@ -157,7 +197,9 @@ class TestIngestFromSource:
                 yield LogStreamRef(adapter=self.name, stream_id="stream-1")
 
             def read(self, ref, window):
-                assert ref.stream_id != "stream-0", "completed stream must not be re-read"
+                assert ref.stream_id != "stream-0", (
+                    "completed stream must not be re-read"
+                )
                 assert ref.cursor == "tok-mid"
                 yield RawLogLine(text="resumed line", source_ref=ref.stream_id)
                 ref.cursor = None  # exhausted after this page
@@ -188,20 +230,88 @@ class TestIngestFromSource:
         db.bulk_save_objects.side_effect = lambda objs: entries.extend(objs)
 
         event_time = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        fake = FakeAdapter(["plain text with no timestamp field"], received_at=event_time)
+        fake = FakeAdapter(
+            ["plain text with no timestamp field"], received_at=event_time
+        )
         _patch_get_adapter(monkeypatch, fake)
 
-        job, stats = ingest_from_source(db=db, spec=SourceSpec(adapter="fake", params={}), window=_WINDOW)
+        job, stats = ingest_from_source(
+            db=db, spec=SourceSpec(adapter="fake", params={}), window=_WINDOW
+        )
 
         assert job.status == "completed"
         assert len(entries) == 1
         assert entries[0].timestamp == event_time
 
+    def test_raw_line_defaults_fill_service_env_host(self, monkeypatch):
+        """Adapters (Loki labels, k8s fields) may set RawLogLine defaults; ingestion
+        should persist them when the parsed line has no service/env/host."""
+        class LabelAdapter:
+            name = "labels"
+
+            def discover(self, spec):
+                yield LogStreamRef(adapter=self.name, stream_id="s1")
+
+            def read(self, ref, window):
+                yield RawLogLine(
+                    text="plain line with no fields",
+                    source_ref='{app="api", namespace="prod"}',
+                    default_service="api",
+                    default_environment="prod",
+                    default_host="api-7b9",
+                )
+
+        db = _mock_db()
+        entries = []
+        db.bulk_save_objects.side_effect = lambda objs: entries.extend(objs)
+        _patch_get_adapter(monkeypatch, LabelAdapter())
+
+        job, stats = ingest_from_source(
+            db=db, spec=SourceSpec(adapter="labels", params={}), window=_WINDOW,
+        )
+
+        assert job.status == "completed"
+        assert entries[0].service == "api"
+        assert entries[0].environment == "prod"
+        assert entries[0].host == "api-7b9"
+        assert "api" in stats.services_detected
+
+    def test_spec_overrides_raw_line_defaults(self, monkeypatch):
+        class LabelAdapter:
+            name = "labels"
+
+            def discover(self, spec):
+                yield LogStreamRef(adapter=self.name, stream_id="s1")
+
+            def read(self, ref, window):
+                yield RawLogLine(
+                    text="plain line",
+                    source_ref="s1",
+                    default_service="from-labels",
+                    default_environment="from-labels",
+                    default_host="pod-1",
+                )
+
+        db = _mock_db()
+        entries = []
+        db.bulk_save_objects.side_effect = lambda objs: entries.extend(objs)
+        _patch_get_adapter(monkeypatch, LabelAdapter())
+
+        spec = SourceSpec(adapter="labels", params={}, service="cli-svc", env="staging")
+        job, stats = ingest_from_source(db=db, spec=spec, window=_WINDOW)
+
+        assert job.status == "completed"
+        assert entries[0].service == "cli-svc"
+        assert entries[0].environment == "staging"
+        assert entries[0].host == "pod-1"
+
     def test_job_source_ref_set_from_refs(self, monkeypatch):
         db = _mock_db()
         _patch_get_adapter(monkeypatch, FakeAdapter(["a line"], num_refs=2))
 
-        job, stats = ingest_from_source(db=db, spec=SourceSpec(adapter="fake", params={}), window=_WINDOW)
+        job, stats = ingest_from_source(
+            db=db, spec=SourceSpec(adapter="fake", params={}), window=_WINDOW
+        )
 
         assert job.source_ref == "stream-0, stream-1"
 
@@ -216,14 +326,18 @@ class TestIngestFromSource:
         db = _mock_db()
 
         with pytest.raises(ValueError):
-            ingest_from_source(db=db, spec=SourceSpec(adapter="empty", params={}), window=_WINDOW)
+            ingest_from_source(
+                db=db, spec=SourceSpec(adapter="empty", params={}), window=_WINDOW
+            )
 
     def test_exception_mid_read_marks_job_failed(self, monkeypatch):
         db = _mock_db()
         _patch_get_adapter(monkeypatch, FailingAdapter())
 
         with pytest.raises(RuntimeError):
-            ingest_from_source(db=db, spec=SourceSpec(adapter="failing", params={}), window=_WINDOW)
+            ingest_from_source(
+                db=db, spec=SourceSpec(adapter="failing", params={}), window=_WINDOW
+            )
 
         job = next(o for o in db.added if isinstance(o, IngestionJob))
         assert job.status == "failed"
@@ -234,7 +348,9 @@ class TestIngestFromSource:
         _patch_get_adapter(monkeypatch, UnavailableAdapter())
 
         with pytest.raises(AdapterUnavailableError):
-            ingest_from_source(db=db, spec=SourceSpec(adapter="unavailable", params={}), window=_WINDOW)
+            ingest_from_source(
+                db=db, spec=SourceSpec(adapter="unavailable", params={}), window=_WINDOW
+            )
 
         job = next(o for o in db.added if isinstance(o, IngestionJob))
         assert job.status == "failed"
@@ -244,7 +360,9 @@ class TestIngestFromSource:
         db = _mock_db()
         _patch_get_adapter(monkeypatch, PartiallyUnavailableAdapter())
 
-        job, stats = ingest_from_source(db=db, spec=SourceSpec(adapter="mixed", params={}), window=_WINDOW)
+        job, stats = ingest_from_source(
+            db=db, spec=SourceSpec(adapter="mixed", params={}), window=_WINDOW
+        )
 
         assert job.status == "completed"
         assert job.metadata_json["partial"] is True
@@ -255,7 +373,9 @@ class TestIngestFromSource:
 class TestIngestFiles:
     def test_happy_path_sets_source_adapter(self, tmp_path):
         log_file = tmp_path / "billing-worker.log"
-        log_file.write_text('{"message": "ok", "level": "info", "service": "billing"}\n')
+        log_file.write_text(
+            '{"message": "ok", "level": "info", "service": "billing"}\n'
+        )
 
         db = _mock_db()
         job, stats = ingest_files(db=db, paths=[str(tmp_path)])

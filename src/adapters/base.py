@@ -6,6 +6,7 @@ from typing import Any, Iterable, Iterator, Optional, Protocol, runtime_checkabl
 @dataclass
 class SourceSpec:
     """What integrators send instead of file paths — identifies an adapter and its params."""
+
     adapter: str
     params: dict[str, Any] = field(default_factory=dict)
     service: Optional[str] = None
@@ -21,6 +22,7 @@ class TimeWindow:
 @dataclass
 class LogStreamRef:
     """A concrete stream resolved from a SourceSpec (a log group, label set, or file)."""
+
     adapter: str
     stream_id: str
     cursor: Optional[str] = None
@@ -29,10 +31,21 @@ class LogStreamRef:
 
 @dataclass
 class RawLogLine:
-    """One unparsed line plus its provenance, ready for the parser → normalization pipeline."""
+    """One unparsed line plus its provenance, ready for the parser → normalization pipeline.
+
+    Adapters may fill `default_service` / `default_environment` / `default_host` from
+    source metadata (Loki stream labels, k8s pod fields). Ingestion uses them only
+    when the parsed line and SourceSpec do not already set those fields — core stays
+    source-agnostic.
+    """
+
     text: str
     source_ref: str
     received_at: Optional[datetime] = None
+    default_service: Optional[str] = None
+    default_environment: Optional[str] = None
+    default_host: Optional[str] = None
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 @runtime_checkable

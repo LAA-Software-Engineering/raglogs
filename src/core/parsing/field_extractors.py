@@ -48,6 +48,35 @@ def normalize_level(level_str: str) -> str:
     return LEVEL_NORMALIZATIONS.get(level_str.lower().strip(), level_str.lower().strip())
 
 
+def extract_kubernetes_fields(data: dict[str, Any]) -> dict[str, Optional[Any]]:
+    """Map a nested Fluent Bit / Vector `kubernetes` object onto raglogs fields.
+
+    service  ← labels.app | labels['app.kubernetes.io/name'] | container_name
+    environment ← namespace_name | pod_namespace | namespace
+    host     ← pod_name | pod | host
+    """
+    k8s = data.get("kubernetes")
+    if not isinstance(k8s, dict):
+        return {}
+
+    labels = k8s.get("labels") or k8s.get("pod_labels") or {}
+    service: Optional[Any] = None
+    if isinstance(labels, dict):
+        service = (
+            labels.get("app")
+            or labels.get("app.kubernetes.io/name")
+            or labels.get("k8s-app")
+        )
+    service = service or k8s.get("container_name") or k8s.get("container")
+
+    environment = (
+        k8s.get("namespace_name") or k8s.get("pod_namespace") or k8s.get("namespace")
+    )
+    host = k8s.get("pod_name") or k8s.get("pod") or k8s.get("host")
+
+    return {"service": service, "environment": environment, "host": host}
+
+
 def extract_all_fields(data: dict[str, Any]) -> dict[str, Any]:
     """Extract all known fields from a parsed log dict."""
     known_fields = set(
@@ -62,6 +91,7 @@ def extract_all_fields(data: dict[str, Any]) -> dict[str, Any]:
     )
 
     extra = {k: v for k, v in data.items() if k not in known_fields}
+    k8s_fields = extract_kubernetes_fields(data)
 
     level_raw = extract_field(data, LEVEL_FIELDS)
     level = normalize_level(str(level_raw)) if level_raw else None
@@ -70,10 +100,10 @@ def extract_all_fields(data: dict[str, Any]) -> dict[str, Any]:
         "timestamp_raw": extract_field(data, TIMESTAMP_FIELDS),
         "message": extract_field(data, MESSAGE_FIELDS),
         "level": level,
-        "service": extract_field(data, SERVICE_FIELDS),
-        "environment": extract_field(data, ENVIRONMENT_FIELDS),
+        "service": extract_field(data, SERVICE_FIELDS) or k8s_fields.get("service"),
+        "environment": extract_field(data, ENVIRONMENT_FIELDS) or k8s_fields.get("environment"),
         "trace_id": extract_field(data, TRACE_ID_FIELDS),
         "request_id": extract_field(data, REQUEST_ID_FIELDS),
-        "host": extract_field(data, HOST_FIELDS),
+        "host": extract_field(data, HOST_FIELDS) or k8s_fields.get("host"),
         "extra": extra,
     }

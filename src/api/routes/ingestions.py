@@ -41,6 +41,10 @@ class IngestRequest(BaseModel):
     def _require_paths_for_file_adapter(self):
         if self.adapter == "file" and not self.paths:
             raise ValueError("paths is required when adapter='file'")
+        if self.adapter in ("k8s", "kubernetes"):
+            params_paths = self.params.get("paths") or self.params.get("path")
+            if not self.paths and not params_paths:
+                raise ValueError("paths is required when adapter='k8s'")
         return self
 
 
@@ -102,6 +106,7 @@ def create_ingestion(request: IngestRequest):
     from src.db.models import WorkerJob
     from src.db.session import get_db
 
+    params = request.params
     if request.adapter == "file":
         from src.adapters.file.adapter import discover_files
 
@@ -115,16 +120,26 @@ def create_ingestion(request: IngestRequest):
         from src.config import get_settings
         from src.core.errors import AdapterUnavailableError
 
+        if request.adapter in ("k8s", "kubernetes"):
+            from src.adapters.k8s.adapter import build_k8s_params
+
+            params = build_k8s_params(
+                request.params, paths=request.paths, recursive=request.recursive
+            )
+
         try:
             adapter = get_adapter(request.adapter, get_settings())
-            # Fail fast on missing/invalid params (e.g. no log_group) — discover() for
-            # cloudwatch/datadog is local-only validation, no network call.
-            list(adapter.discover(SourceSpec(adapter=request.adapter, params=request.params)))
+            # Fail fast on missing/invalid params (e.g. no log_group / query) —
+            # discover() for pull adapters is local-only validation, no network call.
+            refs = list(adapter.discover(SourceSpec(adapter=request.adapter, params=params)))
         except AdapterUnavailableError as e:
             raise HTTPException(
                 status_code=400,
                 detail={"error_code": e.error_code, "message": str(e)},
             )
+
+        if request.adapter in ("k8s", "kubernetes") and not refs:
+            raise HTTPException(status_code=400, detail="No log files found at the given paths")
 
         if request.since or request.from_time or request.to_time:
             # Same validation POST /query/explain does at the route level — otherwise
@@ -145,7 +160,7 @@ def create_ingestion(request: IngestRequest):
         "service": request.service,
         "env": request.env,
         "adapter": request.adapter,
-        "params": request.params,
+        "params": params,
         "since": request.since,
         "from_time": request.from_time.isoformat() if request.from_time else None,
         "to_time": request.to_time.isoformat() if request.to_time else None,

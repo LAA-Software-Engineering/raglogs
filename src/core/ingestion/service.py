@@ -60,6 +60,8 @@ def _process_line(
     source_ref: str,
     stats: IngestionStats,
     received_at: Optional[datetime] = None,
+    default_host: Optional[str] = None,
+    extra: Optional[dict] = None,
 ) -> Optional[LogEntry]:
     """Parse, fingerprint, and build a LogEntry for one raw line. Returns None for
     blank/unparseable/error lines (stats are updated either way).
@@ -67,7 +69,11 @@ def _process_line(
     `received_at` is the adapter-reported time the line was emitted (e.g. a CloudWatch
     event timestamp) — used when the line itself has no parseable timestamp field, so
     rows aren't silently dropped from windowed queries (clustering/explain filter on
-    LogEntry.timestamp being both non-null and within the window)."""
+    LogEntry.timestamp being both non-null and within the window).
+
+    `default_host` is adapter-provided provenance (e.g. a Loki `pod` label) used when
+    the parsed line has no host field. Service/environment defaults are already
+    threaded via `default_service` / `default_env`."""
     stats.lines_read += 1
 
     if not line.strip():
@@ -91,29 +97,30 @@ def _process_line(
 
     normalized, fp = fingerprint_message(parsed.message or "")
 
+    resolved_service = parsed.service or default_service
     entry = LogEntry(
         id=uuid.uuid4(),
         source_id=source.id,
         ingestion_job_id=job.id,
         timestamp=parsed.timestamp,
-        service=parsed.service or default_service,
+        service=resolved_service,
         environment=parsed.environment or default_env,
         level=parsed.level,
         trace_id=parsed.trace_id,
         request_id=parsed.request_id,
-        host=parsed.host,
+        host=parsed.host or default_host,
         raw_message=parsed.raw_line[:4096] if parsed.raw_line else None,
         normalized_message=normalized[:2048] if normalized else None,
         fingerprint=fp,
         parser_type=parsed.parser_type,
-        extra_json=parsed.extra or None,
+        extra_json={**(extra or {}), **(parsed.extra or {})} or None,
         source_adapter=source_adapter,
         source_ref=source_ref,
     )
     stats.parsed_count += 1
 
-    if parsed.service:
-        stats.services_detected.add(parsed.service)
+    if resolved_service:
+        stats.services_detected.add(resolved_service)
 
     return entry
 
@@ -230,7 +237,7 @@ def ingest_from_source(
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> tuple[IngestionJob, IngestionStats]:
     """
-    Adapter-driven ingestion entry point (e.g. CloudWatch). Discovers streams via the
+    Adapter-driven ingestion entry point (e.g. CloudWatch, Loki). Discovers streams via the
     configured SourceAdapter, reads raw lines within `window`, and persists them through
     the same parse -> fingerprint -> LogEntry pipeline as ingest_files.
 
@@ -312,9 +319,18 @@ def ingest_from_source(
                 for raw in adapter.read(ref, window):
                     effective_fmt = _resolve_fmt(raw.text, fmt)
                     entry = _process_line(
-                        raw.text, effective_fmt, spec.service, spec.env,
-                        source, job, spec.adapter, raw.source_ref, stats,
+                        raw.text,
+                        effective_fmt,
+                        spec.service or raw.default_service,
+                        spec.env or raw.default_environment,
+                        source,
+                        job,
+                        spec.adapter,
+                        raw.source_ref,
+                        stats,
                         received_at=raw.received_at,
+                        default_host=raw.default_host,
+                        extra=raw.extra or None,
                     )
                     if entry is None:
                         continue

@@ -126,6 +126,22 @@ class TestHealth:
 
         assert resp.json()["adapters"]["datadog"].startswith("unavailable:")
 
+    def test_health_reports_loki_unavailable_without_url(self):
+        from src.api.routes.health import _adapter_health_cache
+        from src.core.errors import AdapterUnavailableError
+
+        _adapter_health_cache.pop("loki", None)
+
+        with patch("src.db.session.check_connection", return_value=True), \
+             _patch_get_db(execute_scalar=3), \
+             patch(
+                 "src.adapters.loki.adapter.LokiSourceAdapter.check_available",
+                 side_effect=AdapterUnavailableError("loki adapter requires LOKI_URL"),
+             ):
+            resp = client.get("/health")
+
+        assert resp.json()["adapters"]["loki"].startswith("unavailable:")
+
 
 # ── POST /ingestions ──────────────────────────────────────────────────────────
 
@@ -210,6 +226,39 @@ class TestCreateIngestion:
         resp = client.post("/ingestions", json={"adapter": "file"})
         assert resp.status_code == 422
 
+    def test_422_when_paths_omitted_for_k8s_adapter(self):
+        resp = client.post("/ingestions", json={"adapter": "k8s"})
+        assert resp.status_code == 422
+
+    def test_400_when_k8s_paths_empty(self, tmp_path):
+        resp = client.post("/ingestions", json={
+            "adapter": "k8s",
+            "paths": [str(tmp_path / "does-not-exist.log")],
+        })
+        assert resp.status_code == 400
+        assert "No log files" in resp.json()["detail"]
+
+    def test_202_for_k8s_adapter_with_paths(self, tmp_path):
+        log_file = tmp_path / "export.log"
+        log_file.write_text("a line\n")
+
+        wj_id = str(uuid.uuid4())
+        mock_db = _ctx_db()
+
+        def capture_add(obj):
+            obj.id = uuid.UUID(wj_id)
+
+        mock_db.add.side_effect = capture_add
+
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db):
+            resp = client.post("/ingestions", json={
+                "adapter": "k8s",
+                "paths": [str(log_file)],
+            })
+
+        assert resp.status_code == 202
+        assert resp.json()["status"] == "pending"
+
     def test_202_for_non_file_adapter_when_available(self):
         wj_id = str(uuid.uuid4())
         mock_db = _ctx_db()
@@ -265,6 +314,24 @@ class TestCreateIngestion:
             "params": {"site": "http://evil.example"},
             "since": "1h",
         })
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error_code"] == "ADAPTER_UNAVAILABLE"
+
+    def test_400_when_loki_params_missing_query(self):
+        """
+        Exercises the real registry + LokiSourceAdapter.discover() (no mocking) —
+        params validation for loki is local-only, no Loki server needed.
+        """
+        from src.config.settings import Settings
+
+        settings = Settings(loki_url="http://loki:3100")
+        with patch("src.config.get_settings", return_value=settings):
+            resp = client.post("/ingestions", json={
+                "paths": [],
+                "adapter": "loki",
+                "params": {},
+            })
 
         assert resp.status_code == 400
         assert resp.json()["detail"]["error_code"] == "ADAPTER_UNAVAILABLE"
