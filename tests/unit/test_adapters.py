@@ -487,6 +487,55 @@ class TestKubernetesExportAdapter:
         assert refs[0].metadata["kind"] == "gzip"
         assert [r.text for r in raw_lines] == ["gzipped line"]
 
+    def test_discover_infers_metadata_from_gzipped_pods_path(self, tmp_path):
+        import gzip
+
+        from src.adapters.k8s.adapter import KubernetesExportAdapter
+
+        log_path = (
+            tmp_path
+            / "pods"
+            / "production_billing-worker-abc_01234567-89ab-cdef-0123-456789abcdef"
+            / "billing-worker"
+            / "0.log.gz"
+        )
+        log_path.parent.mkdir(parents=True)
+        with gzip.open(log_path, "wt", encoding="utf-8") as handle:
+            handle.write("line\n")
+
+        spec = SourceSpec(
+            adapter="k8s", params={"paths": [str(tmp_path)], "recursive": True}
+        )
+        refs = list(KubernetesExportAdapter().discover(spec))
+
+        assert len(refs) == 1
+        assert refs[0].metadata["kind"] == "gzip"
+        assert refs[0].metadata["namespace"] == "production"
+        assert refs[0].metadata["pod"] == "billing-worker-abc"
+        assert refs[0].metadata["container"] == "billing-worker"
+
+    def test_read_reassembles_cri_partial_fragments(self, tmp_path):
+        from src.adapters.k8s.adapter import KubernetesExportAdapter
+
+        log_path = tmp_path / "0.log"
+        log_path.write_text(
+            "2026-03-12T22:01:10.123456789Z stdout P ERROR billing-worker Stripe signa\n"
+            "2026-03-12T22:01:10.123456790Z stdout F ture verification failed\n"
+            "2026-03-12T22:01:11.000000000Z stdout F INFO ready\n"
+        )
+
+        adapter = KubernetesExportAdapter()
+        spec = SourceSpec(adapter="k8s", params={"paths": [str(log_path)]})
+        ref = list(adapter.discover(spec))[0]
+        raw_lines = list(adapter.read(ref, _WINDOW))
+
+        assert len(raw_lines) == 2
+        assert raw_lines[0].text == (
+            "2026-03-12T22:01:10.123456789Z stdout F "
+            "ERROR billing-worker Stripe signature verification failed"
+        )
+        assert raw_lines[1].text == "2026-03-12T22:01:11.000000000Z stdout F INFO ready"
+
     def test_build_k8s_params_merges_top_level_paths(self):
         from src.adapters.k8s.adapter import build_k8s_params
 

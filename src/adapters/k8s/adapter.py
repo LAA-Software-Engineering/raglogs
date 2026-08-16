@@ -20,6 +20,7 @@ from typing import Any, Iterable, Iterator, Optional
 from src.adapters.base import LogStreamRef, RawLogLine, SourceSpec, TimeWindow
 from src.adapters.file.adapter import discover_files, read_lines
 from src.core.errors import AdapterUnavailableError
+from src.core.parsing.text_parser import CRI_PATTERN
 
 ARCHIVE_SUFFIXES = (".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tar.xz")
 LOG_SUFFIXES = (".log", ".json", ".jsonl", ".ndjson", ".txt")
@@ -57,9 +58,20 @@ def build_k8s_params(
     return merged
 
 
+def _strip_gzip_log_suffix(path: str) -> str:
+    """Drop a trailing .gz from a log path, but not from tar archives."""
+    normalized = path.replace("\\", "/")
+    lower = normalized.lower()
+    if any(lower.endswith(suffix) for suffix in ARCHIVE_SUFFIXES):
+        return normalized
+    if lower.endswith(".gz"):
+        return normalized[:-3]
+    return normalized
+
+
 def infer_k8s_meta_from_path(path: str) -> dict[str, str]:
     """Pull namespace / pod / container from a kubelet log path, if present."""
-    normalized = path.replace("\\", "/")
+    normalized = _strip_gzip_log_suffix(path)
     match = _PODS_RE.search(normalized)
     if match:
         return {
@@ -108,10 +120,11 @@ def _is_gzip_log(path: Path) -> bool:
 
 
 def _is_log_member(name: str) -> bool:
-    lower = name.lower()
+    stripped = _strip_gzip_log_suffix(name)
+    lower = stripped.lower()
     if any(lower.endswith(suffix) for suffix in LOG_SUFFIXES):
         return True
-    return bool(_PODS_RE.search(name) or _CONTAINERS_RE.search(name))
+    return bool(_PODS_RE.search(stripped) or _CONTAINERS_RE.search(stripped))
 
 
 def _list_tar_log_members(path: Path) -> list[str]:
@@ -133,6 +146,13 @@ def _read_tar_member(archive: Path, member: str) -> Iterator[str]:
             if handle is None:
                 return
             with handle:
+                if _is_gzip_log(Path(member)):
+                    with gzip.open(
+                        handle, "rt", encoding="utf-8", errors="replace"
+                    ) as gz:
+                        for line in gz:
+                            yield line.rstrip("\n\r")
+                    return
                 for raw in handle:
                     yield raw.decode("utf-8", errors="replace").rstrip("\n\r")
     except (tarfile.TarError, OSError) as e:
@@ -172,6 +192,72 @@ def _k8s_extra(meta: dict[str, Any]) -> dict[str, Any]:
     keys = ("namespace", "pod", "container", "pod_uid")
     kubernetes = {key: meta[key] for key in keys if meta.get(key)}
     return {"kubernetes": kubernetes} if kubernetes else {}
+
+
+def _reassemble_cri_fragments(lines: Iterable[str]) -> Iterator[str]:
+    """Join CRI P (partial) fragments with the following F (full) into one line.
+
+    Kubelet splits a single container log line across CRI records at a byte
+    boundary. Concatenate without inserting separators so fingerprints stay
+    one-to-one with the original message.
+    """
+    pending_parts: list[str] = []
+    pending_ts: Optional[str] = None
+    pending_stream: Optional[str] = None
+
+    def take_joined() -> Optional[str]:
+        nonlocal pending_parts, pending_ts, pending_stream
+        if not pending_parts:
+            return None
+        joined = f"{pending_ts} {pending_stream} F {''.join(pending_parts)}"
+        pending_parts = []
+        pending_ts = None
+        pending_stream = None
+        return joined
+
+    for line in lines:
+        cri = CRI_PATTERN.match(line)
+        if cri is None:
+            joined = take_joined()
+            if joined is not None:
+                yield joined
+            yield line
+            continue
+
+        tag = cri.group("tag")
+        ts = cri.group("ts")
+        stream = cri.group("stream")
+        msg = cri.group("msg")
+
+        if tag == "P":
+            if pending_stream is not None and pending_stream != stream:
+                joined = take_joined()
+                if joined is not None:
+                    yield joined
+            if not pending_parts:
+                pending_ts = ts
+                pending_stream = stream
+            pending_parts.append(msg)
+            continue
+
+        # tag == "F": last (or only) fragment of this log line
+        if pending_parts:
+            if pending_stream is not None and pending_stream != stream:
+                joined = take_joined()
+                if joined is not None:
+                    yield joined
+                yield line
+                continue
+            pending_parts.append(msg)
+            joined = take_joined()
+            if joined is not None:
+                yield joined
+        else:
+            yield line
+
+    joined = take_joined()
+    if joined is not None:
+        yield joined
 
 
 class KubernetesExportAdapter:
@@ -230,7 +316,7 @@ class KubernetesExportAdapter:
         else:
             lines = read_lines(Path(ref.stream_id))
 
-        for line in lines:
+        for line in _reassemble_cri_fragments(lines):
             yield RawLogLine(
                 text=line,
                 source_ref=source_ref,

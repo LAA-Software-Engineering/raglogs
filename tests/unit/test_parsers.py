@@ -162,3 +162,13 @@ class TestTextParser:
         assert result.environment == "production"
         assert result.timestamp is not None
         assert "listening on :8080" in result.message
+
+    def test_untimestamped_error_does_not_steal_service_token(self):
+        # LEVEL_SERVICE_PATTERN is CRI-inner only. Generic file ingest must keep
+        # default_service and the full message (not "failed" / "to connect...").
+        line = "ERROR failed to connect to database"
+        result = parse_text_line(line, default_service="api")
+        assert result is not None
+        assert result.service == "api"
+        assert result.message == line
+        assert result.level == "error"
