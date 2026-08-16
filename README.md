@@ -826,10 +826,12 @@ flows the CLI exposes — no separate build step, served by the API itself.
 
 ```bash
 make web
-# starts Postgres, runs migrations, and serves the UI at http://localhost:8000/
+# starts Postgres, runs migrations, seeds a fresh sample incident, and
+# serves the UI at http://localhost:8000/ — open it and there's already
+# something to explain.
 ```
 
-Already have Postgres running and migrated? `make api` starts just the server.
+Already have Postgres running, migrated, and your own data ingested? `make api` starts just the server without touching the sample data.
 
 Pick a time window (presets or a duration like `2h`), then switch between the
 **Explain**, **Timeline**, **Compare**, and **Ask** tabs. The **ingestion**

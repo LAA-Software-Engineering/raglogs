@@ -21,7 +21,7 @@ help:
 	@echo "  make explain         Explain the last hour"
 	@echo "  make clusters        Show top clusters"
 	@echo "  make api             Start FastAPI server (reload)"
-	@echo "  make web             db-up + migrate + start server, then open the web UI"
+	@echo "  make web             Seed sample data (demo) + start server, then open the web UI"
 	@echo "  make worker          Start background worker"
 	@echo ""
 	@echo "Docker (full stack)"
@@ -89,9 +89,7 @@ ask:
 api:
 	uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --reload
 
-web: db-up
-	@sleep 2
-	alembic upgrade head
+web: demo
 	@echo "Web UI: http://localhost:8000/"
 	uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --reload
 
