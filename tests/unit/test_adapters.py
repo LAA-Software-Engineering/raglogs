@@ -436,16 +436,18 @@ class TestLokiSourceAdapter:
             stream_id='{app="api"}',
             metadata={"url": "http://loki", "limit": 2},
         )
+        # Timestamps must fall inside _WINDOW; otherwise max_ts stays at window.start.
+        t1, t2, t3 = "1767225600000000100", "1767225600000000200", "1767225600000000300"
         pages = [
             _loki_streams_payload([
                 {"stream": {"app": "api"}, "values": [
-                    ["100", "a"],
-                    ["200", "b"],
+                    [t1, "a"],
+                    [t2, "b"],
                 ]}
             ]),
             _loki_streams_payload([
                 {"stream": {"app": "api"}, "values": [
-                    ["300", "c"],
+                    [t3, "c"],
                 ]}
             ]),
         ]
@@ -456,7 +458,7 @@ class TestLokiSourceAdapter:
         assert lines == ["a", "b", "c"]
         assert mock_query.call_count == 2
         second_params = mock_query.call_args_list[1].args[1]
-        assert second_params["start"] == "201"  # last ts + 1ns
+        assert second_params["start"] == "1767225600000000201"  # last ts + 1ns
         assert ref.cursor is None
 
     def test_read_honors_ref_cursor_on_first_request(self):
@@ -490,7 +492,7 @@ class TestLokiSourceAdapter:
         # the first (full) page — same moment ingest_from_source would snapshot it.
         pages = [
             _loki_streams_payload([
-                {"stream": {"app": "api"}, "values": [["100", "a"]]}
+                {"stream": {"app": "api"}, "values": [["1767225600000000100", "a"]]}
             ]),
             AdapterUnavailableError("loki unavailable"),
         ]
@@ -499,7 +501,7 @@ class TestLokiSourceAdapter:
             with pytest.raises(AdapterUnavailableError, match="unavailable"):
                 list(adapter.read(ref, _WINDOW))
 
-        assert ref.cursor == "101"
+        assert ref.cursor == "1767225600000000101"
 
     def test_read_sends_bearer_and_tenant_headers(self):
         from src.adapters.loki.adapter import LokiSourceAdapter

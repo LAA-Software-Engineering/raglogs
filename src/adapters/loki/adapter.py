@@ -173,8 +173,7 @@ class LokiSourceAdapter:
                     except (TypeError, ValueError):
                         continue
                     page_count += 1
-                    if ts_ns > max_ts:
-                        max_ts = ts_ns
+                    max_ts = max(max_ts, ts_ns)
                     yield RawLogLine(
                         text=line,
                         source_ref=source_ref,
