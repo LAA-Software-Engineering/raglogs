@@ -65,21 +65,27 @@ def run_ingest_job(db, worker_job) -> dict:
         from src.adapters.base import SourceSpec, TimeWindow
         from src.core.ingestion.service import ingest_from_source
         from src.db.models import IngestionJob
+        from src.utils.time import resolve_window
 
         window = None
-        if payload.get("window_start") and payload.get("window_end"):
-            window = TimeWindow(
-                start=datetime.fromisoformat(payload["window_start"]),
-                end=datetime.fromisoformat(payload["window_end"]),
-            )
+        if payload.get("since") or payload.get("from_time") or payload.get("to_time"):
+            from_dt = datetime.fromisoformat(payload["from_time"]) if payload.get("from_time") else None
+            to_dt = datetime.fromisoformat(payload["to_time"]) if payload.get("to_time") else None
+            # resolve_window attaches UTC to naive datetimes and handles a single bound
+            # (from-only -> "from X to now") — same helper /query/explain uses.
+            w_start, w_end = resolve_window(since=payload.get("since"), from_time=from_dt, to_time=to_dt)
+            window = TimeWindow(start=w_start, end=w_end)
 
         resume_cursors = None
+        resume_completed_streams = None
         if payload.get("resume_ingestion_job_id"):
             prior = db.query(IngestionJob).filter(
                 IngestionJob.id == uuid.UUID(payload["resume_ingestion_job_id"])
             ).first()
-            if prior is not None:
-                resume_cursors = (prior.metadata_json or {}).get("cursors")
+            if prior is None:
+                raise ValueError(f"No ingestion job found with id {payload['resume_ingestion_job_id']}")
+            resume_cursors = (prior.metadata_json or {}).get("cursors")
+            resume_completed_streams = (prior.metadata_json or {}).get("completed_streams")
 
         spec = SourceSpec(
             adapter=adapter,
@@ -94,6 +100,7 @@ def run_ingest_job(db, worker_job) -> dict:
             source_name=payload.get("source_name"),
             fmt=payload.get("format", "auto"),
             resume_cursors=resume_cursors,
+            resume_completed_streams=resume_completed_streams,
         )
 
     # Link worker job → ingestion job

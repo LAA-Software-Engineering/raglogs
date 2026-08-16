@@ -210,6 +210,94 @@ class TestProcessOne:
         assert job.status == "done"
         mock_ingest.assert_called_once()
 
+    def test_non_file_adapter_resolves_since_only_window(self):
+        """
+        Regression test: the worker used to build a window only when BOTH
+        window_start and window_end were present, so a single bound (e.g. "since")
+        was silently ignored and the ingest defaulted to the last 1h instead.
+        """
+        db = _mock_db()
+        job = _mock_worker_job(payload={
+            "adapter": "cloudwatch",
+            "params": {"log_group": "/aws/lambda/x"},
+            "service": None,
+            "env": None,
+            "source_name": None,
+            "format": "auto",
+            "since": "2h",
+        })
+        db.execute.return_value.scalar_one_or_none.return_value = job
+
+        mock_ingestion_job = MagicMock()
+        mock_stats = MagicMock()
+
+        with patch(
+            "src.core.ingestion.service.ingest_from_source",
+            return_value=(mock_ingestion_job, mock_stats),
+        ) as mock_ingest:
+            process_one(db)
+
+        window = mock_ingest.call_args.kwargs["window"]
+        assert window is not None
+        assert (window.end - window.start).total_seconds() == pytest.approx(2 * 3600, abs=5)
+
+    def test_non_file_adapter_resolves_from_time_only_window(self):
+        """
+        Regression test: a naive ISO datetime string must get UTC attached (the CLI's
+        resolve_window already does this) — otherwise window.start.timestamp() uses the
+        worker process's local timezone and the CloudWatch query window is shifted.
+        """
+        db = _mock_db()
+        job = _mock_worker_job(payload={
+            "adapter": "cloudwatch",
+            "params": {"log_group": "/aws/lambda/x"},
+            "service": None,
+            "env": None,
+            "source_name": None,
+            "format": "auto",
+            "from_time": "2026-01-01T00:00:00",  # naive — no tzinfo
+        })
+        db.execute.return_value.scalar_one_or_none.return_value = job
+
+        mock_ingestion_job = MagicMock()
+        mock_stats = MagicMock()
+
+        with patch(
+            "src.core.ingestion.service.ingest_from_source",
+            return_value=(mock_ingestion_job, mock_stats),
+        ) as mock_ingest:
+            process_one(db)
+
+        window = mock_ingest.call_args.kwargs["window"]
+        assert window.start.tzinfo is not None
+
+    def test_unknown_resume_job_fails_the_worker_job(self):
+        """
+        Regression test: an unresolvable resume_ingestion_job_id used to be silently
+        swallowed (resume_cursors stayed None), so the run re-read the entire window
+        instead of failing loudly.
+        """
+        db = _mock_db()
+        job = _mock_worker_job(payload={
+            "adapter": "cloudwatch",
+            "params": {"log_group": "/aws/lambda/x"},
+            "service": None,
+            "env": None,
+            "source_name": None,
+            "format": "auto",
+            "resume_ingestion_job_id": "00000000-0000-0000-0000-000000000000",
+        })
+        db.execute.return_value.scalar_one_or_none.return_value = job
+        db.query.return_value.filter.return_value.first.return_value = None
+
+        with patch("src.core.ingestion.service.ingest_from_source") as mock_ingest:
+            result = process_one(db)
+
+        assert result is True
+        assert job.status == "failed"
+        assert "00000000-0000-0000-0000-000000000000" in job.error
+        mock_ingest.assert_not_called()
+
     def test_unknown_job_type_fails_gracefully(self):
         db = _mock_db()
         job = _mock_worker_job(job_type="unknown_type")

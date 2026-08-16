@@ -142,6 +142,41 @@ class TestIngestFromSource:
         assert job.status == "completed"
         assert fake.cursors_seen == ["tok-123"]
 
+    def test_resume_skips_completed_streams_and_resumes_partial(self, monkeypatch):
+        """
+        Regression test: a completed stream's saved cursor is None (exhausted). Applying
+        that as a "resume from" token restarts it from the beginning of the window and
+        duplicates every row it already produced. Completed streams must be skipped
+        entirely; only genuinely partial streams get their cursor applied.
+        """
+        class ResumeTrackingAdapter:
+            name = "resume"
+
+            def discover(self, spec):
+                yield LogStreamRef(adapter=self.name, stream_id="stream-0")
+                yield LogStreamRef(adapter=self.name, stream_id="stream-1")
+
+            def read(self, ref, window):
+                assert ref.stream_id != "stream-0", "completed stream must not be re-read"
+                assert ref.cursor == "tok-mid"
+                yield RawLogLine(text="resumed line", source_ref=ref.stream_id)
+                ref.cursor = None  # exhausted after this page
+
+        db = _mock_db()
+        _patch_get_adapter(monkeypatch, ResumeTrackingAdapter())
+
+        job, stats = ingest_from_source(
+            db=db,
+            spec=SourceSpec(adapter="resume", params={}),
+            window=_WINDOW,
+            resume_cursors={"stream-0": None, "stream-1": "tok-mid"},
+            resume_completed_streams=["stream-0"],
+        )
+
+        assert job.status == "completed"
+        assert stats.lines_read == 1  # only stream-1 was actually read
+        assert job.metadata_json["completed_streams"] == ["stream-0", "stream-1"]
+
     def test_timestamp_falls_back_to_received_at(self, monkeypatch):
         """
         Regression test: CloudWatch lines with no parseable timestamp field used to be

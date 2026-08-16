@@ -2,7 +2,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 
 from sqlalchemy.orm import Session
 
@@ -226,6 +226,7 @@ def ingest_from_source(
     source_name: Optional[str] = None,
     fmt: str = "auto",
     resume_cursors: Optional[dict[str, Optional[str]]] = None,
+    resume_completed_streams: Optional[Iterable[str]] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> tuple[IngestionJob, IngestionStats]:
     """
@@ -241,7 +242,11 @@ def ingest_from_source(
     `resume_cursors` (keyed by LogStreamRef.stream_id, e.g. a prior job's
     metadata_json["cursors"]) is applied to freshly-discovered refs before reading, so a
     retry can pick up from where a previous partial run left off instead of re-reading
-    the whole window.
+    the whole window. `resume_completed_streams` (a prior job's
+    metadata_json["completed_streams"]) is a separate set: those streams are skipped
+    entirely rather than re-read from the start of the window — a completed stream's
+    saved cursor is None (exhausted), and applying that as a "resume from" token would
+    otherwise restart it and duplicate every row it already produced.
     """
     import time
 
@@ -266,9 +271,11 @@ def ingest_from_source(
     if not refs:
         raise ValueError(f"No streams discovered for adapter={spec.adapter!r} params={spec.params!r}")
 
+    completed_at_start = set(resume_completed_streams or ())
+
     if resume_cursors:
         for ref in refs:
-            if ref.stream_id in resume_cursors:
+            if ref.stream_id in resume_cursors and ref.stream_id not in completed_at_start:
                 ref.cursor = resume_cursors[ref.stream_id]
 
     source = _get_or_create_source(
@@ -293,10 +300,14 @@ def ingest_from_source(
     batch: list[LogEntry] = []
     adapter_errors: list[str] = []
     cursors: dict[str, Optional[str]] = {}
+    completed_streams: set[str] = set(completed_at_start)
 
     # See the matching NOTE in ingest_files() re: this try/except and get_db() rollback.
     try:
         for ref in refs:
+            if ref.stream_id in completed_at_start:
+                continue  # already fully ingested in a prior run — don't duplicate it
+
             try:
                 for raw in adapter.read(ref, window):
                     effective_fmt = _resolve_fmt(raw.text, fmt)
@@ -319,6 +330,9 @@ def ingest_from_source(
                             progress_callback(stats.lines_read, stats.parsed_count)
             except AdapterUnavailableError as e:
                 adapter_errors.append(str(e))
+            else:
+                if ref.cursor is None:
+                    completed_streams.add(ref.stream_id)
             finally:
                 cursors[ref.stream_id] = ref.cursor
 
@@ -340,6 +354,7 @@ def ingest_from_source(
         job.metadata_json = {
             **(job.metadata_json or {}),
             "cursors": cursors,
+            "completed_streams": sorted(completed_streams),
             **({"partial": True} if adapter_errors else {}),
         }
         db.flush()
@@ -350,7 +365,11 @@ def ingest_from_source(
         job.line_count = stats.lines_read
         job.error_count = stats.error_count
         job.parsed_count = stats.parsed_count
-        job.metadata_json = {**(job.metadata_json or {}), "cursors": cursors}
+        job.metadata_json = {
+            **(job.metadata_json or {}),
+            "cursors": cursors,
+            "completed_streams": sorted(completed_streams),
+        }
         db.flush()
         raise
 

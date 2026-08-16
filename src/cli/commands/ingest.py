@@ -12,10 +12,7 @@ def _parse_params(params: Optional[List[str]]) -> dict:
     result = {}
     for item in params or []:
         key, _, value = item.partition("=")
-        if key == "log_groups":
-            result[key] = [v.strip() for v in value.split(",") if v.strip()]
-        else:
-            result[key] = value
+        result[key] = value
     return result
 
 
@@ -87,11 +84,13 @@ def ingest_cmd(
                         window = TimeWindow(start=w_start, end=w_end)
 
                     resume_cursors = None
+                    resume_completed_streams = None
                     if resume_job:
                         prior = db.query(IngestionJob).filter(IngestionJob.id == uuid.UUID(resume_job)).first()
                         if prior is None:
                             raise ValueError(f"No ingestion job found with id {resume_job}")
                         resume_cursors = (prior.metadata_json or {}).get("cursors")
+                        resume_completed_streams = (prior.metadata_json or {}).get("completed_streams")
 
                     spec = SourceSpec(
                         adapter=adapter,
@@ -106,6 +105,7 @@ def ingest_cmd(
                         source_name=source_name,
                         fmt=fmt,
                         resume_cursors=resume_cursors,
+                        resume_completed_streams=resume_completed_streams,
                         progress_callback=on_progress,
                     )
                 job_id = str(job.id)  # read inside session before it closes

@@ -8,6 +8,7 @@ GET  /ingestions/latest     — most recently completed ingestion job, if any
 GET  /ingestions/{id}       — fetch completed IngestionJob detail by ingestion_job_id
 """
 import uuid
+from datetime import datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -27,8 +28,13 @@ class IngestRequest(BaseModel):
     env: Optional[str] = None
     adapter: str = "file"
     params: dict[str, Any] = {}
-    window_start: Optional[str] = None
-    window_end: Optional[str] = None
+    # Window for non-file adapters — same since/from_time/to_time contract as
+    # POST /query/explain, resolved via src.utils.time.resolve_window (handles a
+    # single bound and attaches UTC to naive datetimes). Omit all three to default
+    # to the last 1h.
+    since: Optional[str] = None
+    from_time: Optional[datetime] = None
+    to_time: Optional[datetime] = None
     resume_ingestion_job_id: Optional[str] = None
 
     @model_validator(mode="after")
@@ -129,8 +135,9 @@ def create_ingestion(request: IngestRequest):
         "env": request.env,
         "adapter": request.adapter,
         "params": request.params,
-        "window_start": request.window_start,
-        "window_end": request.window_end,
+        "since": request.since,
+        "from_time": request.from_time.isoformat() if request.from_time else None,
+        "to_time": request.to_time.isoformat() if request.to_time else None,
         "resume_ingestion_job_id": request.resume_ingestion_job_id,
     }
 

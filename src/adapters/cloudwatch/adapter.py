@@ -54,6 +54,10 @@ class CloudWatchSourceAdapter:
 
     def discover(self, spec: SourceSpec) -> Iterable[LogStreamRef]:
         log_groups = spec.params.get("log_groups")
+        if isinstance(log_groups, str):
+            # Any caller may hand this in as "/a,/b" (e.g. a raw API request, not just
+            # the CLI) — normalize here so iterating it never walks characters.
+            log_groups = [g.strip() for g in log_groups.split(",") if g.strip()]
         if not log_groups:
             log_group = spec.params.get("log_group")
             if not log_group:

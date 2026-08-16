@@ -79,6 +79,21 @@ class TestCloudWatchSourceAdapter:
         assert [r.stream_id for r in refs] == ["/a", "/b"]
         assert all(r.metadata["filter_pattern"] == "?ERROR" for r in refs)
 
+    def test_discover_splits_comma_separated_log_groups_string(self):
+        """
+        Regression test: a raw API/worker payload can hand log_groups in as a plain
+        string (e.g. "/a,/b") rather than a list. Iterating a string yields characters,
+        not log group names — discover() must normalize this itself so every caller is
+        safe, not just the CLI (which parses --param into a list already).
+        """
+        from src.adapters.cloudwatch.adapter import CloudWatchSourceAdapter
+
+        adapter = CloudWatchSourceAdapter(region="us-east-1")
+        spec = SourceSpec(adapter="cloudwatch", params={"log_groups": "/a,/b"})
+        refs = list(adapter.discover(spec))
+
+        assert [r.stream_id for r in refs] == ["/a", "/b"]
+
     def test_discover_single_log_group_param(self):
         from src.adapters.cloudwatch.adapter import CloudWatchSourceAdapter
 
