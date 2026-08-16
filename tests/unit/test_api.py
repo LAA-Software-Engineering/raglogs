@@ -173,6 +173,43 @@ class TestGetWorkerJobStatus:
         assert resp.status_code == 400
 
 
+# ── GET /ingestions (list) ────────────────────────────────────────────────────
+
+class TestListIngestions:
+    def _ctx_db_with_rows(self, rows):
+        mock_db = MagicMock()
+        mock_db.__enter__ = MagicMock(return_value=mock_db)
+        mock_db.__exit__ = MagicMock(return_value=False)
+        mock_db.execute.return_value.all.return_value = rows
+        return mock_db
+
+    def test_returns_list_of_summaries(self):
+        job = MagicMock()
+        job.id = uuid.uuid4()
+        job.parsed_count = 404
+        job.finished_at = datetime(2026, 8, 16, 5, 59, 0, tzinfo=timezone.utc)
+        mock_db = self._ctx_db_with_rows([(job, "sample_incident")])
+
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db):
+            resp = client.get("/ingestions")
+
+        assert resp.status_code == 200
+        ingestions = resp.json()["ingestions"]
+        assert len(ingestions) == 1
+        assert ingestions[0]["ingestion_job_id"] == str(job.id)
+        assert ingestions[0]["source_name"] == "sample_incident"
+        assert ingestions[0]["parsed_count"] == 404
+
+    def test_returns_empty_list_when_no_ingestions(self):
+        mock_db = self._ctx_db_with_rows([])
+
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db):
+            resp = client.get("/ingestions")
+
+        assert resp.status_code == 200
+        assert resp.json()["ingestions"] == []
+
+
 # ── GET /ingestions/latest ────────────────────────────────────────────────────
 
 class TestLatestIngestion:

@@ -2,6 +2,7 @@
 Ingestion API routes.
 
 POST /ingestions            — enqueue async ingest, return worker_job_id immediately
+GET  /ingestions            — list recent completed ingestion jobs (newest first)
 GET  /ingestions/jobs/{id}  — poll worker job status (pending|running|done|failed)
 GET  /ingestions/latest     — most recently completed ingestion job, if any
 GET  /ingestions/{id}       — fetch completed IngestionJob detail by ingestion_job_id
@@ -59,6 +60,17 @@ class LatestIngestionResponse(BaseModel):
     ingestion_job_id: Optional[str]
 
 
+class IngestionSummary(BaseModel):
+    ingestion_job_id: str
+    source_name: str
+    parsed_count: int
+    finished_at: Optional[str]
+
+
+class IngestionListResponse(BaseModel):
+    ingestions: list[IngestionSummary]
+
+
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 @router.post("", response_model=EnqueuedResponse, status_code=202)
@@ -98,6 +110,36 @@ def create_ingestion(request: IngestRequest):
         worker_job_id = str(job.id)
 
     return EnqueuedResponse(worker_job_id=worker_job_id, status="pending")
+
+
+@router.get("", response_model=IngestionListResponse)
+def list_ingestions():
+    """List recent completed ingestion jobs, newest first. Used by the web UI's ingestion picker."""
+    from sqlalchemy import desc, select
+
+    from src.db.models import IngestionJob, Source
+    from src.db.session import get_db
+
+    with get_db() as db:
+        rows = db.execute(
+            select(IngestionJob, Source.name)
+            .join(Source, Source.id == IngestionJob.source_id)
+            .where(IngestionJob.status == "completed")
+            .order_by(desc(IngestionJob.finished_at))
+            .limit(25)
+        ).all()
+
+        return IngestionListResponse(
+            ingestions=[
+                IngestionSummary(
+                    ingestion_job_id=str(job.id),
+                    source_name=source_name,
+                    parsed_count=job.parsed_count,
+                    finished_at=job.finished_at.isoformat() if job.finished_at else None,
+                )
+                for job, source_name in rows
+            ]
+        )
 
 
 @router.get("/jobs/{worker_job_id}", response_model=WorkerJobStatus)

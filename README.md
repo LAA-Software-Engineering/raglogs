@@ -765,6 +765,7 @@ make api
 |---|---|---|
 | `GET` | `/health` | Service and DB health check |
 | `POST` | `/ingestions` | Ingest log files |
+| `GET` | `/ingestions` | List recent completed ingestion jobs, newest first |
 | `GET` | `/ingestions/{job_id}` | Poll ingestion job status |
 | `GET` | `/ingestions/latest` | ID of the most recently completed ingestion job, if any |
 | `POST` | `/query/explain` | Explain a time window |
@@ -831,9 +832,10 @@ make web
 Already have Postgres running and migrated? `make api` starts just the server.
 
 Pick a time window (presets or a duration like `2h`), then switch between the
-**Explain**, **Timeline**, **Compare**, and **Ask** tabs. Like the CLI, it
-scopes queries to the most recently completed ingestion by default (via
-`GET /ingestions/latest`).
+**Explain**, **Timeline**, **Compare**, and **Ask** tabs. The **ingestion**
+dropdown in the top bar lists your 25 most recent completed ingestions (via
+`GET /ingestions`) and defaults to the latest one, matching the CLI; pick a
+different ingestion or "All ingestions" to change what a query is scoped to.
 
 The UI is server-rendered (Jinja2 + vanilla JS/CSS, no CORS, no node/npm) and
 calls the same `/query/*` JSON endpoints listed above.

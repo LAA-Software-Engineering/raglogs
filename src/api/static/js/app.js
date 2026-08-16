@@ -22,22 +22,43 @@ function confidenceBadge(confidence) {
   return `<span class="badge ${cls}">${escapeHtml(confidence)}</span>`;
 }
 
-// ── Latest ingestion resolution ─────────────────────────────────────────────
+// ── Ingestion picker ─────────────────────────────────────────────────────────
 
-let latestIngestionJobId = null;
-
-async function resolveLatestIngestion() {
-  const statusEl = document.getElementById("ingestion-status");
+async function loadIngestions() {
+  const select = document.getElementById("ingestion-select");
   try {
-    const resp = await fetch("/ingestions/latest");
+    const resp = await fetch("/ingestions");
     const data = await resp.json();
-    latestIngestionJobId = data.ingestion_job_id;
-    statusEl.textContent = latestIngestionJobId
-      ? `scoped to latest ingestion ${latestIngestionJobId.slice(0, 8)}`
-      : "no completed ingestion yet — showing all logs in window";
+    const ingestions = data.ingestions || [];
+
+    select.innerHTML = "";
+
+    const allOption = document.createElement("option");
+    allOption.value = "";
+    allOption.textContent = "All ingestions";
+    select.appendChild(allOption);
+
+    ingestions.forEach((ing) => {
+      const opt = document.createElement("option");
+      opt.value = ing.ingestion_job_id;
+      const shortId = ing.ingestion_job_id.slice(0, 8);
+      const when = fmtTime(ing.finished_at);
+      opt.textContent = `${shortId} · ${ing.source_name} · ${ing.parsed_count} logs · ${when}`;
+      select.appendChild(opt);
+    });
+
+    // Default to the most recent completed ingestion, matching CLI behavior.
+    if (ingestions.length) select.value = ingestions[0].ingestion_job_id;
   } catch (e) {
-    statusEl.textContent = "could not resolve latest ingestion";
+    select.innerHTML = '<option value="">could not load ingestions</option>';
+  } finally {
+    select.disabled = false;
   }
+}
+
+function selectedIngestionJobId() {
+  const value = document.getElementById("ingestion-select").value;
+  return value || null;
 }
 
 // ── Tabs ─────────────────────────────────────────────────────────────────────
@@ -77,7 +98,16 @@ function formToBody(form) {
     const trimmed = String(value).trim();
     if (trimmed !== "") body[key] = trimmed;
   });
-  if (latestIngestionJobId) body.ingestion_job_id = latestIngestionJobId;
+
+  const jobId = selectedIngestionJobId();
+  if (jobId) {
+    body.ingestion_job_id = jobId;
+  } else {
+    // "All ingestions" selected. Explain/ask already merge all ingestions
+    // when ingestion_job_id is omitted; timeline/compare need this explicit
+    // flag or they'll silently fall back to the latest ingestion.
+    body.all_ingestions = true;
+  }
   return body;
 }
 
@@ -241,5 +271,5 @@ document.addEventListener("DOMContentLoaded", () => {
   initTabs();
   initPresets();
   initForms();
-  resolveLatestIngestion();
+  loadIngestions();
 });

@@ -9,7 +9,12 @@
 <body>
   <header class="topbar">
     <div class="brand">raglogs</div>
-    <div class="ingestion-status" id="ingestion-status">resolving latest ingestion…</div>
+    <div class="ingestion-picker">
+      <label for="ingestion-select">ingestion</label>
+      <select id="ingestion-select" disabled>
+        <option value="">loading…</option>
+      </select>
+    </div>
   </header>
 
   <nav class="tabs" id="tabs">
