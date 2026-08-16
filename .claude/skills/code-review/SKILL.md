@@ -33,7 +33,7 @@ invent problems — if it's clean, say so.
 - Schema changes ship a new Alembic migration; applied migrations are untouched.
 
 **Config & security**
-- No hard-coded secrets, URLs, or paths — config comes from env via
+- No hard-coded secrets, URLs, or paths — config comes from env vars via
   `src/config/settings.py`. No secrets in the diff.
 - Untrusted log input isn't used to build SQL or shell strings unsafely.
 

@@ -71,7 +71,7 @@ src/config/       settings (env-driven)
 
 - Type annotations on all function signatures. Prefer explicit over clever;
   avoid abstractions that exist only to save lines.
-- Settings come from env via `src/config/settings.py` — never
+- Settings come from env vars via `src/config/settings.py` — never
   hard-code config or secrets.
 - New log sources are adapters in `src/adapters/` that yield `ParsedLogLine`;
   keep the core pipeline source-agnostic.

@@ -346,7 +346,7 @@ Delivery uses bounded retries with exponential backoff (max ~5 attempts, jittere
 }
 ```
 
-Server defaults (the existing settings env vars) apply when a field is omitted. Precedence: request field > per-key default > server default.
+Server defaults (the existing env vars) apply when a field is omitted. Precedence: request field > per-key default > server default.
 
 ---
 
