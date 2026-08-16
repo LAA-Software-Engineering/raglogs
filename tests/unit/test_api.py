@@ -184,6 +184,21 @@ class TestCreateIngestion:
         assert resp.status_code == 400
         assert resp.json()["detail"]["error_code"] == "ADAPTER_UNAVAILABLE"
 
+    def test_400_when_since_unparseable(self):
+        """
+        Regression test: an invalid `since` used to be stored as-is and only fail once
+        the worker picked up the job (202 now, 400 later, async). It should fail fast
+        at enqueue time instead, same as POST /query/explain does.
+        """
+        resp = client.post("/ingestions", json={
+            "paths": [],
+            "adapter": "cloudwatch",
+            "params": {"log_group": "/aws/lambda/x"},
+            "since": "not-a-duration",
+        })
+
+        assert resp.status_code == 400
+
     def test_422_when_paths_omitted_for_file_adapter(self):
         resp = client.post("/ingestions", json={"adapter": "file"})
         assert resp.status_code == 422

@@ -126,6 +126,17 @@ def create_ingestion(request: IngestRequest):
                 detail={"error_code": e.error_code, "message": str(e)},
             )
 
+        if request.since or request.from_time or request.to_time:
+            # Same validation POST /query/explain does at the route level — otherwise
+            # an unparseable `since` (e.g. "not-a-duration") 202s here and only fails
+            # once the worker picks it up.
+            from src.utils.time import resolve_window
+
+            try:
+                resolve_window(since=request.since, from_time=request.from_time, to_time=request.to_time)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+
     payload = {
         "paths": request.paths,
         "recursive": request.recursive,
