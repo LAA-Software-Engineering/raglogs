@@ -230,7 +230,7 @@ def ingest_from_source(
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> tuple[IngestionJob, IngestionStats]:
     """
-    Adapter-driven ingestion entry point (e.g. CloudWatch). Discovers streams via the
+    Adapter-driven ingestion entry point (e.g. CloudWatch, Loki). Discovers streams via the
     configured SourceAdapter, reads raw lines within `window`, and persists them through
     the same parse -> fingerprint -> LogEntry pipeline as ingest_files.
 

@@ -256,6 +256,36 @@ raglogs ingest ./logs/ --format json
 | `--env` | Default environment |
 | `--format` | `json`, `text`, or `auto` (default) |
 | `--with-embeddings` | Generate vector embeddings (requires embeddings provider) |
+| `--adapter` | Source adapter: `file` (default), `cloudwatch`, or `loki` |
+| `--param` | Adapter param as `key=value` (repeatable; non-file adapters) |
+| `--since` / `--from` / `--to` | Bounded window for pull adapters (default last 1h) |
+| `--resume-job` | Prior ingestion job UUID to resume cursors from |
+
+**Loki**
+
+Pull a bounded window from Grafana Loki via LogQL — no intermediate files.
+Auth and the default query come from env (`RAGLOGS_ADAPTER_LOKI_*`); URL,
+tenant, and query can also be passed per ingest.
+
+```bash
+export RAGLOGS_ADAPTER_LOKI_URL=http://localhost:3100
+raglogs ingest --adapter loki --param query='{app="api"}' --since 1h
+raglogs ingest --adapter loki --param query='{namespace="prod"}' \
+  --from 2026-03-12T22:00:00+00:00 --to 2026-03-12T22:30:00+00:00
+```
+
+```bash
+curl -X POST http://localhost:8000/ingestions \
+  -H "Content-Type: application/json" \
+  -d '{"adapter":"loki","params":{"query":"{app=\"api\"}"},"since":"1h"}'
+```
+
+| Param | Description |
+|---|---|
+| `query` / `queries` | LogQL selector (required unless `RAGLOGS_ADAPTER_LOKI_QUERY` is set) |
+| `url` | Override `RAGLOGS_ADAPTER_LOKI_URL` |
+| `tenant` | Override `RAGLOGS_ADAPTER_LOKI_TENANT` (`X-Scope-OrgID`) |
+| `limit` | Page size for `query_range` (default 5000) |
 
 **Output**
 
@@ -880,7 +910,7 @@ make clean
 ```
 raglogs/
 ├── src/
-│   ├── adapters/file/       File discovery and line reading
+│   ├── adapters/            Source adapters (file, cloudwatch, loki) → RawLogLine
 │   ├── api/routes/          FastAPI route handlers
 │   ├── cli/commands/        Typer CLI commands
 │   ├── config/              Pydantic settings
@@ -912,7 +942,6 @@ New source adapters go in `raglogs/adapters/`. Each adapter yields `ParsedLogLin
 ## Roadmap
 
 - Datadog adapter
-- Loki adapter
 - Kubernetes log export ingestion
 - Semantic cluster merging via pgvector
 - Markdown incident report export (`raglogs explain --format markdown > postmortem.md`)

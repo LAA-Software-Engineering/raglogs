@@ -32,6 +32,12 @@ class Settings(BaseSettings):
 
     # Adapters
     adapter_cloudwatch_region: str = "us-east-1"
+    adapter_loki_url: str = ""
+    adapter_loki_tenant: str = ""
+    adapter_loki_bearer_token: str = ""
+    adapter_loki_username: str = ""
+    adapter_loki_password: str = ""
+    adapter_loki_query: str = ""
 
     # Cluster scoring weights
     severity_weight_fatal: float = 5.0

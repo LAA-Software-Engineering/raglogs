@@ -119,6 +119,22 @@ class TestHealth:
 
         assert resp.json()["adapters"]["cloudwatch"].startswith("unavailable:")
 
+    def test_health_reports_loki_unavailable_without_url(self):
+        from src.api.routes.health import _adapter_health_cache
+        from src.core.errors import AdapterUnavailableError
+
+        _adapter_health_cache.pop("loki", None)
+
+        with patch("src.db.session.check_connection", return_value=True), \
+             _patch_get_db(execute_scalar=3), \
+             patch(
+                 "src.adapters.loki.adapter.LokiSourceAdapter.check_available",
+                 side_effect=AdapterUnavailableError("loki adapter requires RAGLOGS_ADAPTER_LOKI_URL"),
+             ):
+            resp = client.get("/health")
+
+        assert resp.json()["adapters"]["loki"].startswith("unavailable:")
+
 
 # ── POST /ingestions ──────────────────────────────────────────────────────────
 
@@ -179,6 +195,20 @@ class TestCreateIngestion:
             "paths": [],
             "adapter": "cloudwatch",
             "params": {},
+        })
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error_code"] == "ADAPTER_UNAVAILABLE"
+
+    def test_400_when_loki_params_missing_query(self):
+        """
+        Exercises the real registry + LokiSourceAdapter.discover() (no mocking) —
+        params validation for loki is local-only, no Loki server needed.
+        """
+        resp = client.post("/ingestions", json={
+            "paths": [],
+            "adapter": "loki",
+            "params": {"url": "http://loki:3100"},
         })
 
         assert resp.status_code == 400
