@@ -33,8 +33,7 @@ class Settings(BaseSettings):
     # Worker
     worker_poll_interval: int = 2          # seconds between idle polls
 
-    # Adapters — env names are unprefixed (LOKI_URL, CLOUDWATCH_REGION) so they
-    # match the source system, not RAGLOGS_ADAPTER_* / RAGLOGS_LOKI_*.
+    # Adapters — unprefixed so they match the source system (LOKI_URL, CLOUDWATCH_REGION).
     cloudwatch_region: str = Field(
         default="us-east-1",
         validation_alias=AliasChoices("CLOUDWATCH_REGION"),
