@@ -43,18 +43,48 @@ def claim_next_job(db):
 
 def run_ingest_job(db, worker_job) -> dict:
     """Execute an ingest worker job. Returns result dict."""
-    from src.core.ingestion.service import ingest_files
-
     payload = worker_job.payload_json
-    job, stats = ingest_files(
-        db=db,
-        paths=payload["paths"],
-        recursive=payload.get("recursive", False),
-        source_name=payload.get("source_name"),
-        default_service=payload.get("service"),
-        default_env=payload.get("env"),
-        fmt=payload.get("format", "auto"),
-    )
+    adapter = payload.get("adapter", "file")
+
+    if adapter == "file":
+        from src.core.ingestion.service import ingest_files
+
+        job, stats = ingest_files(
+            db=db,
+            paths=payload["paths"],
+            recursive=payload.get("recursive", False),
+            source_name=payload.get("source_name"),
+            default_service=payload.get("service"),
+            default_env=payload.get("env"),
+            fmt=payload.get("format", "auto"),
+        )
+    else:
+        from datetime import datetime
+
+        from src.adapters.base import SourceSpec, TimeWindow
+        from src.core.ingestion.service import ingest_from_source
+
+        window = None
+        if payload.get("window_start") and payload.get("window_end"):
+            window = TimeWindow(
+                start=datetime.fromisoformat(payload["window_start"]),
+                end=datetime.fromisoformat(payload["window_end"]),
+            )
+
+        spec = SourceSpec(
+            adapter=adapter,
+            params=payload.get("params", {}),
+            service=payload.get("service"),
+            env=payload.get("env"),
+        )
+        job, stats = ingest_from_source(
+            db=db,
+            spec=spec,
+            window=window,
+            source_name=payload.get("source_name"),
+            fmt=payload.get("format", "auto"),
+        )
+
     # Link worker job → ingestion job
     worker_job.ingestion_job_id = job.id
 

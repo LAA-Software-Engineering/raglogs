@@ -8,7 +8,7 @@ GET  /ingestions/latest     — most recently completed ingestion job, if any
 GET  /ingestions/{id}       — fetch completed IngestionJob detail by ingestion_job_id
 """
 import uuid
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -25,6 +25,10 @@ class IngestRequest(BaseModel):
     source_name: Optional[str] = None
     service: Optional[str] = None
     env: Optional[str] = None
+    adapter: str = "file"
+    params: dict[str, Any] = {}
+    window_start: Optional[str] = None
+    window_end: Optional[str] = None
 
 
 class EnqueuedResponse(BaseModel):
@@ -51,6 +55,7 @@ class IngestionJobDetail(BaseModel):
     parsed_count: int
     error_count: int
     error_message: Optional[str]
+    source_adapter: str
     created_at: str
     started_at: Optional[str]
     finished_at: Optional[str]
@@ -80,14 +85,28 @@ def create_ingestion(request: IngestRequest):
     Poll GET /ingestions/jobs/{worker_job_id} for progress.
     When done, use ingestion_job_id from the result to scope /query/explain.
     """
-    from src.adapters.file.adapter import discover_files
     from src.db.models import WorkerJob
     from src.db.session import get_db
 
-    # Validate paths before enqueuing — fail fast
-    files = discover_files(request.paths, recursive=request.recursive)
-    if not files:
-        raise HTTPException(status_code=400, detail="No log files found at the given paths")
+    if request.adapter == "file":
+        from src.adapters.file.adapter import discover_files
+
+        # Validate paths before enqueuing — fail fast
+        files = discover_files(request.paths, recursive=request.recursive)
+        if not files:
+            raise HTTPException(status_code=400, detail="No log files found at the given paths")
+    else:
+        from src.adapters.registry import get_adapter
+        from src.config import get_settings
+        from src.core.errors import AdapterUnavailableError
+
+        try:
+            get_adapter(request.adapter, get_settings())
+        except AdapterUnavailableError as e:
+            raise HTTPException(
+                status_code=400,
+                detail={"error_code": e.error_code, "message": str(e)},
+            )
 
     payload = {
         "paths": request.paths,
@@ -96,6 +115,10 @@ def create_ingestion(request: IngestRequest):
         "source_name": request.source_name,
         "service": request.service,
         "env": request.env,
+        "adapter": request.adapter,
+        "params": request.params,
+        "window_start": request.window_start,
+        "window_end": request.window_end,
     }
 
     with get_db() as db:
@@ -218,6 +241,7 @@ def get_ingestion_detail(ingestion_job_id: str):
             parsed_count=job.parsed_count,
             error_count=job.error_count,
             error_message=job.error_message,
+            source_adapter=job.source_adapter,
             created_at=job.created_at.isoformat(),
             started_at=job.started_at.isoformat() if job.started_at else None,
             finished_at=job.finished_at.isoformat() if job.finished_at else None,

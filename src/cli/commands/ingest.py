@@ -9,22 +9,35 @@ from rich.table import Table
 console = Console()
 
 
+def _parse_params(params: Optional[List[str]]) -> dict:
+    result = {}
+    for item in params or []:
+        key, _, value = item.partition("=")
+        result[key] = value
+    return result
+
+
 def ingest_cmd(
-    paths: List[str] = typer.Argument(..., help="Log file paths or directories (supports globs)"),
+    paths: Optional[List[str]] = typer.Argument(None, help="Log file paths or directories (supports globs); file adapter only"),
     recursive: bool = typer.Option(False, "--recursive", "-r", help="Recurse into directories"),
     source_name: Optional[str] = typer.Option(None, "--source-name", help="Logical source name"),
     service: Optional[str] = typer.Option(None, "--service", help="Default service name"),
     env: Optional[str] = typer.Option(None, "--env", help="Default environment"),
     fmt: str = typer.Option("auto", "--format", help="Log format: json|text|auto"),
     with_embeddings: bool = typer.Option(False, "--with-embeddings/--no-embeddings", help="Generate embeddings"),
+    adapter: str = typer.Option("file", "--adapter", help="Source adapter: file|cloudwatch"),
+    param: Optional[List[str]] = typer.Option(None, "--param", help="Adapter param as key=value (repeatable)"),
+    since: Optional[str] = typer.Option(None, "--since", help="Window start, ISO 8601 (non-file adapters)"),
+    until: Optional[str] = typer.Option(None, "--until", help="Window end, ISO 8601 (non-file adapters)"),
 ):
-    """Ingest log files into the database."""
-    from src.core.ingestion.service import ingest_files
+    """Ingest logs into the database."""
     from src.db.session import get_db
 
     console.print(f"[bold cyan]Ingesting logs...[/bold cyan]")
-    if paths:
+    if adapter == "file" and paths:
         console.print(f"  Paths: {', '.join(paths[:3])}{'...' if len(paths) > 3 else ''}")
+    elif adapter != "file":
+        console.print(f"  Adapter: {adapter}")
 
     start = time.time()
 
@@ -42,16 +55,47 @@ def ingest_cmd(
 
         try:
             with get_db() as db:
-                job, stats = ingest_files(
-                    db=db,
-                    paths=paths,
-                    recursive=recursive,
-                    source_name=source_name,
-                    default_service=service,
-                    default_env=env,
-                    fmt=fmt,
-                    progress_callback=on_progress,
-                )
+                if adapter == "file":
+                    from src.core.ingestion.service import ingest_files
+
+                    job, stats = ingest_files(
+                        db=db,
+                        paths=paths or [],
+                        recursive=recursive,
+                        source_name=source_name,
+                        default_service=service,
+                        default_env=env,
+                        fmt=fmt,
+                        progress_callback=on_progress,
+                    )
+                else:
+                    from datetime import datetime, timedelta, timezone
+
+                    from src.adapters.base import SourceSpec, TimeWindow
+                    from src.core.ingestion.service import ingest_from_source
+
+                    window = None
+                    if since or until:
+                        now = datetime.now(tz=timezone.utc)
+                        window = TimeWindow(
+                            start=datetime.fromisoformat(since) if since else now - timedelta(hours=1),
+                            end=datetime.fromisoformat(until) if until else now,
+                        )
+
+                    spec = SourceSpec(
+                        adapter=adapter,
+                        params=_parse_params(param),
+                        service=service,
+                        env=env,
+                    )
+                    job, stats = ingest_from_source(
+                        db=db,
+                        spec=spec,
+                        window=window,
+                        source_name=source_name,
+                        fmt=fmt,
+                        progress_callback=on_progress,
+                    )
                 job_id = str(job.id)  # read inside session before it closes
         except ValueError as e:
             console.print(f"[red]Error:[/red] {e}")

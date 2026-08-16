@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
-from typing import Generator, Optional
+from typing import Generator, Iterable, Iterator, Optional
+
+from src.adapters.base import LogStreamRef, RawLogLine, SourceSpec, TimeWindow
 
 
 def discover_files(paths: list[str], recursive: bool = False) -> list[Path]:
@@ -88,3 +90,26 @@ def read_lines(path: Path, encoding: str = "utf-8") -> Generator[str, None, None
                 yield line.rstrip("\n\r")
     except OSError as e:
         raise IOError(f"Cannot read file {path}: {e}") from e
+
+
+class FileSourceAdapter:
+    """SourceAdapter implementation over local files. Wraps discover_files/detect_format/read_lines
+    with no behavior change — see src/adapters/base.py for the protocol."""
+
+    name = "file"
+
+    def discover(self, spec: SourceSpec) -> Iterable[LogStreamRef]:
+        paths = spec.params.get("paths", [])
+        recursive = spec.params.get("recursive", False)
+        fmt_hint = spec.params.get("format", "auto")
+
+        for path in discover_files(paths, recursive=recursive):
+            yield LogStreamRef(
+                adapter=self.name,
+                stream_id=str(path),
+                metadata={"format": detect_format(path, hint=fmt_hint)},
+            )
+
+    def read(self, ref: LogStreamRef, window: TimeWindow) -> Iterator[RawLogLine]:
+        for line in read_lines(Path(ref.stream_id)):
+            yield RawLogLine(text=line, source_ref=ref.stream_id)

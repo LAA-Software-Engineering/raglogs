@@ -178,6 +178,38 @@ class TestProcessOne:
 
         assert job.finished_at is not None
 
+    def test_non_file_adapter_dispatches_to_ingest_from_source(self):
+        db = _mock_db()
+        job = _mock_worker_job(payload={
+            "adapter": "cloudwatch",
+            "params": {"log_group": "/aws/lambda/x"},
+            "service": None,
+            "env": None,
+            "source_name": None,
+            "format": "auto",
+        })
+        db.execute.return_value.scalar_one_or_none.return_value = job
+
+        mock_ingestion_job = MagicMock()
+        mock_ingestion_job.id = "ingestion-uuid-cw"
+        mock_stats = MagicMock()
+        mock_stats.files_processed = 1
+        mock_stats.lines_read = 10
+        mock_stats.parsed_count = 10
+        mock_stats.error_count = 0
+        mock_stats.services_detected = set()
+        mock_stats.duration_seconds = 0.1
+
+        with patch(
+            "src.core.ingestion.service.ingest_from_source",
+            return_value=(mock_ingestion_job, mock_stats),
+        ) as mock_ingest:
+            result = process_one(db)
+
+        assert result is True
+        assert job.status == "done"
+        mock_ingest.assert_called_once()
+
     def test_unknown_job_type_fails_gracefully(self):
         db = _mock_db()
         job = _mock_worker_job(job_type="unknown_type")
