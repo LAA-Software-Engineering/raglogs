@@ -31,6 +31,11 @@ class Settings(BaseSettings):
 
     # Adapters
     adapter_cloudwatch_region: str = "us-east-1"
+    datadog_api_key: str = ""
+    datadog_app_key: str = ""
+    datadog_site: str = "datadoghq.com"
+    datadog_page_size: int = 1000
+    datadog_max_rows: int = 10000
 
     # Cluster scoring weights
     severity_weight_fatal: float = 5.0

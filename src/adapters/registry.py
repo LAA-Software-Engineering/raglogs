@@ -1,7 +1,7 @@
 from src.adapters.base import SourceAdapter
 from src.core.errors import AdapterUnavailableError
 
-ADAPTER_NAMES = ("file", "cloudwatch", "k8s")
+ADAPTER_NAMES = ("file", "cloudwatch", "datadog", "k8s")
 
 
 def get_adapter(name: str, settings) -> SourceAdapter:
@@ -15,6 +15,16 @@ def get_adapter(name: str, settings) -> SourceAdapter:
         from src.adapters.cloudwatch.adapter import CloudWatchSourceAdapter
 
         return CloudWatchSourceAdapter(region=settings.adapter_cloudwatch_region)
+    if name == "datadog":
+        from src.adapters.datadog.adapter import DatadogSourceAdapter
+
+        return DatadogSourceAdapter(
+            api_key=settings.datadog_api_key,
+            app_key=settings.datadog_app_key,
+            site=settings.datadog_site,
+            page_size=settings.datadog_page_size,
+            max_rows=settings.datadog_max_rows,
+        )
     if name in ("k8s", "kubernetes"):
         from src.adapters.k8s.adapter import KubernetesExportAdapter
 

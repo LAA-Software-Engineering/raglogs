@@ -119,6 +119,13 @@ class TestHealth:
 
         assert resp.json()["adapters"]["cloudwatch"].startswith("unavailable:")
 
+    def test_health_reports_datadog_unavailable_without_keys(self):
+        with patch("src.db.session.check_connection", return_value=True), \
+             _patch_get_db(execute_scalar=3):
+            resp = client.get("/health")
+
+        assert resp.json()["adapters"]["datadog"].startswith("unavailable:")
+
 
 # ── POST /ingestions ──────────────────────────────────────────────────────────
 
@@ -258,6 +265,42 @@ class TestCreateIngestion:
 
         assert resp.status_code == 202
         assert resp.json()["status"] == "pending"
+
+    def test_202_for_datadog_adapter_with_default_query(self):
+        """
+        Datadog discover() is local-only and defaults query to '*', so enqueue
+        should succeed without keys or an explicit query param.
+        """
+        wj_id = str(uuid.uuid4())
+        mock_db = _ctx_db()
+
+        def capture_add(obj):
+            obj.id = uuid.UUID(wj_id)
+
+        mock_db.add.side_effect = capture_add
+
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db):
+            resp = client.post("/ingestions", json={
+                "paths": [],
+                "adapter": "datadog",
+                "params": {},
+                "since": "1h",
+            })
+
+        assert resp.status_code == 202
+        assert resp.json()["status"] == "pending"
+
+    def test_400_for_datadog_non_datadog_site(self):
+        """params.site must be a Datadog hostname — a full URL must not leak keys."""
+        resp = client.post("/ingestions", json={
+            "paths": [],
+            "adapter": "datadog",
+            "params": {"site": "http://evil.example"},
+            "since": "1h",
+        })
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error_code"] == "ADAPTER_UNAVAILABLE"
 
 
 # ── GET /ingestions/jobs/{id} ─────────────────────────────────────────────────

@@ -130,7 +130,7 @@ def create_ingestion(request: IngestRequest):
         try:
             adapter = get_adapter(request.adapter, get_settings())
             # Fail fast on missing/invalid params (e.g. no log_group) — discover() for
-            # cloudwatch is local-only validation, no network call.
+            # cloudwatch/datadog is local-only validation, no network call.
             refs = list(adapter.discover(SourceSpec(adapter=request.adapter, params=params)))
         except AdapterUnavailableError as e:
             raise HTTPException(
