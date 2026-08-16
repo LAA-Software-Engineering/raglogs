@@ -1,5 +1,3 @@
-import os
-
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -39,7 +37,7 @@ def status_cmd():
         except Exception as e:
             table.add_row("Log entries:", f"[red]Error: {e}[/red]")
 
-    openai_key = os.environ.get("OPENAI_API_KEY", "")
+    openai_key = settings.openai_api_key
 
     table.add_row("", "")
     table.add_row("LLM provider:", _provider_status(settings.llm_provider, openai_key if settings.llm_provider == "openai" else "n/a"))
