@@ -205,7 +205,7 @@ def _client() -> httpx.Client:
 class DatadogSourceAdapter:
     """SourceAdapter over the Datadog Logs Search API (v2).
 
-    Auth via ``RAGLOGS_ADAPTER_DATADOG_API_KEY`` + ``RAGLOGS_ADAPTER_DATADOG_APP_KEY``
+    Auth via ``RAGLOGS_DATADOG_API_KEY`` + ``RAGLOGS_DATADOG_APP_KEY``
     — keys are never accepted as SourceSpec params.
     """
 
@@ -232,8 +232,8 @@ class DatadogSourceAdapter:
         """
         if not self.api_key or not self.app_key:
             raise AdapterUnavailableError(
-                "datadog adapter requires RAGLOGS_ADAPTER_DATADOG_API_KEY "
-                "and RAGLOGS_ADAPTER_DATADOG_APP_KEY"
+                "datadog adapter requires RAGLOGS_DATADOG_API_KEY "
+                "and RAGLOGS_DATADOG_APP_KEY"
             )
 
     def discover(self, spec: SourceSpec) -> Iterable[LogStreamRef]:

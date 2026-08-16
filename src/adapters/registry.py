@@ -19,10 +19,10 @@ def get_adapter(name: str, settings) -> SourceAdapter:
         from src.adapters.datadog.adapter import DatadogSourceAdapter
 
         return DatadogSourceAdapter(
-            api_key=settings.adapter_datadog_api_key,
-            app_key=settings.adapter_datadog_app_key,
-            site=settings.adapter_datadog_site,
-            page_size=settings.adapter_datadog_page_size,
-            max_rows=settings.adapter_datadog_max_rows,
+            api_key=settings.datadog_api_key,
+            app_key=settings.datadog_app_key,
+            site=settings.datadog_site,
+            page_size=settings.datadog_page_size,
+            max_rows=settings.datadog_max_rows,
         )
     raise AdapterUnavailableError(f"Unknown adapter: {name!r}")

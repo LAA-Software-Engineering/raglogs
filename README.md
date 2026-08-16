@@ -569,11 +569,11 @@ All settings are read from `.env`, environment variables, or CLI flags. Priority
 | `RAGLOGS_MAX_CLUSTERS_FOR_EXPLAIN` | `10` | Max clusters sent to the explain pipeline |
 | `RAGLOGS_MAX_EVIDENCE_ITEMS` | `8` | Max evidence lines in output |
 | `RAGLOGS_ADAPTER_CLOUDWATCH_REGION` | `us-east-1` | AWS region for `--adapter cloudwatch` |
-| `RAGLOGS_ADAPTER_DATADOG_API_KEY` | _(empty)_ | Datadog API key (`logs_read_data`) |
-| `RAGLOGS_ADAPTER_DATADOG_APP_KEY` | _(empty)_ | Datadog application key |
-| `RAGLOGS_ADAPTER_DATADOG_SITE` | `datadoghq.com` | Datadog site (`us3.datadoghq.com`, `datadoghq.eu`, …) |
-| `RAGLOGS_ADAPTER_DATADOG_PAGE_SIZE` | `1000` | Logs per Datadog page (API max 1000) |
-| `RAGLOGS_ADAPTER_DATADOG_MAX_ROWS` | `10000` | Max events pulled in one Datadog ingest run |
+| `RAGLOGS_DATADOG_API_KEY` | _(empty)_ | Datadog API key (`logs_read_data`) |
+| `RAGLOGS_DATADOG_APP_KEY` | _(empty)_ | Datadog application key |
+| `RAGLOGS_DATADOG_SITE` | `datadoghq.com` | Datadog site (`us3.datadoghq.com`, `datadoghq.eu`, …) |
+| `RAGLOGS_DATADOG_PAGE_SIZE` | `1000` | Logs per Datadog page (API max 1000) |
+| `RAGLOGS_DATADOG_MAX_ROWS` | `10000` | Max events pulled in one Datadog ingest run |
 
 ---
 
@@ -929,8 +929,8 @@ New source adapters go in `src/adapters/` and implement `SourceAdapter` (`discov
 - Auth: `DD-API-KEY` + `DD-APPLICATION-KEY` (application key needs `logs_read_data`). Keys come from env only — never CLI `--param`.
 - Endpoint: `POST https://api.<site>/api/v2/logs/events/search` with an absolute `from`/`to` window (relative ranges drop events while paginating).
 - Pagination: cursor from `meta.page.after`; resume with `--resume-job`.
-- Page size: default 1000, Datadog hard max 1000 (`--param page_size=N` or `RAGLOGS_ADAPTER_DATADOG_PAGE_SIZE`).
-- Max rows per run: default 10000 (`--param max_rows=N` or `RAGLOGS_ADAPTER_DATADOG_MAX_ROWS`). Hitting the cap saves the next cursor for resume.
+- Page size: default 1000, Datadog hard max 1000 (`--param page_size=N` or `RAGLOGS_DATADOG_PAGE_SIZE`).
+- Max rows per run: default 10000 (`--param max_rows=N` or `RAGLOGS_DATADOG_MAX_ROWS`). Hitting the cap saves the next cursor for resume.
 - Rate limits: HTTP 429 and 5xx are retried up to 3 times with exponential backoff; a persistent failure marks the job `ADAPTER_UNAVAILABLE` (or `partial: true` if some events already landed).
 - Field mapping: Datadog `status` → `level`; `service` / `host` / `message` / `timestamp` pass through; `env` from the `env:` tag or attributes; `trace_id` / `request_id` from nested custom attributes when present.
 
