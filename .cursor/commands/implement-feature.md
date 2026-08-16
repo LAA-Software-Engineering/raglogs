@@ -16,7 +16,7 @@ evidence → explain / timeline / compare). See `AGENTS.md`.
    - Schema change → new Alembic migration (`alembic revision`); never edit an
      applied one.
 2. **Implement**: type-annotate signatures, match surrounding style, read config
-   via `get_settings()` (`RAGLOGS_` env prefix), route model calls through
+   via `get_settings()`, route model calls through
    `src/core/llm/provider.py`, keep the `noop` provider working.
 3. **Test**: unit tests in `tests/unit/` (no DB); normalization changes get a
    before/after case in `tests/unit/test_normalization.py`; DB-backed behavior in

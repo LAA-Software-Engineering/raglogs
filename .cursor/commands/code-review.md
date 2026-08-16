@@ -15,7 +15,7 @@ If it's clean, say so — don't invent problems.
   `src/core/llm/provider.py` and the `noop` provider still works; schema changes
   add a new Alembic migration and leave applied ones untouched.
 - **Config & security**: no hard-coded secrets/URLs/paths (config from
-  `RAGLOGS_*` via `src/config/settings.py`); no secrets in the diff; untrusted
+  `src/config/settings.py`); no secrets in the diff; untrusted
   log input never builds SQL/shell strings unsafely.
 - **Tests & style**: functional changes include tests; normalization changes
   include a before/after case; type annotations present. Run `make lint` and
