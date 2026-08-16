@@ -237,7 +237,7 @@ raglogs init --no-migrate   # skip migrations
 
 ### `raglogs ingest`
 
-Ingests logs into the database from local files or a pull adapter (CloudWatch, Datadog), or from Kubernetes log exports. File mode supports JSON and plain-text formats, single files, directories, and glob patterns.
+Ingests logs into the database from local files, a pull adapter (CloudWatch, Datadog, Loki), or Kubernetes log exports. File mode supports JSON and plain-text formats, single files, directories, and glob patterns.
 
 ```bash
 raglogs ingest ./logs/app.log
@@ -275,11 +275,42 @@ raglogs ingest --adapter k8s ./node-logs.tar.gz
 | `--env` | Default environment |
 | `--format` | `json`, `text`, or `auto` (default) |
 | `--with-embeddings` | Generate vector embeddings (requires embeddings provider) |
-| `--adapter` | `file` (default), `cloudwatch`, `datadog`, or `k8s` |
+| `--adapter` | `file` (default), `cloudwatch`, `datadog`, `loki`, or `k8s` |
 | `--param` | Adapter param as `key=value` (repeatable) |
 | `--since` | Window for pull adapters, e.g. `30m`, `1h`, `24h` (default last 1h) |
 | `--from` / `--to` | Explicit ISO 8601 window bounds (pull adapters) |
 | `--resume-job` | Prior ingestion job UUID to resume pagination cursors from |
+
+**Loki**
+
+Pull a bounded window from Grafana Loki via LogQL — no intermediate files.
+Auth and the Loki origin come from env (`LOKI_*`); tenant and query can be
+passed per ingest. Stream labels are mapped onto `service` / `environment` /
+`host` (`app`/`service`/`job`, `namespace`/`env`, `pod`/`instance`).
+
+`query_range`'s `limit` is global across matching streams. Paginating by
+advancing `start` to the latest timestamp in a full page can skip earlier
+lines from other streams in a wide selector — prefer a narrow LogQL query
+when completeness matters.
+
+```bash
+export LOKI_URL=http://localhost:3100
+raglogs ingest --adapter loki --param query='{app="api"}' --since 1h
+raglogs ingest --adapter loki --param query='{namespace="prod"}' \
+  --from 2026-03-12T22:00:00+00:00 --to 2026-03-12T22:30:00+00:00
+```
+
+```bash
+curl -X POST http://localhost:8000/ingestions \
+  -H "Content-Type: application/json" \
+  -d '{"adapter":"loki","params":{"query":"{app=\"api\"}"},"since":"1h"}'
+```
+
+| Param | Description |
+|---|---|
+| `query` / `queries` | LogQL selector (required unless `LOKI_QUERY` is set) |
+| `tenant` | Override `LOKI_TENANT` (`X-Scope-OrgID`) |
+| `limit` | Page size for `query_range` (default 5000, Loki max) |
 
 **Output**
 
@@ -910,7 +941,7 @@ make clean
 ```
 raglogs/
 ├── src/
-│   ├── adapters/            Log source adapters (file, cloudwatch, datadog, k8s)
+│   ├── adapters/            Log source adapters (file, cloudwatch, datadog, loki, k8s)
 │   ├── api/routes/          FastAPI route handlers
 │   ├── cli/commands/        Typer CLI commands
 │   ├── config/              Pydantic settings
@@ -951,7 +982,8 @@ New source adapters go in `src/adapters/` and implement `SourceAdapter` (`discov
 
 ## Roadmap
 
-- Loki adapter
+## Roadmap
+
 - Semantic cluster merging via pgvector
 - Markdown incident report export (`raglogs explain --format markdown > postmortem.md`)
 

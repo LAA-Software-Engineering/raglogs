@@ -1,4 +1,5 @@
 from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -36,6 +37,12 @@ class Settings(BaseSettings):
     datadog_site: str = "datadoghq.com"
     datadog_page_size: int = 1000
     datadog_max_rows: int = 10000
+    loki_url: str = ""
+    loki_tenant: str = ""
+    loki_bearer_token: str = ""
+    loki_username: str = ""
+    loki_password: str = ""
+    loki_query: str = ""
 
     # Cluster scoring weights
     severity_weight_fatal: float = 5.0

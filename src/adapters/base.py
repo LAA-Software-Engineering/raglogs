@@ -31,13 +31,17 @@ class LogStreamRef:
 
 @dataclass
 class RawLogLine:
-    """One unparsed line plus its provenance, ready for the parser → normalization pipeline."""
+    """One unparsed line plus its provenance, ready for the parser → normalization pipeline.
+
+    Adapters may fill `default_service` / `default_environment` / `default_host` from
+    source metadata (Loki stream labels, k8s pod fields). Ingestion uses them only
+    when the parsed line and SourceSpec do not already set those fields — core stays
+    source-agnostic.
+    """
 
     text: str
     source_ref: str
     received_at: Optional[datetime] = None
-    # Adapter-inferred fallbacks (e.g. k8s path / kubectl prefix). The line's own
-    # parsed fields win; these fill in when the payload has no service/env/host.
     default_service: Optional[str] = None
     default_environment: Optional[str] = None
     default_host: Optional[str] = None

@@ -100,7 +100,7 @@ The normalization step (`src/core/normalization/patterns.py`) determines cluster
 
 **Log source adapters**
 
-New adapters go in `src/adapters/`. Each adapter yields `ParsedLogLine` objects. The rest of the pipeline is fully source-agnostic. CloudWatch, Datadog, and Kubernetes log exports (`k8s`) are already supported. Useful next adapter: Loki.
+New adapters go in `src/adapters/`. Each adapter yields `ParsedLogLine` objects. The rest of the pipeline is fully source-agnostic. CloudWatch, Datadog, Loki, and Kubernetes log exports (`k8s`) are already supported.
 
 **Trigger patterns**
 

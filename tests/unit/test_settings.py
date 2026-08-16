@@ -7,6 +7,7 @@ def test_reads_unprefixed_env(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setenv("ADAPTER_CLOUDWATCH_REGION", "eu-west-1")
+    monkeypatch.setenv("LOKI_URL", "http://loki:3100")
 
     settings = Settings(_env_file=None)
 
@@ -14,6 +15,7 @@ def test_reads_unprefixed_env(monkeypatch):
     assert settings.llm_provider == "openai"
     assert settings.openai_api_key == "sk-test"
     assert settings.adapter_cloudwatch_region == "eu-west-1"
+    assert settings.loki_url == "http://loki:3100"
 
 
 def test_ignores_legacy_raglogs_prefix(monkeypatch):

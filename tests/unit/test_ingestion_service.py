@@ -243,6 +243,68 @@ class TestIngestFromSource:
         assert len(entries) == 1
         assert entries[0].timestamp == event_time
 
+    def test_raw_line_defaults_fill_service_env_host(self, monkeypatch):
+        """Adapters (Loki labels, k8s fields) may set RawLogLine defaults; ingestion
+        should persist them when the parsed line has no service/env/host."""
+        class LabelAdapter:
+            name = "labels"
+
+            def discover(self, spec):
+                yield LogStreamRef(adapter=self.name, stream_id="s1")
+
+            def read(self, ref, window):
+                yield RawLogLine(
+                    text="plain line with no fields",
+                    source_ref='{app="api", namespace="prod"}',
+                    default_service="api",
+                    default_environment="prod",
+                    default_host="api-7b9",
+                )
+
+        db = _mock_db()
+        entries = []
+        db.bulk_save_objects.side_effect = lambda objs: entries.extend(objs)
+        _patch_get_adapter(monkeypatch, LabelAdapter())
+
+        job, stats = ingest_from_source(
+            db=db, spec=SourceSpec(adapter="labels", params={}), window=_WINDOW,
+        )
+
+        assert job.status == "completed"
+        assert entries[0].service == "api"
+        assert entries[0].environment == "prod"
+        assert entries[0].host == "api-7b9"
+        assert "api" in stats.services_detected
+
+    def test_spec_overrides_raw_line_defaults(self, monkeypatch):
+        class LabelAdapter:
+            name = "labels"
+
+            def discover(self, spec):
+                yield LogStreamRef(adapter=self.name, stream_id="s1")
+
+            def read(self, ref, window):
+                yield RawLogLine(
+                    text="plain line",
+                    source_ref="s1",
+                    default_service="from-labels",
+                    default_environment="from-labels",
+                    default_host="pod-1",
+                )
+
+        db = _mock_db()
+        entries = []
+        db.bulk_save_objects.side_effect = lambda objs: entries.extend(objs)
+        _patch_get_adapter(monkeypatch, LabelAdapter())
+
+        spec = SourceSpec(adapter="labels", params={}, service="cli-svc", env="staging")
+        job, stats = ingest_from_source(db=db, spec=spec, window=_WINDOW)
+
+        assert job.status == "completed"
+        assert entries[0].service == "cli-svc"
+        assert entries[0].environment == "staging"
+        assert entries[0].host == "pod-1"
+
     def test_job_source_ref_set_from_refs(self, monkeypatch):
         db = _mock_db()
         _patch_get_adapter(monkeypatch, FakeAdapter(["a line"], num_refs=2))
