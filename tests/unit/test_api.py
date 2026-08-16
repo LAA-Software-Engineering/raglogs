@@ -173,6 +173,110 @@ class TestGetWorkerJobStatus:
         assert resp.status_code == 400
 
 
+# ── GET /ingestions (list) ────────────────────────────────────────────────────
+
+class TestListIngestions:
+    def _ctx_db_with_rows(self, rows):
+        mock_db = MagicMock()
+        mock_db.__enter__ = MagicMock(return_value=mock_db)
+        mock_db.__exit__ = MagicMock(return_value=False)
+        mock_db.execute.return_value.all.return_value = rows
+        return mock_db
+
+    def test_returns_list_of_summaries(self):
+        job = MagicMock()
+        job.id = uuid.uuid4()
+        job.parsed_count = 404
+        job.finished_at = datetime(2026, 8, 16, 5, 59, 0, tzinfo=timezone.utc)
+        mock_db = self._ctx_db_with_rows([(job, "sample_incident")])
+
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db):
+            resp = client.get("/ingestions")
+
+        assert resp.status_code == 200
+        ingestions = resp.json()["ingestions"]
+        assert len(ingestions) == 1
+        assert ingestions[0]["ingestion_job_id"] == str(job.id)
+        assert ingestions[0]["source_name"] == "sample_incident"
+        assert ingestions[0]["parsed_count"] == 404
+
+    def test_returns_empty_list_when_no_ingestions(self):
+        mock_db = self._ctx_db_with_rows([])
+
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db):
+            resp = client.get("/ingestions")
+
+        assert resp.status_code == 200
+        assert resp.json()["ingestions"] == []
+
+
+# ── GET /ingestions/latest ────────────────────────────────────────────────────
+
+class TestLatestIngestion:
+    def _ctx_db_with_scalar_one_or_none(self, job):
+        mock_db = MagicMock()
+        mock_db.__enter__ = MagicMock(return_value=mock_db)
+        mock_db.__exit__ = MagicMock(return_value=False)
+        mock_db.execute.return_value.scalar_one_or_none.return_value = job
+        return mock_db
+
+    def test_returns_job_id_when_completed_ingestion_exists(self):
+        job = MagicMock()
+        job.id = uuid.uuid4()
+        mock_db = self._ctx_db_with_scalar_one_or_none(job)
+
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db):
+            resp = client.get("/ingestions/latest")
+
+        assert resp.status_code == 200
+        assert resp.json()["ingestion_job_id"] == str(job.id)
+
+    def test_returns_null_when_no_completed_ingestion(self):
+        mock_db = self._ctx_db_with_scalar_one_or_none(None)
+
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db):
+            resp = client.get("/ingestions/latest")
+
+        assert resp.status_code == 200
+        assert resp.json()["ingestion_job_id"] is None
+
+    def test_not_swallowed_by_ingestion_job_id_path_param(self):
+        """
+        /ingestions/latest must be registered before /{ingestion_job_id},
+        otherwise "latest" is parsed as an invalid UUID and 400s.
+        """
+        mock_db = self._ctx_db_with_scalar_one_or_none(None)
+
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db):
+            resp = client.get("/ingestions/latest")
+
+        assert resp.status_code != 400
+
+
+# ── GET / (web UI shell) ──────────────────────────────────────────────────────
+
+class TestUIShell:
+    def test_index_returns_200_html(self):
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert "text/html" in resp.headers["content-type"]
+        assert "raglogs" in resp.text
+
+    def test_index_includes_all_four_tabs(self):
+        resp = client.get("/")
+        for tab in ("Explain", "Timeline", "Compare", "Ask"):
+            assert tab in resp.text
+
+    def test_static_css_served(self):
+        resp = client.get("/static/css/app.css")
+        assert resp.status_code == 200
+        assert "text/css" in resp.headers["content-type"]
+
+    def test_static_js_served(self):
+        resp = client.get("/static/js/app.js")
+        assert resp.status_code == 200
+
+
 # ── POST /query/explain ───────────────────────────────────────────────────────
 
 class TestExplainEndpoint:
@@ -263,6 +367,66 @@ class TestExplainEndpoint:
     def test_missing_time_params_returns_400(self):
         resp = client.post("/query/explain", json={})
         assert resp.status_code == 400
+
+
+# ── POST /query/ask ────────────────────────────────────────────────────────────
+
+class TestAskEndpoint:
+    def _mock_result(self):
+        from src.core.retrieval.question_router import AskResult
+
+        return AskResult(
+            question="why did checkout fail?",
+            answer_text="Stripe signature verification failed for /webhooks/stripe.",
+            evidence_items=["184 events: 'Stripe signature verification failed' in billing-worker"],
+            clusters_used=[{"message": "Stripe signature verification failed", "count": 184, "services": ["billing-worker"]}],
+            total_matches=184,
+        )
+
+    def test_returns_200_with_answer(self):
+        mock_db = _ctx_db()
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db), \
+             patch("src.core.retrieval.question_router.answer_question", return_value=self._mock_result()):
+            resp = client.post("/query/ask", json={"question": "why did checkout fail?", "since": "1h"})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["answer"] == "Stripe signature verification failed for /webhooks/stripe."
+        assert data["total_matches"] == 184
+
+    def test_ingestion_job_id_passed_through(self):
+        """
+        Regression test: the ingestion picker in the web UI sends ingestion_job_id
+        on every request, including Ask. AskRequest previously had no such field,
+        so pydantic silently dropped it and Ask always searched across every
+        ingestion regardless of what the user selected.
+        """
+        ij_id = str(uuid.uuid4())
+        mock_db = _ctx_db()
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db), \
+             patch("src.core.retrieval.question_router.answer_question", return_value=self._mock_result()) as mock_answer:
+            resp = client.post("/query/ask", json={
+                "question": "why did checkout fail?",
+                "since": "1h",
+                "ingestion_job_id": ij_id,
+            })
+
+        assert resp.status_code == 200
+        call_kwargs = mock_answer.call_args.kwargs
+        assert str(call_kwargs["ingestion_job_id"]) == ij_id
+
+    def test_invalid_ingestion_job_id_returns_400(self):
+        resp = client.post("/query/ask", json={
+            "question": "why did checkout fail?",
+            "since": "1h",
+            "ingestion_job_id": "not-a-uuid",
+        })
+        assert resp.status_code == 400
+        assert "ingestion_job_id" in resp.json()["detail"]
+
+    def test_question_required(self):
+        resp = client.post("/query/ask", json={})
+        assert resp.status_code == 422
 
 
 # ── POST /query/clusters ──────────────────────────────────────────────────────

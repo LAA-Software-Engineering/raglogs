@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime
 from typing import Optional
 
@@ -13,6 +14,7 @@ class AskRequest(BaseModel):
     from_time: Optional[datetime] = None
     to_time: Optional[datetime] = None
     service: Optional[str] = None
+    ingestion_job_id: Optional[str] = None
 
 
 @router.post("/ask")
@@ -32,6 +34,13 @@ def ask_endpoint(request: AskRequest):
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
+    ingestion_job_id: Optional[uuid.UUID] = None
+    if request.ingestion_job_id:
+        try:
+            ingestion_job_id = uuid.UUID(request.ingestion_job_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid ingestion_job_id")
+
     try:
         with get_db() as db:
             result = answer_question(
@@ -40,6 +49,7 @@ def ask_endpoint(request: AskRequest):
                 window_start=window_start,
                 window_end=window_end,
                 service=request.service,
+                ingestion_job_id=ingestion_job_id,
             )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
