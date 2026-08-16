@@ -34,17 +34,22 @@ def _mock_db(existing_source=None):
 class FakeAdapter:
     name = "fake"
 
-    def __init__(self, lines, num_refs=1):
+    def __init__(self, lines, num_refs=1, received_at=None):
         self._lines = lines
         self._num_refs = num_refs
+        self._received_at = received_at
+        self.windows_seen = []
+        self.cursors_seen = []
 
     def discover(self, spec):
         for i in range(self._num_refs):
             yield LogStreamRef(adapter=self.name, stream_id=f"stream-{i}")
 
     def read(self, ref, window):
+        self.windows_seen.append(window)
+        self.cursors_seen.append(ref.cursor)
         for text in self._lines:
-            yield RawLogLine(text=text, source_ref=ref.stream_id)
+            yield RawLogLine(text=text, source_ref=ref.stream_id, received_at=self._received_at)
 
 
 class FailingAdapter:
@@ -104,12 +109,66 @@ class TestIngestFromSource:
         assert "api" in stats.services_detected
 
     def test_defaults_window_when_not_given(self, monkeypatch):
+        """
+        Regression test: a missing window used to default to epoch-1970 -> now, which
+        for a pull-based adapter means querying a 50+ year range. It should default to
+        a bounded recent window (last 1h) instead.
+        """
+        from datetime import timedelta
+
         db = _mock_db()
-        _patch_get_adapter(monkeypatch, FakeAdapter(["a line"]))
+        fake = FakeAdapter(["a line"])
+        _patch_get_adapter(monkeypatch, fake)
 
         job, stats = ingest_from_source(db=db, spec=SourceSpec(adapter="fake", params={}))
 
         assert job.status == "completed"
+        seen_window = fake.windows_seen[0]
+        assert seen_window.end - seen_window.start <= timedelta(hours=1, minutes=1)
+        assert seen_window.start.year == datetime.now(tz=timezone.utc).year
+
+    def test_resume_cursors_applied_to_discovered_refs(self, monkeypatch):
+        db = _mock_db()
+        fake = FakeAdapter(["a line"])
+        _patch_get_adapter(monkeypatch, fake)
+
+        job, stats = ingest_from_source(
+            db=db,
+            spec=SourceSpec(adapter="fake", params={}),
+            window=_WINDOW,
+            resume_cursors={"stream-0": "tok-123"},
+        )
+
+        assert job.status == "completed"
+        assert fake.cursors_seen == ["tok-123"]
+
+    def test_timestamp_falls_back_to_received_at(self, monkeypatch):
+        """
+        Regression test: CloudWatch lines with no parseable timestamp field used to be
+        persisted with LogEntry.timestamp=None, which drops them from every windowed
+        query (clustering/explain filter on a non-null in-window timestamp).
+        """
+        db = _mock_db()
+        entries = []
+        db.bulk_save_objects.side_effect = lambda objs: entries.extend(objs)
+
+        event_time = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        fake = FakeAdapter(["plain text with no timestamp field"], received_at=event_time)
+        _patch_get_adapter(monkeypatch, fake)
+
+        job, stats = ingest_from_source(db=db, spec=SourceSpec(adapter="fake", params={}), window=_WINDOW)
+
+        assert job.status == "completed"
+        assert len(entries) == 1
+        assert entries[0].timestamp == event_time
+
+    def test_job_source_ref_set_from_refs(self, monkeypatch):
+        db = _mock_db()
+        _patch_get_adapter(monkeypatch, FakeAdapter(["a line"], num_refs=2))
+
+        job, stats = ingest_from_source(db=db, spec=SourceSpec(adapter="fake", params={}), window=_WINDOW)
+
+        assert job.source_ref == "stream-0, stream-1"
 
     def test_no_streams_discovered_raises(self, monkeypatch):
         class EmptyAdapter:
@@ -168,6 +227,7 @@ class TestIngestFiles:
 
         assert job.status == "completed"
         assert job.source_adapter == "file"
+        assert job.source_ref == str(log_file)
         assert stats.parsed_count == 1
 
     def test_exception_mid_ingest_marks_job_failed(self, tmp_path):

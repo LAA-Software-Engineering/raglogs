@@ -59,10 +59,12 @@ def run_ingest_job(db, worker_job) -> dict:
             fmt=payload.get("format", "auto"),
         )
     else:
+        import uuid
         from datetime import datetime
 
         from src.adapters.base import SourceSpec, TimeWindow
         from src.core.ingestion.service import ingest_from_source
+        from src.db.models import IngestionJob
 
         window = None
         if payload.get("window_start") and payload.get("window_end"):
@@ -70,6 +72,14 @@ def run_ingest_job(db, worker_job) -> dict:
                 start=datetime.fromisoformat(payload["window_start"]),
                 end=datetime.fromisoformat(payload["window_end"]),
             )
+
+        resume_cursors = None
+        if payload.get("resume_ingestion_job_id"):
+            prior = db.query(IngestionJob).filter(
+                IngestionJob.id == uuid.UUID(payload["resume_ingestion_job_id"])
+            ).first()
+            if prior is not None:
+                resume_cursors = (prior.metadata_json or {}).get("cursors")
 
         spec = SourceSpec(
             adapter=adapter,
@@ -83,6 +93,7 @@ def run_ingest_job(db, worker_job) -> dict:
             window=window,
             source_name=payload.get("source_name"),
             fmt=payload.get("format", "auto"),
+            resume_cursors=resume_cursors,
         )
 
     # Link worker job → ingestion job

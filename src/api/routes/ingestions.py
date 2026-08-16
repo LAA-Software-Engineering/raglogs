@@ -11,7 +11,7 @@ import uuid
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 router = APIRouter()
 
@@ -19,7 +19,7 @@ router = APIRouter()
 # ── Schemas ──────────────────────────────────────────────────────────────────
 
 class IngestRequest(BaseModel):
-    paths: list[str]
+    paths: list[str] = []
     recursive: bool = False
     format: str = "auto"
     source_name: Optional[str] = None
@@ -29,6 +29,13 @@ class IngestRequest(BaseModel):
     params: dict[str, Any] = {}
     window_start: Optional[str] = None
     window_end: Optional[str] = None
+    resume_ingestion_job_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _require_paths_for_file_adapter(self):
+        if self.adapter == "file" and not self.paths:
+            raise ValueError("paths is required when adapter='file'")
+        return self
 
 
 class EnqueuedResponse(BaseModel):
@@ -56,6 +63,7 @@ class IngestionJobDetail(BaseModel):
     error_count: int
     error_message: Optional[str]
     source_adapter: str
+    source_ref: Optional[str]
     created_at: str
     started_at: Optional[str]
     finished_at: Optional[str]
@@ -96,12 +104,16 @@ def create_ingestion(request: IngestRequest):
         if not files:
             raise HTTPException(status_code=400, detail="No log files found at the given paths")
     else:
+        from src.adapters.base import SourceSpec
         from src.adapters.registry import get_adapter
         from src.config import get_settings
         from src.core.errors import AdapterUnavailableError
 
         try:
-            get_adapter(request.adapter, get_settings())
+            adapter = get_adapter(request.adapter, get_settings())
+            # Fail fast on missing/invalid params (e.g. no log_group) — discover() for
+            # cloudwatch is local-only validation, no network call.
+            list(adapter.discover(SourceSpec(adapter=request.adapter, params=request.params)))
         except AdapterUnavailableError as e:
             raise HTTPException(
                 status_code=400,
@@ -119,6 +131,7 @@ def create_ingestion(request: IngestRequest):
         "params": request.params,
         "window_start": request.window_start,
         "window_end": request.window_end,
+        "resume_ingestion_job_id": request.resume_ingestion_job_id,
     }
 
     with get_db() as db:
@@ -242,6 +255,7 @@ def get_ingestion_detail(ingestion_job_id: str):
             error_count=job.error_count,
             error_message=job.error_message,
             source_adapter=job.source_adapter,
+            source_ref=job.source_ref,
             created_at=job.created_at.isoformat(),
             started_at=job.started_at.isoformat() if job.started_at else None,
             finished_at=job.finished_at.isoformat() if job.finished_at else None,

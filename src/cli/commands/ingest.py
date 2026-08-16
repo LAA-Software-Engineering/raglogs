@@ -1,4 +1,3 @@
-import time
 from typing import List, Optional
 
 import typer
@@ -13,7 +12,10 @@ def _parse_params(params: Optional[List[str]]) -> dict:
     result = {}
     for item in params or []:
         key, _, value = item.partition("=")
-        result[key] = value
+        if key == "log_groups":
+            result[key] = [v.strip() for v in value.split(",") if v.strip()]
+        else:
+            result[key] = value
     return result
 
 
@@ -27,19 +29,19 @@ def ingest_cmd(
     with_embeddings: bool = typer.Option(False, "--with-embeddings/--no-embeddings", help="Generate embeddings"),
     adapter: str = typer.Option("file", "--adapter", help="Source adapter: file|cloudwatch"),
     param: Optional[List[str]] = typer.Option(None, "--param", help="Adapter param as key=value (repeatable)"),
-    since: Optional[str] = typer.Option(None, "--since", help="Window start, ISO 8601 (non-file adapters)"),
-    until: Optional[str] = typer.Option(None, "--until", help="Window end, ISO 8601 (non-file adapters)"),
+    since: Optional[str] = typer.Option(None, "--since", help="Window, e.g. 30m, 1h, 24h (non-file adapters)"),
+    from_time: Optional[str] = typer.Option(None, "--from", help="Window start, ISO 8601 (non-file adapters)"),
+    to_time: Optional[str] = typer.Option(None, "--to", help="Window end, ISO 8601 (non-file adapters)"),
+    resume_job: Optional[str] = typer.Option(None, "--resume-job", help="Prior ingestion job UUID to resume cursors from (non-file adapters)"),
 ):
     """Ingest logs into the database."""
     from src.db.session import get_db
 
-    console.print(f"[bold cyan]Ingesting logs...[/bold cyan]")
+    console.print("[bold cyan]Ingesting logs...[/bold cyan]")
     if adapter == "file" and paths:
         console.print(f"  Paths: {', '.join(paths[:3])}{'...' if len(paths) > 3 else ''}")
     elif adapter != "file":
         console.print(f"  Adapter: {adapter}")
-
-    start = time.time()
 
     with Progress(
         SpinnerColumn(),
@@ -69,18 +71,27 @@ def ingest_cmd(
                         progress_callback=on_progress,
                     )
                 else:
-                    from datetime import datetime, timedelta, timezone
+                    import uuid
+                    from datetime import datetime
 
                     from src.adapters.base import SourceSpec, TimeWindow
                     from src.core.ingestion.service import ingest_from_source
+                    from src.db.models import IngestionJob
+                    from src.utils.time import resolve_window
 
                     window = None
-                    if since or until:
-                        now = datetime.now(tz=timezone.utc)
-                        window = TimeWindow(
-                            start=datetime.fromisoformat(since) if since else now - timedelta(hours=1),
-                            end=datetime.fromisoformat(until) if until else now,
-                        )
+                    if since or from_time or to_time:
+                        from_dt = datetime.fromisoformat(from_time) if from_time else None
+                        to_dt = datetime.fromisoformat(to_time) if to_time else None
+                        w_start, w_end = resolve_window(since=since, from_time=from_dt, to_time=to_dt)
+                        window = TimeWindow(start=w_start, end=w_end)
+
+                    resume_cursors = None
+                    if resume_job:
+                        prior = db.query(IngestionJob).filter(IngestionJob.id == uuid.UUID(resume_job)).first()
+                        if prior is None:
+                            raise ValueError(f"No ingestion job found with id {resume_job}")
+                        resume_cursors = (prior.metadata_json or {}).get("cursors")
 
                     spec = SourceSpec(
                         adapter=adapter,
@@ -94,6 +105,7 @@ def ingest_cmd(
                         window=window,
                         source_name=source_name,
                         fmt=fmt,
+                        resume_cursors=resume_cursors,
                         progress_callback=on_progress,
                     )
                 job_id = str(job.id)  # read inside session before it closes

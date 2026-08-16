@@ -66,6 +66,13 @@ def _mock_worker_job(status="pending", ingestion_job_id=None, error=None, result
 # ── Health ────────────────────────────────────────────────────────────────────
 
 class TestHealth:
+    @pytest.fixture(autouse=True)
+    def _clear_adapter_health_cache(self):
+        from src.api.routes.health import _adapter_health_cache
+        _adapter_health_cache.clear()
+        yield
+        _adapter_health_cache.clear()
+
     def test_health_ok_when_db_connected(self):
         with patch("src.db.session.check_connection", return_value=True), \
              _patch_get_db(execute_scalar=3):
@@ -163,6 +170,24 @@ class TestCreateIngestion:
         assert resp.status_code == 400
         assert resp.json()["detail"]["error_code"] == "ADAPTER_UNAVAILABLE"
 
+    def test_400_when_cloudwatch_params_missing_log_group(self):
+        """
+        Exercises the real registry + CloudWatchSourceAdapter.discover() (no mocking) —
+        params validation for cloudwatch is local-only, no AWS credentials needed.
+        """
+        resp = client.post("/ingestions", json={
+            "paths": [],
+            "adapter": "cloudwatch",
+            "params": {},
+        })
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error_code"] == "ADAPTER_UNAVAILABLE"
+
+    def test_422_when_paths_omitted_for_file_adapter(self):
+        resp = client.post("/ingestions", json={"adapter": "file"})
+        assert resp.status_code == 422
+
     def test_202_for_non_file_adapter_when_available(self):
         wj_id = str(uuid.uuid4())
         mock_db = _ctx_db()
@@ -172,7 +197,10 @@ class TestCreateIngestion:
 
         mock_db.add.side_effect = capture_add
 
-        with patch("src.adapters.registry.get_adapter", return_value=MagicMock()), \
+        mock_adapter = MagicMock()
+        mock_adapter.discover.return_value = [MagicMock(stream_id="/aws/lambda/x")]
+
+        with patch("src.adapters.registry.get_adapter", return_value=mock_adapter), \
              patch("src.db.session.get_db", side_effect=lambda: mock_db):
             resp = client.post("/ingestions", json={
                 "paths": [],

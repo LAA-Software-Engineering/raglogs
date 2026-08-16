@@ -59,9 +59,15 @@ def _process_line(
     source_adapter: str,
     source_ref: str,
     stats: IngestionStats,
+    received_at: Optional[datetime] = None,
 ) -> Optional[LogEntry]:
     """Parse, fingerprint, and build a LogEntry for one raw line. Returns None for
-    blank/unparseable/error lines (stats are updated either way)."""
+    blank/unparseable/error lines (stats are updated either way).
+
+    `received_at` is the adapter-reported time the line was emitted (e.g. a CloudWatch
+    event timestamp) — used when the line itself has no parseable timestamp field, so
+    rows aren't silently dropped from windowed queries (clustering/explain filter on
+    LogEntry.timestamp being both non-null and within the window)."""
     stats.lines_read += 1
 
     if not line.strip():
@@ -79,6 +85,9 @@ def _process_line(
     if parsed.parse_error:
         stats.error_count += 1
         return None
+
+    if parsed.timestamp is None and received_at is not None:
+        parsed.timestamp = received_at
 
     normalized, fp = fingerprint_message(parsed.message or "")
 
@@ -147,12 +156,21 @@ def ingest_files(
         file_count=len(files),
         metadata_json={"paths": paths},
         source_adapter="file",
+        source_ref=", ".join(str(p) for p in files[:5]),
     )
     db.add(job)
     db.flush()
 
     batch: list[LogEntry] = []
 
+    # NOTE: this try/except marks `job` "failed" on any exception, but that write is
+    # only durable if the caller's session commits despite the re-raise below (the
+    # worker does — it catches this in process_one() and commits normally). A caller
+    # using db.session's get_db()-style context manager that rolls back on exception
+    # will discard this flush along with everything else in the transaction, so the
+    # job row won't persist at all rather than being left "failed". Both outcomes are
+    # fine (no job stuck at "running" either way) — don't "simplify" by dropping the
+    # re-raise, it's what lets get_db() know to roll back for those callers.
     try:
         for file_path in files:
             file_fmt = detect_format(file_path, hint=fmt)
@@ -207,6 +225,7 @@ def ingest_from_source(
     window: Optional[TimeWindow] = None,
     source_name: Optional[str] = None,
     fmt: str = "auto",
+    resume_cursors: Optional[dict[str, Optional[str]]] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> tuple[IngestionJob, IngestionStats]:
     """
@@ -218,11 +237,17 @@ def ingest_from_source(
     cursor is saved on the job for a resumable retry) rather than aborting the whole run,
     unless every stream fails before a single line is ingested — in that case the job is
     marked failed with no partial silent ingest, per the ADAPTER_UNAVAILABLE contract.
+
+    `resume_cursors` (keyed by LogStreamRef.stream_id, e.g. a prior job's
+    metadata_json["cursors"]) is applied to freshly-discovered refs before reading, so a
+    retry can pick up from where a previous partial run left off instead of re-reading
+    the whole window.
     """
     import time
 
     from src.adapters.registry import get_adapter
     from src.config import get_settings
+    from src.utils.time import resolve_window
 
     start_time = time.time()
     stats = IngestionStats()
@@ -230,16 +255,21 @@ def ingest_from_source(
     adapter = get_adapter(spec.adapter, get_settings())
 
     if window is None:
-        window = TimeWindow(
-            start=datetime(1970, 1, 1, tzinfo=timezone.utc),
-            end=datetime.now(tz=timezone.utc),
-        )
+        # Pull adapters query a remote API — default to a bounded recent window rather
+        # than epoch-to-now, which would be slow/costly and isn't what any caller wants.
+        start, end = resolve_window(since="1h")
+        window = TimeWindow(start=start, end=end)
 
     refs = list(adapter.discover(spec))
     stats.files_processed = len(refs)
 
     if not refs:
         raise ValueError(f"No streams discovered for adapter={spec.adapter!r} params={spec.params!r}")
+
+    if resume_cursors:
+        for ref in refs:
+            if ref.stream_id in resume_cursors:
+                ref.cursor = resume_cursors[ref.stream_id]
 
     source = _get_or_create_source(
         db,
@@ -255,6 +285,7 @@ def ingest_from_source(
         file_count=len(refs),
         metadata_json={"adapter": spec.adapter, "params": spec.params},
         source_adapter=spec.adapter,
+        source_ref=", ".join(r.stream_id for r in refs[:5]),
     )
     db.add(job)
     db.flush()
@@ -263,6 +294,7 @@ def ingest_from_source(
     adapter_errors: list[str] = []
     cursors: dict[str, Optional[str]] = {}
 
+    # See the matching NOTE in ingest_files() re: this try/except and get_db() rollback.
     try:
         for ref in refs:
             try:
@@ -271,6 +303,7 @@ def ingest_from_source(
                     entry = _process_line(
                         raw.text, effective_fmt, spec.service, spec.env,
                         source, job, spec.adapter, raw.source_ref, stats,
+                        received_at=raw.received_at,
                     )
                     if entry is None:
                         continue

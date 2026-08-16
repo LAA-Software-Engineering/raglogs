@@ -42,6 +42,7 @@ def test_cloudwatch_ingest_then_explain(db_session):
     from src.adapters.base import SourceSpec, TimeWindow
     from src.core.explain.summarizer import explain_window
     from src.core.ingestion.service import ingest_from_source
+    from src.db.models import LogEntry
 
     with moto.mock_aws():
         client = boto3.client("logs", region_name="us-east-1")
@@ -77,13 +78,27 @@ def test_cloudwatch_ingest_then_explain(db_session):
 
         assert job.status == "completed"
         assert job.source_adapter == "cloudwatch"
+        assert job.source_ref == "/aws/lambda/my-service"
         assert stats.parsed_count == 5
         assert "billing-worker" in stats.services_detected
+
+        # The fixture JSON has no "timestamp" field of its own — this proves the
+        # CloudWatch event timestamp -> LogEntry.timestamp fallback actually landed
+        # (previously these rows persisted with a null timestamp and were invisible
+        # to every windowed query).
+        timestamped = (
+            db_session.query(LogEntry)
+            .filter(LogEntry.ingestion_job_id == job.id, LogEntry.timestamp.isnot(None))
+            .count()
+        )
+        assert timestamped == 5
 
         result = explain_window(
             db=db_session,
             window_start=window_start,
             window_end=window_end,
             no_llm=True,
+            ingestion_job_id=job.id,
         )
         assert result.summary_text
+        assert result.total_logs == 5

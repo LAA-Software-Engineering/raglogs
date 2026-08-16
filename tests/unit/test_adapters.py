@@ -102,7 +102,6 @@ class TestCloudWatchSourceAdapter:
         CloudWatchSourceAdapter._filter_log_events.retry.sleep = lambda *_: None
 
     def test_read_paginates_until_token_repeats(self):
-        pytest.importorskip("boto3")
         from src.adapters.cloudwatch.adapter import CloudWatchSourceAdapter
 
         mock_client = MagicMock()
@@ -121,8 +120,106 @@ class TestCloudWatchSourceAdapter:
         assert mock_client.filter_log_events.call_count == 2
         assert ref.cursor is None  # cleared once exhausted
 
+    def test_read_sets_received_at_from_event_timestamp(self):
+        from src.adapters.cloudwatch.adapter import CloudWatchSourceAdapter
+
+        event_ms = 1767225600000  # 2026-01-01T00:00:00Z
+        mock_client = MagicMock()
+        mock_client.filter_log_events.return_value = {
+            "events": [{"message": "line1", "timestamp": event_ms}]
+        }
+
+        adapter = CloudWatchSourceAdapter(region="us-east-1")
+        ref = LogStreamRef(adapter="cloudwatch", stream_id="/aws/lambda/x")
+
+        with patch("src.adapters.cloudwatch.adapter._client", return_value=mock_client):
+            raw_lines = list(adapter.read(ref, _WINDOW))
+
+        assert raw_lines[0].received_at == datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    def test_read_honors_ref_cursor_on_first_request(self):
+        from src.adapters.cloudwatch.adapter import CloudWatchSourceAdapter
+
+        mock_client = MagicMock()
+        mock_client.filter_log_events.return_value = {"events": []}
+
+        adapter = CloudWatchSourceAdapter(region="us-east-1")
+        ref = LogStreamRef(adapter="cloudwatch", stream_id="/aws/lambda/x", cursor="resume-tok")
+
+        with patch("src.adapters.cloudwatch.adapter._client", return_value=mock_client):
+            list(adapter.read(ref, _WINDOW))
+
+        assert mock_client.filter_log_events.call_args.kwargs["nextToken"] == "resume-tok"
+
+    def test_discover_honors_region_param_override(self):
+        from src.adapters.cloudwatch.adapter import CloudWatchSourceAdapter
+
+        adapter = CloudWatchSourceAdapter(region="us-east-1")
+        spec = SourceSpec(adapter="cloudwatch", params={"log_group": "/a", "region": "eu-west-1"})
+        refs = list(adapter.discover(spec))
+
+        assert refs[0].metadata["region"] == "eu-west-1"
+
+    def test_read_uses_region_from_ref_metadata(self):
+        from src.adapters.cloudwatch.adapter import CloudWatchSourceAdapter
+
+        mock_client = MagicMock()
+        mock_client.filter_log_events.return_value = {"events": []}
+
+        adapter = CloudWatchSourceAdapter(region="us-east-1")
+        ref = LogStreamRef(adapter="cloudwatch", stream_id="/a", metadata={"region": "eu-west-1"})
+
+        with patch("src.adapters.cloudwatch.adapter._client", return_value=mock_client) as mock_get_client:
+            list(adapter.read(ref, _WINDOW))
+
+        mock_get_client.assert_called_once_with("eu-west-1")
+
+    def test_retry_skips_non_retryable_client_errors(self):
+        from botocore.exceptions import ClientError
+
+        from src.adapters.cloudwatch.adapter import CloudWatchSourceAdapter
+
+        self._no_retry_sleep()
+
+        mock_client = MagicMock()
+        mock_client.filter_log_events.side_effect = ClientError(
+            {"Error": {"Code": "ResourceNotFoundException", "Message": "no such log group"}},
+            "FilterLogEvents",
+        )
+
+        adapter = CloudWatchSourceAdapter(region="us-east-1")
+        ref = LogStreamRef(adapter="cloudwatch", stream_id="/aws/lambda/x")
+
+        with patch("src.adapters.cloudwatch.adapter._client", return_value=mock_client):
+            with pytest.raises(AdapterUnavailableError):
+                list(adapter.read(ref, _WINDOW))
+
+        # non-retryable — should fail on the first attempt, not burn 3 retries
+        assert mock_client.filter_log_events.call_count == 1
+
+    def test_retry_retries_throttling_errors(self):
+        from botocore.exceptions import ClientError
+
+        from src.adapters.cloudwatch.adapter import CloudWatchSourceAdapter
+
+        self._no_retry_sleep()
+
+        mock_client = MagicMock()
+        mock_client.filter_log_events.side_effect = ClientError(
+            {"Error": {"Code": "ThrottlingException", "Message": "rate exceeded"}},
+            "FilterLogEvents",
+        )
+
+        adapter = CloudWatchSourceAdapter(region="us-east-1")
+        ref = LogStreamRef(adapter="cloudwatch", stream_id="/aws/lambda/x")
+
+        with patch("src.adapters.cloudwatch.adapter._client", return_value=mock_client):
+            with pytest.raises(AdapterUnavailableError):
+                list(adapter.read(ref, _WINDOW))
+
+        assert mock_client.filter_log_events.call_count == 3
+
     def test_read_source_ref_is_log_group(self):
-        pytest.importorskip("boto3")
         from src.adapters.cloudwatch.adapter import CloudWatchSourceAdapter
 
         mock_client = MagicMock()
@@ -137,7 +234,6 @@ class TestCloudWatchSourceAdapter:
         assert all(raw.source_ref == "/aws/lambda/x" for raw in raw_lines)
 
     def test_read_raises_adapter_unavailable_on_client_error(self):
-        pytest.importorskip("boto3")
         from botocore.exceptions import ClientError
 
         from src.adapters.cloudwatch.adapter import CloudWatchSourceAdapter
@@ -158,7 +254,6 @@ class TestCloudWatchSourceAdapter:
                 list(adapter.read(ref, _WINDOW))
 
     def test_check_available_raises_without_credentials(self):
-        pytest.importorskip("boto3")
         from src.adapters.cloudwatch.adapter import CloudWatchSourceAdapter
 
         adapter = CloudWatchSourceAdapter(region="us-east-1")
@@ -170,7 +265,6 @@ class TestCloudWatchSourceAdapter:
                 adapter.check_available()
 
     def test_check_available_ok_with_credentials(self):
-        pytest.importorskip("boto3")
         from src.adapters.cloudwatch.adapter import CloudWatchSourceAdapter
 
         adapter = CloudWatchSourceAdapter(region="us-east-1")
