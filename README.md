@@ -824,9 +824,11 @@ A minimal browser dashboard for the same explain / timeline / compare / ask
 flows the CLI exposes — no separate build step, served by the API itself.
 
 ```bash
-make api
-# open http://localhost:8000/
+make web
+# starts Postgres, runs migrations, and serves the UI at http://localhost:8000/
 ```
+
+Already have Postgres running and migrated? `make api` starts just the server.
 
 Pick a time window (presets or a duration like `2h`), then switch between the
 **Explain**, **Timeline**, **Compare**, and **Ask** tabs. Like the CLI, it

@@ -1,7 +1,7 @@
 .PHONY: help install install-dev \
         db-up db-down docker-up docker-down docker-demo docker-logs \
         init migrate demo ingest explain clusters ask \
-        api worker test test-unit test-int test-cov lint format clean
+        api web worker test test-unit test-int test-cov lint format clean
 
 PYTHON  := python
 PIP     := pip
@@ -21,6 +21,7 @@ help:
 	@echo "  make explain         Explain the last hour"
 	@echo "  make clusters        Show top clusters"
 	@echo "  make api             Start FastAPI server (reload)"
+	@echo "  make web             db-up + migrate + start server, then open the web UI"
 	@echo "  make worker          Start background worker"
 	@echo ""
 	@echo "Docker (full stack)"
@@ -86,6 +87,12 @@ ask:
 # ── Development servers ────────────────────────────────────────────────────────
 
 api:
+	uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --reload
+
+web: db-up
+	@sleep 2
+	alembic upgrade head
+	@echo "Web UI: http://localhost:8000/"
 	uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --reload
 
 worker:
