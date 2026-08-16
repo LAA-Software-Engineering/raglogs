@@ -102,6 +102,7 @@ class TestCloudWatchSourceAdapter:
         CloudWatchSourceAdapter._filter_log_events.retry.sleep = lambda *_: None
 
     def test_read_paginates_until_token_repeats(self):
+        pytest.importorskip("boto3")
         from src.adapters.cloudwatch.adapter import CloudWatchSourceAdapter
 
         mock_client = MagicMock()
@@ -121,6 +122,7 @@ class TestCloudWatchSourceAdapter:
         assert ref.cursor is None  # cleared once exhausted
 
     def test_read_source_ref_is_log_group(self):
+        pytest.importorskip("boto3")
         from src.adapters.cloudwatch.adapter import CloudWatchSourceAdapter
 
         mock_client = MagicMock()
@@ -135,6 +137,7 @@ class TestCloudWatchSourceAdapter:
         assert all(raw.source_ref == "/aws/lambda/x" for raw in raw_lines)
 
     def test_read_raises_adapter_unavailable_on_client_error(self):
+        pytest.importorskip("boto3")
         from botocore.exceptions import ClientError
 
         from src.adapters.cloudwatch.adapter import CloudWatchSourceAdapter
@@ -155,6 +158,7 @@ class TestCloudWatchSourceAdapter:
                 list(adapter.read(ref, _WINDOW))
 
     def test_check_available_raises_without_credentials(self):
+        pytest.importorskip("boto3")
         from src.adapters.cloudwatch.adapter import CloudWatchSourceAdapter
 
         adapter = CloudWatchSourceAdapter(region="us-east-1")
@@ -166,6 +170,7 @@ class TestCloudWatchSourceAdapter:
                 adapter.check_available()
 
     def test_check_available_ok_with_credentials(self):
+        pytest.importorskip("boto3")
         from src.adapters.cloudwatch.adapter import CloudWatchSourceAdapter
 
         adapter = CloudWatchSourceAdapter(region="us-east-1")
