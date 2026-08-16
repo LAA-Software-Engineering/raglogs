@@ -1,16 +1,13 @@
 from typing import Literal
 
-from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="RAGLOGS_",
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
-        populate_by_name=True,
     )
 
     db_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/raglogs"
@@ -33,17 +30,14 @@ class Settings(BaseSettings):
     # Worker
     worker_poll_interval: int = 2          # seconds between idle polls
 
-    # Adapters — unprefixed so they match the source system (LOKI_URL, CLOUDWATCH_REGION).
-    cloudwatch_region: str = Field(
-        default="us-east-1",
-        validation_alias=AliasChoices("CLOUDWATCH_REGION"),
-    )
-    loki_url: str = Field(default="", validation_alias=AliasChoices("LOKI_URL"))
-    loki_tenant: str = Field(default="", validation_alias=AliasChoices("LOKI_TENANT"))
-    loki_bearer_token: str = Field(default="", validation_alias=AliasChoices("LOKI_BEARER_TOKEN"))
-    loki_username: str = Field(default="", validation_alias=AliasChoices("LOKI_USERNAME"))
-    loki_password: str = Field(default="", validation_alias=AliasChoices("LOKI_PASSWORD"))
-    loki_query: str = Field(default="", validation_alias=AliasChoices("LOKI_QUERY"))
+    # Adapters
+    cloudwatch_region: str = "us-east-1"
+    loki_url: str = ""
+    loki_tenant: str = ""
+    loki_bearer_token: str = ""
+    loki_username: str = ""
+    loki_password: str = ""
+    loki_query: str = ""
 
     # Cluster scoring weights
     severity_weight_fatal: float = 5.0

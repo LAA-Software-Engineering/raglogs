@@ -9,7 +9,7 @@ alwaysApply: false
 - pytest with `asyncio_mode = auto` — write `async def test_...` directly,
   no `@pytest.mark.asyncio` needed.
 - `tests/unit/` must run without a database. Anything needing Postgres goes in
-  `tests/integration/` (gated by `RAGLOGS_INTEGRATION_TESTS=1`).
+  `tests/integration/` (gated by `INTEGRATION_TESTS=1`).
 - Every functional change ships with a test. Normalization changes get a
   before/after case in `tests/unit/test_normalization.py`.
 - Mirror existing file names: `test_<module>.py` matching the `src/core/<area>`

@@ -714,3 +714,12 @@ class TestRegistry:
         adapter = get_adapter("loki", settings)
         assert isinstance(adapter, LokiSourceAdapter)
         assert adapter.base_url == "http://loki:3100"
+
+    def test_core_settings_read_unprefixed_env(self, monkeypatch):
+        monkeypatch.setenv("DB_URL", "postgresql+psycopg://x:x@localhost:5432/x")
+        monkeypatch.setenv("LLM_PROVIDER", "ollama")
+        from src.config.settings import Settings
+
+        settings = Settings()
+        assert settings.db_url == "postgresql+psycopg://x:x@localhost:5432/x"
+        assert settings.llm_provider == "ollama"

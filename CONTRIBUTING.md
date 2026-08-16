@@ -14,7 +14,7 @@ cd raglogs
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt && pip install -e .
 cp .env.example .env
-# Edit .env — set RAGLOGS_DB_URL at minimum
+# Edit .env — set DB_URL at minimum
 docker compose up postgres -d
 raglogs init
 ```

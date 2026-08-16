@@ -25,9 +25,9 @@ def init_cmd(
             console.print(f"[green]✓[/green] Created .env from .env.example")
         else:
             env_path.write_text(
-                "RAGLOGS_DB_URL=postgresql+psycopg://postgres:postgres@localhost:5432/raglogs\n"
-                "RAGLOGS_LLM_PROVIDER=disabled\n"
-                "RAGLOGS_EMBEDDINGS_PROVIDER=disabled\n"
+                "DB_URL=postgresql+psycopg://postgres:postgres@localhost:5432/raglogs\n"
+                "LLM_PROVIDER=disabled\n"
+                "EMBEDDINGS_PROVIDER=disabled\n"
             )
             console.print(f"[green]✓[/green] Created default .env")
     else:
@@ -35,21 +35,21 @@ def init_cmd(
 
     # Override DB URL if provided
     if db_url:
-        _set_env_var(env_path, "RAGLOGS_DB_URL", db_url)
+        _set_env_var(env_path, "DB_URL", db_url)
 
     # Test DB connection
     try:
         from src.config import reload_settings
         if db_url:
             import os
-            os.environ["RAGLOGS_DB_URL"] = db_url
+            os.environ["DB_URL"] = db_url
         reload_settings()
 
         from src.db.session import check_connection
         if check_connection():
             console.print("[green]✓[/green] Database connection successful")
         else:
-            console.print("[red]✗[/red] Could not connect to database. Check RAGLOGS_DB_URL.")
+            console.print("[red]✗[/red] Could not connect to database. Check DB_URL.")
             raise typer.Exit(1)
     except Exception as e:
         console.print(f"[red]✗[/red] Database error: {e}")
