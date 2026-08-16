@@ -391,7 +391,7 @@ class TestLokiSourceAdapter:
         assert adapter.base_url == "http://loki"
 
     def test_discover_caps_limit_at_loki_max(self):
-        from src.adapters.loki.adapter import LokiSourceAdapter, PAGE_SIZE
+        from src.adapters.loki.adapter import PAGE_SIZE, LokiSourceAdapter
 
         adapter = LokiSourceAdapter(base_url="http://loki")
         refs = list(adapter.discover(
