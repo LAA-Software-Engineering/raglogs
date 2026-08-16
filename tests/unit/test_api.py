@@ -119,6 +119,13 @@ class TestHealth:
 
         assert resp.json()["adapters"]["cloudwatch"].startswith("unavailable:")
 
+    def test_health_reports_datadog_unavailable_without_keys(self):
+        with patch("src.db.session.check_connection", return_value=True), \
+             _patch_get_db(execute_scalar=3):
+            resp = client.get("/health")
+
+        assert resp.json()["adapters"]["datadog"].startswith("unavailable:")
+
 
 # ── POST /ingestions ──────────────────────────────────────────────────────────
 
@@ -221,6 +228,30 @@ class TestCreateIngestion:
                 "paths": [],
                 "adapter": "cloudwatch",
                 "params": {"log_group": "/aws/lambda/x"},
+            })
+
+        assert resp.status_code == 202
+        assert resp.json()["status"] == "pending"
+
+    def test_202_for_datadog_adapter_with_default_query(self):
+        """
+        Datadog discover() is local-only and defaults query to '*', so enqueue
+        should succeed without keys or an explicit query param.
+        """
+        wj_id = str(uuid.uuid4())
+        mock_db = _ctx_db()
+
+        def capture_add(obj):
+            obj.id = uuid.UUID(wj_id)
+
+        mock_db.add.side_effect = capture_add
+
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db):
+            resp = client.post("/ingestions", json={
+                "paths": [],
+                "adapter": "datadog",
+                "params": {},
+                "since": "1h",
             })
 
         assert resp.status_code == 202

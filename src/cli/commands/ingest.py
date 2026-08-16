@@ -24,7 +24,7 @@ def ingest_cmd(
     env: Optional[str] = typer.Option(None, "--env", help="Default environment"),
     fmt: str = typer.Option("auto", "--format", help="Log format: json|text|auto"),
     with_embeddings: bool = typer.Option(False, "--with-embeddings/--no-embeddings", help="Generate embeddings"),
-    adapter: str = typer.Option("file", "--adapter", help="Source adapter: file|cloudwatch"),
+    adapter: str = typer.Option("file", "--adapter", help="Source adapter: file|cloudwatch|datadog"),
     param: Optional[List[str]] = typer.Option(None, "--param", help="Adapter param as key=value (repeatable)"),
     since: Optional[str] = typer.Option(None, "--since", help="Window, e.g. 30m, 1h, 24h (non-file adapters)"),
     from_time: Optional[str] = typer.Option(None, "--from", help="Window start, ISO 8601 (non-file adapters)"),

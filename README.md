@@ -237,7 +237,7 @@ raglogs init --no-migrate   # skip migrations
 
 ### `raglogs ingest`
 
-Ingests one or more log files into the database. Supports JSON and plain-text formats, single files, directories, and glob patterns.
+Ingests logs into the database from local files or a pull adapter (CloudWatch, Datadog). File mode supports JSON and plain-text formats, single files, directories, and glob patterns.
 
 ```bash
 raglogs ingest ./logs/app.log
@@ -246,6 +246,12 @@ raglogs ingest ./logs/*.log
 raglogs ingest ./logs/ --recursive
 raglogs ingest ./logs/ --service api --env production
 raglogs ingest ./logs/ --format json
+
+# CloudWatch Logs (AWS credential chain; no keys on the CLI)
+raglogs ingest --adapter cloudwatch --param log_group=/aws/lambda/my-service --since 1h
+
+# Datadog Logs Search API (keys via env; see Configuration)
+raglogs ingest --adapter datadog --param query='service:billing-worker status:error' --since 1h
 ```
 
 | Flag | Description |
@@ -256,6 +262,11 @@ raglogs ingest ./logs/ --format json
 | `--env` | Default environment |
 | `--format` | `json`, `text`, or `auto` (default) |
 | `--with-embeddings` | Generate vector embeddings (requires embeddings provider) |
+| `--adapter` | Source adapter: `file` (default), `cloudwatch`, or `datadog` |
+| `--param` | Adapter param as `key=value` (repeatable) |
+| `--since` | Window for pull adapters, e.g. `30m`, `1h`, `24h` (default last 1h) |
+| `--from` / `--to` | Explicit ISO 8601 window bounds (pull adapters) |
+| `--resume-job` | Prior ingestion job UUID to resume pagination cursors from |
 
 **Output**
 
@@ -557,6 +568,12 @@ All settings are read from `.env`, environment variables, or CLI flags. Priority
 | `RAGLOGS_DEFAULT_BASELINE_WINDOW` | `24h` | How far back to compare for baseline |
 | `RAGLOGS_MAX_CLUSTERS_FOR_EXPLAIN` | `10` | Max clusters sent to the explain pipeline |
 | `RAGLOGS_MAX_EVIDENCE_ITEMS` | `8` | Max evidence lines in output |
+| `RAGLOGS_ADAPTER_CLOUDWATCH_REGION` | `us-east-1` | AWS region for `--adapter cloudwatch` |
+| `RAGLOGS_ADAPTER_DATADOG_API_KEY` | _(empty)_ | Datadog API key (`logs_read_data`) |
+| `RAGLOGS_ADAPTER_DATADOG_APP_KEY` | _(empty)_ | Datadog application key |
+| `RAGLOGS_ADAPTER_DATADOG_SITE` | `datadoghq.com` | Datadog site (`us3.datadoghq.com`, `datadoghq.eu`, …) |
+| `RAGLOGS_ADAPTER_DATADOG_PAGE_SIZE` | `1000` | Logs per Datadog page (API max 1000) |
+| `RAGLOGS_ADAPTER_DATADOG_MAX_ROWS` | `10000` | Max events pulled in one Datadog ingest run |
 
 ---
 
@@ -764,7 +781,7 @@ make api
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/health` | Service and DB health check |
-| `POST` | `/ingestions` | Ingest log files |
+| `POST` | `/ingestions` | Enqueue an ingest job (`adapter`: `file`, `cloudwatch`, or `datadog`) |
 | `GET` | `/ingestions` | List recent completed ingestion jobs, newest first |
 | `GET` | `/ingestions/{job_id}` | Poll ingestion job status |
 | `GET` | `/ingestions/latest` | ID of the most recently completed ingestion job, if any |
@@ -880,7 +897,7 @@ make clean
 ```
 raglogs/
 ├── src/
-│   ├── adapters/file/       File discovery and line reading
+│   ├── adapters/            Log source adapters (file, cloudwatch, datadog)
 │   ├── api/routes/          FastAPI route handlers
 │   ├── cli/commands/        Typer CLI commands
 │   ├── config/              Pydantic settings
@@ -905,13 +922,22 @@ raglogs/
 
 **Adding a log source adapter**
 
-New source adapters go in `raglogs/adapters/`. Each adapter yields `ParsedLogLine` objects. The normalization, fingerprinting, storage, clustering, and explain pipeline is fully source-agnostic.
+New source adapters go in `src/adapters/` and implement `SourceAdapter` (`discover` / `read`), yielding `RawLogLine` objects that the existing parser maps onto `ParsedLogLine`. The normalization, fingerprinting, storage, clustering, and explain pipeline is fully source-agnostic.
+
+**Datadog adapter limits**
+
+- Auth: `DD-API-KEY` + `DD-APPLICATION-KEY` (application key needs `logs_read_data`). Keys come from env only — never CLI `--param`.
+- Endpoint: `POST https://api.<site>/api/v2/logs/events/search` with an absolute `from`/`to` window (relative ranges drop events while paginating).
+- Pagination: cursor from `meta.page.after`; resume with `--resume-job`.
+- Page size: default 1000, Datadog hard max 1000 (`--param page_size=N` or `RAGLOGS_ADAPTER_DATADOG_PAGE_SIZE`).
+- Max rows per run: default 10000 (`--param max_rows=N` or `RAGLOGS_ADAPTER_DATADOG_MAX_ROWS`). Hitting the cap saves the next cursor for resume.
+- Rate limits: HTTP 429 and 5xx are retried up to 3 times with exponential backoff; a persistent failure marks the job `ADAPTER_UNAVAILABLE` (or `partial: true` if some events already landed).
+- Field mapping: Datadog `status` → `level`; `service` / `host` / `message` / `timestamp` pass through; `env` from the `env:` tag or attributes; `trace_id` / `request_id` from nested custom attributes when present.
 
 ---
 
 ## Roadmap
 
-- Datadog adapter
 - Loki adapter
 - Kubernetes log export ingestion
 - Semantic cluster merging via pgvector
