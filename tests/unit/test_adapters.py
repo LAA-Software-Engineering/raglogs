@@ -1,16 +1,17 @@
 """
 Tests for src.adapters.base / src.adapters.file.adapter / src.adapters.cloudwatch.adapter
-/ src.adapters.registry.
+/ src.adapters.datadog.adapter / src.adapters.registry.
 
 File adapter tests check that the new SourceAdapter-conforming class produces identical
 output to the pre-existing free functions (discover_files/detect_format/read_lines).
 CloudWatch adapter tests mock the boto3 client boundary, not internals — same convention
-as tests/unit/test_worker.py.
+as tests/unit/test_worker.py. Datadog adapter tests mock the httpx client boundary.
 """
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import orjson
 import pytest
 
 from src.adapters.base import LogStreamRef, SourceAdapter, SourceSpec, TimeWindow
@@ -290,6 +291,331 @@ class TestCloudWatchSourceAdapter:
             adapter.check_available()  # does not raise
 
 
+# ── DatadogSourceAdapter ─────────────────────────────────────────────────────
+
+def _dd_event(
+    message: str = "hello",
+    status: str = "error",
+    timestamp: str = "2026-01-01T00:00:00.000Z",
+    **attrs: object,
+) -> dict:
+    attributes = {
+        "message": message,
+        "status": status,
+        "timestamp": timestamp,
+        **attrs,
+    }
+    return {"id": "abc", "type": "log", "attributes": attributes}
+
+
+def _dd_page(events: list, after: str | None = None) -> dict:
+    page: dict = {"data": events}
+    if after is not None:
+        page["meta"] = {"page": {"after": after}}
+    return page
+
+
+def _http_status_error(status_code: int) -> Exception:
+    import httpx
+
+    request = httpx.Request("POST", "https://api.datadoghq.com/api/v2/logs/events/search")
+    response = httpx.Response(status_code, request=request)
+    return httpx.HTTPStatusError("error", request=request, response=response)
+
+
+class TestDatadogMapping:
+    def test_maps_reserved_attributes_to_json_aliases(self):
+        from src.adapters.datadog.adapter import map_datadog_event
+
+        event = _dd_event(
+            message="Stripe webhook failed",
+            status="error",
+            service="billing-worker",
+            host="i-abc",
+            tags=["env:prod", "version:1.2"],
+        )
+        mapped = map_datadog_event(event)
+        assert mapped["message"] == "Stripe webhook failed"
+        assert mapped["level"] == "error"
+        assert mapped["service"] == "billing-worker"
+        assert mapped["host"] == "i-abc"
+        assert mapped["env"] == "prod"
+        assert mapped["timestamp"] == "2026-01-01T00:00:00.000Z"
+
+    def test_maps_nested_trace_and_request_ids(self):
+        from src.adapters.datadog.adapter import map_datadog_event
+
+        event = _dd_event(
+            attributes={
+                "dd": {"trace_id": "trace-1"},
+                "http": {"request_id": "req-9"},
+            }
+        )
+        mapped = map_datadog_event(event)
+        assert mapped["trace_id"] == "trace-1"
+        assert mapped["request_id"] == "req-9"
+
+    def test_env_falls_back_to_nested_attribute(self):
+        from src.adapters.datadog.adapter import map_datadog_event
+
+        event = _dd_event(attributes={"env": "staging"})
+        assert map_datadog_event(event)["env"] == "staging"
+
+    def test_mapped_event_is_parseable_as_json_log_line(self):
+        import orjson
+
+        from src.adapters.datadog.adapter import map_datadog_event
+        from src.core.parsing.json_parser import parse_json_line
+
+        event = _dd_event(
+            message="Stripe webhook failed",
+            status="error",
+            service="billing-worker",
+            host="i-abc",
+            tags=["env:prod"],
+            attributes={"dd": {"trace_id": "t-1"}, "request_id": "r-1"},
+        )
+        parsed = parse_json_line(orjson.dumps(map_datadog_event(event)).decode())
+        assert parsed is not None
+        assert parsed.parse_error is None
+        assert parsed.message == "Stripe webhook failed"
+        assert parsed.level == "error"
+        assert parsed.service == "billing-worker"
+        assert parsed.environment == "prod"
+        assert parsed.host == "i-abc"
+        assert parsed.trace_id == "t-1"
+        assert parsed.request_id == "r-1"
+
+
+class TestDatadogSourceAdapter:
+    def test_conforms_to_protocol(self):
+        from src.adapters.datadog.adapter import DatadogSourceAdapter
+
+        assert isinstance(DatadogSourceAdapter(api_key="k", app_key="a"), SourceAdapter)
+
+    def test_discover_defaults_query_to_star(self):
+        from src.adapters.datadog.adapter import DatadogSourceAdapter
+
+        refs = list(DatadogSourceAdapter().discover(SourceSpec(adapter="datadog", params={})))
+        assert [r.stream_id for r in refs] == ["*"]
+        assert refs[0].metadata["query"] == "*"
+
+    def test_discover_uses_query_and_indexes(self):
+        from src.adapters.datadog.adapter import DatadogSourceAdapter
+
+        spec = SourceSpec(
+            adapter="datadog",
+            params={"query": "service:api", "indexes": "main,pci"},
+        )
+        refs = list(DatadogSourceAdapter().discover(spec))
+        assert refs[0].stream_id == "main,pci|service:api"
+        assert refs[0].metadata["indexes"] == ["main", "pci"]
+
+    def test_discover_clamps_page_size_and_coerces_string_ints(self):
+        from src.adapters.datadog.adapter import DatadogSourceAdapter
+
+        spec = SourceSpec(
+            adapter="datadog",
+            params={"page_size": "5000", "max_rows": "250"},
+        )
+        refs = list(DatadogSourceAdapter().discover(spec))
+        assert refs[0].metadata["page_size"] == 1000
+        assert refs[0].metadata["max_rows"] == 250
+
+    def test_api_base_url_variants(self):
+        from src.adapters.datadog.adapter import api_base_url
+
+        assert api_base_url("datadoghq.com") == "https://api.datadoghq.com"
+        assert api_base_url("us3.datadoghq.com") == "https://api.us3.datadoghq.com"
+        assert api_base_url("app.datadoghq.eu") == "https://api.datadoghq.eu"
+        assert api_base_url("https://api.datadoghq.com") == "https://api.datadoghq.com"
+
+    def test_api_base_url_rejects_non_datadog_origins(self):
+        from src.adapters.datadog.adapter import api_base_url
+
+        for site in (
+            "http://evil.example",
+            "https://evil.example",
+            "https://api.datadoghq.com.evil.example",
+            "evil.example",
+        ):
+            with pytest.raises(AdapterUnavailableError, match="unsupported Datadog site"):
+                api_base_url(site)
+
+    def test_discover_rejects_non_datadog_site_param(self):
+        from src.adapters.datadog.adapter import DatadogSourceAdapter
+
+        adapter = DatadogSourceAdapter(api_key="k", app_key="a")
+        spec = SourceSpec(
+            adapter="datadog",
+            params={"site": "http://evil.example"},
+        )
+        with pytest.raises(AdapterUnavailableError, match="unsupported Datadog site"):
+            list(adapter.discover(spec))
+
+    def test_constructor_rejects_non_datadog_site(self):
+        from src.adapters.datadog.adapter import DatadogSourceAdapter
+
+        with pytest.raises(AdapterUnavailableError, match="unsupported Datadog site"):
+            DatadogSourceAdapter(api_key="k", app_key="a", site="https://evil.example")
+
+    def _adapter(self):
+        from src.adapters.datadog.adapter import DatadogSourceAdapter
+
+        return DatadogSourceAdapter(api_key="api", app_key="app", site="datadoghq.com")
+
+    def _no_retry_sleep(self) -> None:
+        from src.adapters.datadog.adapter import DatadogSourceAdapter
+
+        DatadogSourceAdapter._search_logs.retry.sleep = lambda *_: None
+
+    def test_read_maps_events_and_sets_received_at(self):
+        from src.adapters.datadog.adapter import DatadogSourceAdapter
+
+        adapter = self._adapter()
+        ref = LogStreamRef(adapter="datadog", stream_id="*", metadata={"query": "*"})
+        page = _dd_page([_dd_event(message="line1", timestamp="2026-01-01T00:00:00Z")])
+
+        with patch.object(DatadogSourceAdapter, "_search_logs", return_value=page):
+            lines = list(adapter.read(ref, _WINDOW))
+
+        assert len(lines) == 1
+        assert '"message":"line1"' in lines[0].text.replace(" ", "")
+        assert '"level":"error"' in lines[0].text.replace(" ", "")
+        assert lines[0].received_at == datetime(2026, 1, 1, tzinfo=timezone.utc)
+        assert lines[0].source_ref == "*"
+        assert ref.cursor is None
+
+    def test_read_paginates_until_no_after_cursor(self):
+        from src.adapters.datadog.adapter import DatadogSourceAdapter
+
+        adapter = self._adapter()
+        ref = LogStreamRef(adapter="datadog", stream_id="service:api", metadata={"query": "service:api"})
+        pages = [
+            _dd_page([_dd_event(message="a"), _dd_event(message="b")], after="tok1"),
+            _dd_page([_dd_event(message="c")]),
+        ]
+
+        with patch.object(DatadogSourceAdapter, "_search_logs", side_effect=pages) as mock_search:
+            messages = [orjson.loads(raw.text)["message"] for raw in adapter.read(ref, _WINDOW)]
+
+        assert messages == ["a", "b", "c"]
+        assert mock_search.call_count == 2
+        second_payload = mock_search.call_args_list[1].args[2]
+        assert second_payload["page"]["cursor"] == "tok1"
+        assert ref.cursor is None
+
+    def test_read_honors_ref_cursor_on_first_request(self):
+        from src.adapters.datadog.adapter import DatadogSourceAdapter
+
+        adapter = self._adapter()
+        ref = LogStreamRef(
+            adapter="datadog",
+            stream_id="*",
+            cursor="resume-tok",
+            metadata={"query": "*"},
+        )
+
+        with patch.object(DatadogSourceAdapter, "_search_logs", return_value=_dd_page([])) as mock_search:
+            list(adapter.read(ref, _WINDOW))
+
+        payload = mock_search.call_args.args[2]
+        assert payload["page"]["cursor"] == "resume-tok"
+
+    def test_read_stops_at_max_rows_and_keeps_next_cursor(self):
+        from src.adapters.datadog.adapter import DatadogSourceAdapter
+
+        adapter = self._adapter()
+        ref = LogStreamRef(
+            adapter="datadog",
+            stream_id="*",
+            metadata={"query": "*", "max_rows": 2, "page_size": 10},
+        )
+        page = _dd_page(
+            [_dd_event(message="a"), _dd_event(message="b"), _dd_event(message="c")],
+            after="next",
+        )
+
+        with patch.object(DatadogSourceAdapter, "_search_logs", return_value=page) as mock_search:
+            lines = list(adapter.read(ref, _WINDOW))
+
+        assert len(lines) == 2
+        assert ref.cursor == "next"
+        payload = mock_search.call_args.args[2]
+        assert payload["page"]["limit"] == 2  # remaining, not full page_size
+
+    def test_read_sends_absolute_window_and_indexes(self):
+        from src.adapters.datadog.adapter import DatadogSourceAdapter
+
+        adapter = self._adapter()
+        ref = LogStreamRef(
+            adapter="datadog",
+            stream_id="main|*",
+            metadata={"query": "service:api", "indexes": ["main"], "site": "us3.datadoghq.com"},
+        )
+
+        with patch.object(DatadogSourceAdapter, "_search_logs", return_value=_dd_page([])) as mock_search:
+            list(adapter.read(ref, _WINDOW))
+
+        url = mock_search.call_args.args[1]
+        payload = mock_search.call_args.args[2]
+        assert url == "https://api.us3.datadoghq.com/api/v2/logs/events/search"
+        assert payload["filter"]["from"] == "2026-01-01T00:00:00.000Z"
+        assert payload["filter"]["to"] == "2026-01-02T00:00:00.000Z"
+        assert payload["filter"]["query"] == "service:api"
+        assert payload["filter"]["indexes"] == ["main"]
+        assert payload["sort"] == "timestamp"
+
+    def test_read_raises_without_keys(self):
+        from src.adapters.datadog.adapter import DatadogSourceAdapter
+
+        adapter = DatadogSourceAdapter()
+        ref = LogStreamRef(adapter="datadog", stream_id="*")
+        with pytest.raises(AdapterUnavailableError):
+            list(adapter.read(ref, _WINDOW))
+
+    def test_check_available_raises_without_keys(self):
+        from src.adapters.datadog.adapter import DatadogSourceAdapter
+
+        with pytest.raises(AdapterUnavailableError):
+            DatadogSourceAdapter(api_key="", app_key="").check_available()
+
+    def test_check_available_ok_with_keys(self):
+        from src.adapters.datadog.adapter import DatadogSourceAdapter
+
+        DatadogSourceAdapter(api_key="k", app_key="a").check_available()
+
+    def test_retry_skips_non_retryable_client_errors(self):
+        from src.adapters.datadog.adapter import DatadogSourceAdapter
+
+        self._no_retry_sleep()
+        mock_client = MagicMock()
+        mock_client.post.side_effect = _http_status_error(403)
+        adapter = self._adapter()
+        ref = LogStreamRef(adapter="datadog", stream_id="*", metadata={"query": "*"})
+
+        with patch("src.adapters.datadog.adapter._client", return_value=mock_client):
+            with pytest.raises(AdapterUnavailableError):
+                list(adapter.read(ref, _WINDOW))
+
+        assert mock_client.post.call_count == 1
+
+    def test_retry_retries_rate_limit_errors(self):
+        from src.adapters.datadog.adapter import DatadogSourceAdapter
+
+        self._no_retry_sleep()
+        mock_client = MagicMock()
+        mock_client.post.side_effect = _http_status_error(429)
+        adapter = self._adapter()
+        ref = LogStreamRef(adapter="datadog", stream_id="*", metadata={"query": "*"})
+
+        with patch("src.adapters.datadog.adapter._client", return_value=mock_client):
+            with pytest.raises(AdapterUnavailableError):
+                list(adapter.read(ref, _WINDOW))
+
+        assert mock_client.post.call_count == 3
+
+
 # ── registry ──────────────────────────────────────────────────────────────────
 
 class TestRegistry:
@@ -308,6 +634,14 @@ class TestRegistry:
 
         adapter = get_adapter("cloudwatch", get_settings())
         assert isinstance(adapter, CloudWatchSourceAdapter)
+
+    def test_get_adapter_datadog(self):
+        from src.adapters.datadog.adapter import DatadogSourceAdapter
+        from src.adapters.registry import get_adapter
+        from src.config import get_settings
+
+        adapter = get_adapter("datadog", get_settings())
+        assert isinstance(adapter, DatadogSourceAdapter)
 
     def test_get_adapter_unknown_raises(self):
         from src.adapters.registry import get_adapter
