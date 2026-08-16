@@ -73,7 +73,7 @@ class LokiSourceAdapter:
         Cheap, local-only check — used by /health."""
         if not (self.base_url or "").strip():
             raise AdapterUnavailableError(
-                "loki adapter requires RAGLOGS_LOKI_URL"
+                "loki adapter requires LOKI_URL"
             )
 
     def discover(self, spec: SourceSpec) -> Iterable[LogStreamRef]:
@@ -90,14 +90,14 @@ class LokiSourceAdapter:
         if not queries:
             raise AdapterUnavailableError(
                 "loki adapter requires 'query' or 'queries' in params "
-                "(or RAGLOGS_LOKI_QUERY)"
+                "(or LOKI_QUERY)"
             )
 
         url = spec.params.get("url") or spec.params.get("base_url") or self.base_url
         if not (url or "").strip():
             raise AdapterUnavailableError(
                 "loki adapter requires a base URL "
-                "(RAGLOGS_LOKI_URL or params.url)"
+                "(LOKI_URL or params.url)"
             )
         tenant = spec.params.get("tenant") or spec.params.get("org_id") or self.tenant
         raw_limit = spec.params.get("limit", PAGE_SIZE)
@@ -124,7 +124,7 @@ class LokiSourceAdapter:
         if not (base_url or "").strip():
             raise AdapterUnavailableError(
                 "loki adapter requires a base URL "
-                "(RAGLOGS_LOKI_URL or params.url)"
+                "(LOKI_URL or params.url)"
             )
         tenant = ref.metadata.get("tenant") or self.tenant
         limit = int(ref.metadata.get("limit") or PAGE_SIZE)

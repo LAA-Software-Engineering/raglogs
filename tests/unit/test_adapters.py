@@ -698,3 +698,19 @@ class TestRegistry:
 
         with pytest.raises(AdapterUnavailableError):
             get_adapter("does-not-exist", get_settings())
+
+    def test_loki_and_cloudwatch_env_vars_are_unprefixed(self, monkeypatch):
+        monkeypatch.setenv("LOKI_URL", "http://loki:3100")
+        monkeypatch.setenv("LOKI_QUERY", '{job="api"}')
+        monkeypatch.setenv("CLOUDWATCH_REGION", "eu-west-1")
+        from src.adapters.loki.adapter import LokiSourceAdapter
+        from src.adapters.registry import get_adapter
+        from src.config.settings import Settings
+
+        settings = Settings()
+        assert settings.loki_url == "http://loki:3100"
+        assert settings.loki_query == '{job="api"}'
+        assert settings.cloudwatch_region == "eu-west-1"
+        adapter = get_adapter("loki", settings)
+        assert isinstance(adapter, LokiSourceAdapter)
+        assert adapter.base_url == "http://loki:3100"

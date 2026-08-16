@@ -129,7 +129,7 @@ class TestHealth:
              _patch_get_db(execute_scalar=3), \
              patch(
                  "src.adapters.loki.adapter.LokiSourceAdapter.check_available",
-                 side_effect=AdapterUnavailableError("loki adapter requires RAGLOGS_LOKI_URL"),
+                 side_effect=AdapterUnavailableError("loki adapter requires LOKI_URL"),
              ):
             resp = client.get("/health")
 
