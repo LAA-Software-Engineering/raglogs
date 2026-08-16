@@ -22,7 +22,7 @@ source-agnostic — new inputs are **adapters** in `src/adapters/` that yield
 - API route → `src/api/routes/`
 - Normalization / trigger patterns → `src/core/normalization/patterns.py`
 - LLM calls → only through `src/core/llm/provider.py`
-- Config → env vars (`RAGLOGS_*`) via `src/config/settings.py`
+- Config → env vars via `src/config/settings.py`
 
 ## Must
 

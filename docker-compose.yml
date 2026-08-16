@@ -27,12 +27,12 @@ services:
     ports:
       - "8000:8000"
     environment:
-      RAGLOGS_DB_URL: postgresql+psycopg://postgres:postgres@postgres:5432/raglogs
-      RAGLOGS_LLM_PROVIDER: ${RAGLOGS_LLM_PROVIDER:-disabled}
-      RAGLOGS_LLM_MODEL: ${RAGLOGS_LLM_MODEL:-gpt-4.1-mini}
-      RAGLOGS_OPENAI_API_KEY: ${RAGLOGS_OPENAI_API_KEY:-}
-      RAGLOGS_OPENAI_BASE_URL: ${RAGLOGS_OPENAI_BASE_URL:-https://api.openai.com/v1}
-      RAGLOGS_EMBEDDINGS_PROVIDER: ${RAGLOGS_EMBEDDINGS_PROVIDER:-disabled}
+      DB_URL: postgresql+psycopg://postgres:postgres@postgres:5432/raglogs
+      LLM_PROVIDER: ${LLM_PROVIDER:-disabled}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4.1-mini}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      EMBEDDINGS_PROVIDER: ${EMBEDDINGS_PROVIDER:-disabled}
     command: >
       sh -c "alembic upgrade head && uvicorn src.api.app:app --host 0.0.0.0 --port 8000"
     volumes:
@@ -46,12 +46,12 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      RAGLOGS_DB_URL: postgresql+psycopg://postgres:postgres@postgres:5432/raglogs
-      RAGLOGS_LLM_PROVIDER: ${RAGLOGS_LLM_PROVIDER:-disabled}
-      RAGLOGS_LLM_MODEL: ${RAGLOGS_LLM_MODEL:-gpt-4.1-mini}
-      RAGLOGS_OPENAI_API_KEY: ${RAGLOGS_OPENAI_API_KEY:-}
-      RAGLOGS_OPENAI_BASE_URL: ${RAGLOGS_OPENAI_BASE_URL:-https://api.openai.com/v1}
-      RAGLOGS_EMBEDDINGS_PROVIDER: ${RAGLOGS_EMBEDDINGS_PROVIDER:-disabled}
+      DB_URL: postgresql+psycopg://postgres:postgres@postgres:5432/raglogs
+      LLM_PROVIDER: ${LLM_PROVIDER:-disabled}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4.1-mini}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      EMBEDDINGS_PROVIDER: ${EMBEDDINGS_PROVIDER:-disabled}
     command: raglogs worker
     volumes:
       - log_uploads:/app/logs

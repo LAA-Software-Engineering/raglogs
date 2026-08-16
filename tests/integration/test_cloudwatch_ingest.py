@@ -2,7 +2,7 @@
 Integration test for the CloudWatch adapter — full ingest -> explain flow using moto's
 mocked AWS Logs API (no real AWS calls, no localstack container required).
 
-Requires RAGLOGS_DB_URL to point to a test database, same gate as test_full_flow.py.
+Requires DB_URL to point to a test database, same gate as test_full_flow.py.
 """
 import os
 from datetime import datetime, timedelta, timezone
@@ -10,8 +10,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 pytestmark = pytest.mark.skipif(
-    not os.getenv("RAGLOGS_DB_URL") and not os.getenv("RAGLOGS_INTEGRATION_TESTS"),
-    reason="Integration tests require RAGLOGS_DB_URL environment variable",
+    not os.getenv("DB_URL") and not os.getenv("INTEGRATION_TESTS"),
+    reason="Integration tests require DB_URL environment variable",
 )
 
 
