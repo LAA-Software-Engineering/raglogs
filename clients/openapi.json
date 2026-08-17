@@ -95,6 +95,24 @@
         "summary": "List Ingestions",
         "description": "List recent completed ingestion jobs, newest first. Used by the web UI's ingestion picker.",
         "operationId": "v1_ingestions_list_ingestions__v1_ingestions",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -102,6 +120,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/IngestionListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -160,6 +188,24 @@
         "summary": "Get Latest Ingestion",
         "description": "Return the ID of the most recently completed ingestion job, or null if\nnone exists yet \u2014 the same default the CLI and GET /ingestions apply\n(latest ingestion, not all ingestions merged). Not currently called by\nthe web UI (its picker defaults to GET /ingestions[0] instead), but kept\nas a lighter-weight lookup for other integrations.\n\nRegistered before /{ingestion_job_id} so \"latest\" isn't swallowed by\nthat path param.",
         "operationId": "v1_ingestions_get_latest_ingestion__v1_ingestions_latest",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -167,6 +213,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/LatestIngestionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -455,6 +511,24 @@
         "description": "List recent completed ingestion jobs, newest first. Used by the web UI's ingestion picker.",
         "operationId": "legacy_ingestions_list_ingestions__ingestions",
         "deprecated": true,
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -462,6 +536,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/IngestionListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -521,6 +605,25 @@
         "summary": "Get Latest Ingestion",
         "description": "Return the ID of the most recently completed ingestion job, or null if\nnone exists yet \u2014 the same default the CLI and GET /ingestions apply\n(latest ingestion, not all ingestions merged). Not currently called by\nthe web UI (its picker defaults to GET /ingestions[0] instead), but kept\nas a lighter-weight lookup for other integrations.\n\nRegistered before /{ingestion_job_id} so \"latest\" isn't swallowed by\nthat path param.",
         "operationId": "legacy_ingestions_get_latest_ingestion__ingestions_latest",
+        "deprecated": true,
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -531,9 +634,18 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
           }
-        },
-        "deprecated": true
+        }
       }
     },
     "/ingestions/lines": {
@@ -1167,6 +1279,89 @@
         "deprecated": true
       }
     },
+    "/v1/query/similar": {
+      "post": {
+        "tags": [
+          "query"
+        ],
+        "summary": "Similar Endpoint",
+        "operationId": "v1_query_similar_endpoint__v1_query_similar",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SimilarRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimilarResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/query/similar": {
+      "post": {
+        "tags": [
+          "query"
+        ],
+        "summary": "Similar Endpoint",
+        "operationId": "legacy_query_similar_endpoint__query_similar",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SimilarRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimilarResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "deprecated": true
+      }
+    },
     "/v1/config": {
       "get": {
         "tags": [
@@ -1271,6 +1466,17 @@
               }
             ],
             "title": "Ingestion Job Id"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
           }
         },
         "type": "object",
@@ -1587,6 +1793,17 @@
               }
             ],
             "title": "Ingestion Job Id"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
           }
         },
         "type": "object",
@@ -1755,6 +1972,17 @@
             ],
             "title": "Format",
             "default": "json"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
           }
         },
         "type": "object",
@@ -2063,6 +2291,17 @@
             ],
             "title": "Format",
             "default": "json"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
           }
         },
         "type": "object",
@@ -2223,6 +2462,16 @@
               }
             ],
             "title": "Tail Jobs"
+          },
+          "llm_breaker": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LlmBreakerHealth"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -2368,6 +2617,17 @@
               }
             ],
             "title": "Callback Url"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
           }
         },
         "type": "object",
@@ -2561,6 +2821,29 @@
         ],
         "title": "LatestIngestionResponse"
       },
+      "LlmBreakerHealth": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "consecutive_failures": {
+            "type": "integer",
+            "title": "Consecutive Failures"
+          },
+          "cooldown_remaining_seconds": {
+            "type": "number",
+            "title": "Cooldown Remaining Seconds"
+          }
+        },
+        "type": "object",
+        "required": [
+          "state",
+          "consecutive_failures",
+          "cooldown_remaining_seconds"
+        ],
+        "title": "LlmBreakerHealth"
+      },
       "LlmProvenance": {
         "properties": {
           "used": {
@@ -2626,6 +2909,275 @@
           "error_count"
         ],
         "title": "PushLinesResponse"
+      },
+      "SimilarMatchModel": {
+        "properties": {
+          "scope": {
+            "type": "string",
+            "title": "Scope"
+          },
+          "fingerprint": {
+            "type": "string",
+            "title": "Fingerprint"
+          },
+          "template": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template"
+          },
+          "similarity": {
+            "type": "number",
+            "title": "Similarity"
+          },
+          "first_seen": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Seen"
+          },
+          "last_seen": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "scope",
+          "fingerprint",
+          "similarity"
+        ],
+        "title": "SimilarMatchModel"
+      },
+      "SimilarQueryCluster": {
+        "properties": {
+          "fingerprint": {
+            "type": "string",
+            "title": "Fingerprint"
+          },
+          "template": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fingerprint"
+        ],
+        "title": "SimilarQueryCluster"
+      },
+      "SimilarRequest": {
+        "properties": {
+          "since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since"
+          },
+          "from_time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Time"
+          },
+          "to_time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Time"
+          },
+          "service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service"
+          },
+          "env": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Env"
+          },
+          "ingestion_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ingestion Job Id"
+          },
+          "fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fingerprint"
+          },
+          "fingerprints": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fingerprints"
+          },
+          "top": {
+            "type": "integer",
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Top",
+            "default": 10
+          },
+          "cross_scope": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cross Scope"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          }
+        },
+        "type": "object",
+        "title": "SimilarRequest"
+      },
+      "SimilarResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "scope": {
+            "type": "string",
+            "title": "Scope",
+            "default": "default"
+          },
+          "window": {
+            "$ref": "#/components/schemas/TimeWindow"
+          },
+          "query_clusters": {
+            "items": {
+              "$ref": "#/components/schemas/SimilarQueryCluster"
+            },
+            "type": "array",
+            "title": "Query Clusters"
+          },
+          "matches": {
+            "items": {
+              "$ref": "#/components/schemas/SimilarMatchModel"
+            },
+            "type": "array",
+            "title": "Matches"
+          },
+          "retrieval_mode": {
+            "type": "string",
+            "title": "Retrieval Mode",
+            "default": "fingerprint"
+          },
+          "llm": {
+            "$ref": "#/components/schemas/LlmProvenance"
+          },
+          "rendered_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rendered Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "window",
+          "llm"
+        ],
+        "title": "SimilarResponse"
       },
       "TailLifecycleResponse": {
         "properties": {
@@ -2809,6 +3361,17 @@
             ],
             "title": "Format",
             "default": "json"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
           }
         },
         "type": "object",

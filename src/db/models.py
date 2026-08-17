@@ -12,6 +12,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -135,6 +136,35 @@ class LogEmbedding(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     log_entry: Mapped["LogEntry"] = relationship("LogEntry", back_populates="embedding")
+
+
+CLUSTER_EMBEDDING_UNIQUE = "ux_cluster_embeddings_scope_fingerprint"
+
+
+class ClusterEmbedding(Base):
+    """Cluster-template vector keyed by ``(scope, fingerprint)`` for similar-incident search."""
+
+    __tablename__ = "cluster_embeddings"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    scope: Mapped[str] = mapped_column(
+        String(255), nullable=False, default=DEFAULT_LOG_SCOPE, server_default="default"
+    )
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    template: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding: Mapped[Any] = mapped_column(Vector(1536), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    first_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("scope", "fingerprint", name=CLUSTER_EMBEDDING_UNIQUE),
+        Index("ix_cluster_embeddings_fingerprint", "fingerprint"),
+        Index("ix_cluster_embeddings_scope", "scope"),
+    )
 
 
 class ClusterRun(Base):

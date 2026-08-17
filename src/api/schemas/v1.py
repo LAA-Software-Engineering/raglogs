@@ -3,6 +3,7 @@
 Pydantic models here are the HTTP contract. CLI still uses ``ExplainResult``
 string confidence and ``summary_text``; this module only shapes JSON bodies.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -36,8 +37,13 @@ class TimeWindow(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    from_: str = Field(validation_alias=AliasChoices("from", "from_", "start"), serialization_alias="from")
-    to: str = Field(validation_alias=AliasChoices("to", "end"), serialization_alias="to")
+    from_: str = Field(
+        validation_alias=AliasChoices("from", "from_", "start"),
+        serialization_alias="from",
+    )
+    to: str = Field(
+        validation_alias=AliasChoices("to", "end"), serialization_alias="to"
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -195,6 +201,34 @@ class ClustersResponse(BaseModel):
     ingestion_job_id: Optional[str] = None
 
 
+class SimilarQueryCluster(BaseModel):
+    fingerprint: str
+    template: Optional[str] = None
+
+
+class SimilarMatchModel(BaseModel):
+    scope: str
+    fingerprint: str
+    template: Optional[str] = None
+    similarity: float
+    first_seen: Optional[str] = None
+    last_seen: Optional[str] = None
+    count: int = 0
+
+
+class SimilarResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    schema_version: str = SCHEMA_VERSION
+    scope: str = "default"
+    window: TimeWindow
+    query_clusters: list[SimilarQueryCluster] = Field(default_factory=list)
+    matches: list[SimilarMatchModel] = Field(default_factory=list)
+    retrieval_mode: str = "fingerprint"
+    llm: LlmProvenance
+    rendered_text: Optional[str] = None
+
+
 def scope_from_request(http_request: Optional[Request] = None) -> str:
     """Resolved G8 scope when ``bind_request_scope`` ran; else principal or ``default``."""
     if http_request is None:
@@ -242,7 +276,9 @@ def window_from_bounds(start: datetime, end: datetime) -> TimeWindow:
     return TimeWindow(from_=start.isoformat(), to=end.isoformat())
 
 
-def window_from_mapping(raw: Any, fallback_start: str = "", fallback_end: str = "") -> TimeWindow:
+def window_from_mapping(
+    raw: Any, fallback_start: str = "", fallback_end: str = ""
+) -> TimeWindow:
     if isinstance(raw, TimeWindow):
         return raw
     if not isinstance(raw, dict):
@@ -293,7 +329,9 @@ def _services_list(raw: Any) -> list[str]:
 def cluster_from_mapping(raw: Optional[dict[str, Any]]) -> Optional[ClusterEvidence]:
     if not raw:
         return None
-    template = raw.get("template") or raw.get("message") or raw.get("representative_message")
+    template = (
+        raw.get("template") or raw.get("message") or raw.get("representative_message")
+    )
     template_str = str(template) if template is not None else None
     return ClusterEvidence(
         fingerprint=raw.get("fingerprint"),
@@ -342,7 +380,9 @@ def trigger_from_candidates(
     primary: Optional[ClusterEvidence] = None,
 ) -> TriggerInfo:
     if not candidates:
-        return TriggerInfo(detected=False, type=None, service=None, at=None, correlation=None)
+        return TriggerInfo(
+            detected=False, type=None, service=None, at=None, correlation=None
+        )
     first = candidates[0]
     if isinstance(first, dict):
         message = str(first.get("message") or "")
@@ -369,7 +409,9 @@ def trigger_from_candidates(
     )
 
 
-def trigger_from_mapping(raw: Any, candidates: list[Any], primary: Optional[ClusterEvidence]) -> TriggerInfo:
+def trigger_from_mapping(
+    raw: Any, candidates: list[Any], primary: Optional[ClusterEvidence]
+) -> TriggerInfo:
     if isinstance(raw, TriggerInfo):
         return raw
     if isinstance(raw, dict) and "detected" in raw:
@@ -399,7 +441,9 @@ def explain_from_result(
 ) -> ExplainResponse:
     primary = cluster_from_mapping(result.primary_cluster)
     secondary = [
-        c for c in (cluster_from_mapping(item) for item in result.secondary_clusters) if c is not None
+        c
+        for c in (cluster_from_mapping(item) for item in result.secondary_clusters)
+        if c is not None
     ]
     prose = result.summary_text or ""
     return ExplainResponse(
@@ -432,10 +476,16 @@ def explain_from_cached(
     """Upgrade a cached dict (old or v1) so the response always has v1 fields."""
     primary = cluster_from_mapping(payload.get("primary_cluster"))
     secondary_raw = payload.get("secondary_clusters") or []
-    secondary = [c for c in (cluster_from_mapping(item) for item in secondary_raw) if c is not None]
+    secondary = [
+        c
+        for c in (cluster_from_mapping(item) for item in secondary_raw)
+        if c is not None
+    ]
     candidates = payload.get("trigger_candidates") or []
     prose = str(payload.get("rendered_text") or payload.get("summary") or "")
-    already_v1 = isinstance(payload.get("confidence"), dict) and bool(payload.get("schema_version"))
+    already_v1 = isinstance(payload.get("confidence"), dict) and bool(
+        payload.get("schema_version")
+    )
     if already_v1:
         summary_text = str(payload.get("summary") or short_summary(prose))
     else:

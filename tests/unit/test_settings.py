@@ -43,6 +43,14 @@ def test_ask_semantic_settings_from_env(monkeypatch):
     assert settings.ask_semantic_min_similarity == pytest.approx(0.6)
 
 
+def test_similar_semantic_settings_from_env(monkeypatch):
+    monkeypatch.setenv("SIMILAR_SEMANTIC_MIN_SIMILARITY", "0.85")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.similar_semantic_min_similarity == pytest.approx(0.85)
+
+
 def test_ignores_legacy_raglogs_prefix(monkeypatch):
     monkeypatch.setenv("RAGLOGS_LLM_PROVIDER", "ollama")
     monkeypatch.setenv("RAGLOGS_DB_URL", "postgresql+psycopg://legacy/db")

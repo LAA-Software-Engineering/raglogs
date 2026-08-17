@@ -15,6 +15,7 @@ from src.api.schemas.v1 import (
     ClustersResponse,
     CompareResponse,
     ExplainResponse,
+    SimilarResponse,
     TimelineResponse,
     explain_from_cached,
     short_summary,
@@ -65,6 +66,7 @@ def test_published_jsonschema_matches_pydantic() -> None:
         "compare.v1.json": CompareResponse,
         "ask.v1.json": AskResponse,
         "clusters.v1.json": ClustersResponse,
+        "similar.v1.json": SimilarResponse,
     }
     for filename, model in mapping.items():
         path = SCHEMA_DIR / filename
@@ -148,3 +150,14 @@ def test_explain_and_unversioned_share_v1_body() -> None:
     assert unversioned.json() == versioned.json()
     ExplainResponse.model_validate(versioned.json())
     assert versioned.json()["schema_version"] == "1.0"
+
+
+def test_similar_openapi_documents_response_model() -> None:
+    schema = app.openapi()
+    similar = schema["paths"]["/v1/query/similar"]["post"]
+    ref = similar["responses"]["200"]["content"]["application/json"]["schema"]
+    assert "$ref" in ref
+    assert "SimilarResponse" in ref["$ref"]
+    components = schema["components"]["schemas"]
+    assert "SimilarResponse" in components
+    assert "SimilarMatchModel" in components

@@ -981,6 +981,105 @@ class TestClustersEndpoint:
         assert resp.status_code == 400
 
 
+# ── POST /query/similar ───────────────────────────────────────────────────────
+
+class TestSimilarEndpoint:
+    def _result(self, *, mode: str = "semantic"):
+        from datetime import datetime as dt
+        from src.core.retrieval.similar import QueryCluster, SimilarMatch, SimilarResult
+
+        start = dt(2026, 3, 12, 13, 0, 0, tzinfo=timezone.utc)
+        end = dt(2026, 3, 12, 14, 0, 0, tzinfo=timezone.utc)
+        return SimilarResult(
+            query_clusters=[QueryCluster(fingerprint="abc123", template="connection refused")],
+            matches=[
+                SimilarMatch(
+                    scope="incident:INC-1188",
+                    fingerprint="abc123",
+                    template="connection refused",
+                    similarity=0.94,
+                    first_seen=start,
+                    last_seen=end,
+                    count=12,
+                )
+            ],
+            retrieval_mode=mode,
+            window_start=start,
+            window_end=end,
+        )
+
+    def test_v1_and_unversioned_alias(self):
+        mock_db = _ctx_db()
+        result = self._result()
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db), \
+             patch(
+                 "src.core.retrieval.similar.find_similar_incidents",
+                 return_value=result,
+             ):
+            versioned = client.post(
+                "/v1/query/similar",
+                json={"fingerprint": "abc123", "since": "1h"},
+            )
+            unversioned = client.post(
+                "/query/similar",
+                json={"fingerprint": "abc123", "since": "1h"},
+            )
+
+        assert versioned.status_code == 200
+        assert unversioned.status_code == 200
+        assert versioned.json() == unversioned.json()
+        body = versioned.json()
+        assert body["schema_version"] == "1.0"
+        assert body["retrieval_mode"] == "semantic"
+        assert body["matches"][0]["scope"] == "incident:INC-1188"
+        assert set(body["llm"]) >= {"used", "provider", "model", "fell_back"}
+        assert body["llm"]["used"] is False
+        assert unversioned.headers.get("deprecation") == "true"
+        assert versioned.headers.get("deprecation") is None
+
+    def test_g7_fields_present(self):
+        mock_db = _ctx_db()
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db), \
+             patch(
+                 "src.core.retrieval.similar.find_similar_incidents",
+                 return_value=self._result(mode="fingerprint"),
+             ):
+            resp = client.post("/v1/query/similar", json={"fingerprint": "abc123"})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        for key in ("schema_version", "scope", "window", "query_clusters", "matches", "retrieval_mode", "llm"):
+            assert key in data
+        assert data["schema_version"] == "1.0"
+        assert data["window"]["from"]
+        assert data["window"]["to"]
+        assert data["llm"]["fell_back"] is False
+        assert data["rendered_text"]
+
+    def test_degradation_never_500(self):
+        mock_db = _ctx_db()
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db), \
+             patch(
+                 "src.core.clustering.clusterer.run_clustering",
+                 side_effect=RuntimeError("db exploded"),
+             ):
+            resp = client.post("/v1/query/similar", json={"since": "1h"})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["retrieval_mode"] == "fingerprint"
+        assert data["matches"] == []
+        assert data["schema_version"] == "1.0"
+        assert data["llm"]["used"] is False
+
+    def test_invalid_ingestion_job_id_returns_400(self):
+        resp = client.post("/v1/query/similar", json={
+            "since": "1h",
+            "ingestion_job_id": "not-a-uuid",
+        })
+        assert resp.status_code == 400
+
+
 # ── POST /query/timeline ─────────────────────────────────────────────────────
 
 class TestTimelineEndpoint:

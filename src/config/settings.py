@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     ask_semantic_top_k: int = 100
     ask_semantic_min_similarity: float = 0.75
 
+    # Similar-incident search (pgvector over cluster_embeddings; fingerprint fallback)
+    similar_semantic_min_similarity: float = 0.80
+
     llm_provider: Literal["disabled", "openai", "ollama"] = "disabled"
     llm_model: str = "gpt-4.1-mini"
 

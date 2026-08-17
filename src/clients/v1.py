@@ -306,3 +306,36 @@ class RaglogsClient:
                 "format": format,
             },
         )
+
+    def similar(
+        self,
+        *,
+        since: Optional[str] = None,
+        from_time: Optional[str] = None,
+        to_time: Optional[str] = None,
+        service: Optional[str] = None,
+        env: Optional[str] = None,
+        ingestion_job_id: Optional[str] = None,
+        fingerprint: Optional[str] = None,
+        fingerprints: Optional[list[str]] = None,
+        top: int = 10,
+        cross_scope: Optional[bool] = None,
+        scope: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """POST /v1/query/similar — prior incidents with nearby fingerprints."""
+        return self._post(
+            "/v1/query/similar",
+            {
+                "since": since,
+                "from_time": from_time,
+                "to_time": to_time,
+                "service": service,
+                "env": env,
+                "ingestion_job_id": ingestion_job_id,
+                "fingerprint": fingerprint,
+                "fingerprints": fingerprints,
+                "top": top,
+                "cross_scope": cross_scope,
+                "scope": scope,
+            },
+        )
