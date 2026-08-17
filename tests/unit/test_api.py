@@ -11,8 +11,7 @@ validation, timeline/compare query routes, health queue depth, and 4xx cases.
 import uuid
 import pytest
 from datetime import datetime, timezone
-from contextlib import contextmanager
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 from src.api.app import app
@@ -73,9 +72,13 @@ class TestHealth:
     @pytest.fixture(autouse=True)
     def _clear_adapter_health_cache(self):
         from src.api.routes.health import _adapter_health_cache
+        from src.core.llm.resilience import reset_llm_breaker
+
         _adapter_health_cache.clear()
+        reset_llm_breaker()
         yield
         _adapter_health_cache.clear()
+        reset_llm_breaker()
 
     def test_health_ok_when_db_connected(self):
         with patch("src.db.session.check_connection", return_value=True), \
@@ -154,6 +157,38 @@ class TestHealth:
             resp = client.get("/health")
 
         assert resp.json()["adapters"]["loki"].startswith("unavailable:")
+
+    def test_health_includes_llm_breaker_closed(self):
+        with patch("src.db.session.check_connection", return_value=True), \
+             _patch_get_db(execute_scalar=3):
+            resp = client.get("/health")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        breaker = data["llm_breaker"]
+        assert breaker["state"] == "closed"
+        assert breaker["consecutive_failures"] == 0
+        assert breaker["cooldown_remaining_seconds"] == 0
+
+    def test_health_degraded_when_breaker_open_db_still_connected(self):
+        from src.core.llm.resilience import get_llm_breaker
+
+        breaker = get_llm_breaker()
+        breaker.record_failure(threshold=2, cooldown_seconds=60)
+        breaker.record_failure(threshold=2, cooldown_seconds=60)
+
+        with patch("src.db.session.check_connection", return_value=True), \
+             _patch_get_db(execute_scalar=3):
+            resp = client.get("/health")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "degraded"
+        assert data["db"] == "connected"
+        assert data["llm_breaker"]["state"] == "open"
+        assert data["llm_breaker"]["consecutive_failures"] == 2
+        assert data["llm_breaker"]["cooldown_remaining_seconds"] > 0
 
 
 # ── POST /ingestions ──────────────────────────────────────────────────────────

@@ -696,6 +696,12 @@ All settings are read from `.env`, environment variables, or CLI flags. Priority
 | `INGEST_QUEUE_MAX` | `100` | Pending worker-job ceiling; over this, ingest returns `429 INGEST_QUEUE_FULL` |
 | `INGEST_RETRY_AFTER_SECONDS` | `5` | `Retry-After` value on `429 INGEST_QUEUE_FULL` |
 | `LLM_MAX_CONCURRENCY` | `4` | Max in-flight LLM provider calls process-wide. `0` = unlimited. Noop does not wait |
+| `LLM_TIMEOUT` | `30` | Per-attempt HTTP timeout in seconds for OpenAI/Ollama calls |
+| `LLM_MAX_RETRIES` | `2` | Extra attempts after the first (3 total) with jittered exponential backoff |
+| `LLM_MAX_TOKENS` | `600` | Completion cap (`max_tokens` / Ollama `num_predict`) |
+| `LLM_MAX_INPUT_TOKENS` | `0` | Estimated input-token budget (`chars/4`). `0` derives from `LLM_MAX_TOKENS`. Over budget: trim evidence (respecting `MAX_EVIDENCE_ITEMS`) or fall back |
+| `LLM_BREAKER_THRESHOLD` | `5` | Consecutive LLM failures before the process-local breaker opens |
+| `LLM_BREAKER_COOLDOWN_SECONDS` | `60` | Seconds the breaker stays open before a half-open probe |
 | `WEBHOOK_SECRET` | _(empty)_ | Fallback HMAC secret for ingest completion callbacks when auth is off or the API key has no per-key `whsec_` |
 | `WEBHOOK_MAX_RETRIES` | `5` | Extra webhook POST attempts after the first (6 POSTs by default) on 5xx / 429 / connect errors |
 | `WEBHOOK_TIMEOUT` | `10` | Per-attempt HTTP timeout in seconds for completion callbacks |
@@ -708,6 +714,8 @@ All settings are read from `.env`, environment variables, or CLI flags. Priority
 raglogs is fully useful without any LLM. The `--no-llm` flag (or `LLM_PROVIDER=disabled`) activates deterministic template-based summaries.
 
 When an LLM is configured, it receives only a small curated evidence packet — not raw logs. The prompt enforces fixed output structure, prohibits fabrication, and requires explicit uncertainty statements when evidence is insufficient. In-flight provider calls are capped by `LLM_MAX_CONCURRENCY` (CLI and API share the process semaphore; the noop provider does not block).
+
+Every provider call has a timeout (`LLM_TIMEOUT`) and bounded jittered retries (`LLM_MAX_RETRIES`). On timeout, HTTP error, exhausted retries, or an over-budget evidence payload, explain/ask **fall back to the same deterministic templates** and set `llm.fell_back=true` — the request still succeeds. After `LLM_BREAKER_THRESHOLD` consecutive failures a process-local circuit breaker opens for `LLM_BREAKER_COOLDOWN_SECONDS`; while open, raglogs skips the provider entirely and serves templates. `GET /health` exposes `llm_breaker: {state, consecutive_failures, cooldown_remaining_seconds}` (`closed` / `open` / `half_open`). An open breaker marks `status` as `degraded` but still returns HTTP 200 so probes do not fail. Fallback never invents: it only renders the curated evidence packet.
 
 ### OpenAI
 
@@ -970,7 +978,7 @@ If auth is disabled and the process binds a non-loopback address (`0.0.0.0`, `::
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/health` | Service and DB health check (unversioned). Includes `tail_jobs: {running, paused}`. |
+| `GET` | `/health` | Service and DB health check (unversioned). Includes `tail_jobs: {running, paused}` and `llm_breaker` (`closed` / `open` / `half_open`). Open breaker → `status: degraded`, still HTTP 200. |
 | `POST` | `/v1/ingestions` | Enqueue a batch ingest job (`adapter`: `file`, `cloudwatch`, `datadog`, `loki`, or `k8s`). Set `"mode": "tail"` for pull adapters to start a long-lived tail job. |
 | `POST` | `/v1/ingestions/lines` | Push NDJSON of raw or pre-parsed log lines (sync persist) |
 | `POST` | `/v1/ingestions/{id}:pause` | Pause a tail job |
@@ -1014,7 +1022,7 @@ curl -X POST http://localhost:8000/v1/ingestions/$ID:stop
 - **Queue depth.** When pending worker jobs ≥ `INGEST_QUEUE_MAX` (default 100), `POST /v1/ingestions` and `POST /v1/ingestions/lines` return **429** with `Retry-After` (`INGEST_RETRY_AFTER_SECONDS`, default 5) and body `{"error_code":"INGEST_QUEUE_FULL","message":"..."}`. Tail ticks skip the same ceiling.
 - **API token bucket.** `POST /v1/ingestions*` (writes) and `/v1/query*` (plus unversioned aliases) are limited per API key (`request.state.auth_principal.key_id`, or a single `anonymous` bucket when `AUTH_ENABLED=false`). Exceeding the bucket returns **429** with `Retry-After` (`RATELIMIT_RETRY_AFTER_SECONDS`, default 1) and body `{"error_code":"RATE_LIMITED","message":"..."}`. Defaults (`RATELIMIT_INGEST_RPS` / `RATELIMIT_QUERY_RPS` / `RATELIMIT_BURST` = 100) are high enough for local demo and tests; `0` rps means unlimited for that category. `/health`, `/docs`, static UI, and `/config` are not limited. Buckets are in-memory per process.
 
-LLM calls are separately capped by `LLM_MAX_CONCURRENCY` (default 4) so a burst of `explain` cannot fan out unbounded provider requests.
+LLM calls are separately capped by `LLM_MAX_CONCURRENCY` (default 4) so a burst of `explain` cannot fan out unbounded provider requests. Timeouts, retries, automatic template fallback (`llm.fell_back`), and the process-local circuit breaker are described under [LLM integration](#llm-integration).
 
 **Idempotency-Key.** `POST /v1/ingestions` (batch enqueue and tail create; also the deprecated `/ingestions` alias) honors an `Idempotency-Key` header (max 256 characters). A repeat **in the same isolation scope** within `INGEST_IDEMPOTENCY_TTL_SECONDS` (default 86400) returns the original **202** job — the same `worker_job_id` for batch, the same `ingestion_job_id` for tail — instead of starting a new one. Reusing another scope's key returns **409** `IDEMPOTENCY_SCOPE_CONFLICT`. Empty keys return **400**. GET routes ignore the header. `POST /v1/ingestions/lines` does not use the header; duplicate push/tail lines are handled by content dedup instead.
 

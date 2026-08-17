@@ -72,6 +72,16 @@ class Settings(BaseSettings):
     # API concurrency. 0 = unlimited. Noop provider skips the wait.
     llm_max_concurrency: int = 4
 
+    # LLM resilience (G10). Timeouts/retries wrap every provider HTTP call.
+    # On failure the pipeline falls back to deterministic templates.
+    # 0 input-token budget means "derive from LLM_MAX_TOKENS".
+    llm_timeout: float = 30.0
+    llm_max_retries: int = 2
+    llm_max_tokens: int = 600
+    llm_max_input_tokens: int = 0
+    llm_breaker_threshold: int = 5
+    llm_breaker_cooldown_seconds: float = 60.0
+
     # HMAC-signed ingest completion webhooks (G5). WEBHOOK_SECRET is the
     # fallback when AUTH_ENABLED=false or the API key has no per-key secret.
     webhook_secret: str = ""

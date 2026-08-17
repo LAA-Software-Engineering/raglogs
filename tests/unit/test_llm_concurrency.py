@@ -15,6 +15,7 @@ from src.core.llm.provider import (
     reset_llm_concurrency_limiter,
     unwrap_llm_provider,
 )
+from src.core.llm.resilience import reset_llm_breaker
 from src.core.retrieval.question_router import _call_llm_ask
 
 
@@ -93,6 +94,7 @@ def test_noop_does_not_block_when_semaphore_is_held() -> None:
 def test_call_llm_ask_takes_concurrency_semaphore() -> None:
     """Ask HTTP must share the G9 slot; dropping it would allow overlapping posts."""
     reset_llm_concurrency_limiter()
+    reset_llm_breaker()
     settings = Settings(_env_file=None, llm_max_concurrency=1)
     inner_current = 0
     max_seen = 0
@@ -149,3 +151,4 @@ def test_call_llm_ask_takes_concurrency_semaphore() -> None:
 
     assert max_seen == 1
     reset_llm_concurrency_limiter()
+    reset_llm_breaker()
