@@ -53,7 +53,7 @@ class TestAskCliIngestionFlags:
              ) as mock_answer:
             result = runner.invoke(app, ["ask", "why did login fail?"])
 
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
         mock_latest.assert_called_once_with(mock_db, scope="default")
         assert mock_answer.call_args.kwargs["ingestion_job_id"] == job_id
 
@@ -72,7 +72,7 @@ class TestAskCliIngestionFlags:
                 "ask", "why did login fail?", "--ingestion-job", job_id,
             ])
 
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
         mock_latest.assert_not_called()
         assert str(mock_answer.call_args.kwargs["ingestion_job_id"]) == job_id
 
@@ -90,7 +90,7 @@ class TestAskCliIngestionFlags:
                 "ask", "why did login fail?", "--all-ingestions",
             ])
 
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
         mock_latest.assert_not_called()
         assert mock_answer.call_args.kwargs["ingestion_job_id"] is None
 
@@ -104,6 +104,6 @@ class TestAskCliIngestionFlags:
                 "ask", "why did login fail?", "--ingestion-job", "not-a-uuid",
             ])
 
-        assert result.exit_code == 1
+        assert result.exit_code == 1, result.output
         mock_answer.assert_not_called()
         assert "Error" in result.output

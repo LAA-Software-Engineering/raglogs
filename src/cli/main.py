@@ -11,7 +11,7 @@ def _build_app() -> typer.Typer:
     from src.cli.commands.clusters import clusters_cmd
     from src.cli.commands.status import status_cmd
     from src.cli.commands.config_cmd import config_cmd
-    from src.cli.commands.ask import app as ask_app
+    from src.cli.commands.ask import ask_cmd
     from src.cli.commands.demo import demo_cmd
     from src.cli.commands.worker import worker_cmd
     from src.cli.commands.timeline import timeline_cmd
@@ -37,7 +37,7 @@ def _build_app() -> typer.Typer:
     _app.command("timeline")(timeline_cmd)
     _app.command("compare")(compare_cmd)
     _app.command("purge")(purge_cmd)
-    _app.add_typer(ask_app, name="ask")
+    _app.command("ask")(ask_cmd)
     _app.add_typer(keys_app, name="keys")
     return _app
 

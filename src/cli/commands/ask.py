@@ -4,13 +4,10 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
-app = typer.Typer()
 console = Console()
 
 
-@app.callback(invoke_without_command=True)
 def ask_cmd(
-    ctx: typer.Context,
     question: Optional[str] = typer.Argument(None, help="Your question about the logs"),
     since: Optional[str] = typer.Option(None, "--since", help="Time window e.g. 2h"),
     service: Optional[str] = typer.Option(None, "--service", help="Filter by service"),
@@ -32,9 +29,6 @@ def ask_cmd(
     ),
 ):
     """Ask a natural language question about your logs."""
-    if ctx.invoked_subcommand is not None:
-        return
-
     if not question:
         console.print("[red]Error:[/red] Please provide a question.")
         console.print("[dim]Example: raglogs ask 'why did login fail?'[/dim]")
