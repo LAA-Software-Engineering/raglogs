@@ -630,6 +630,26 @@ raglogs config llm_provider
 
 ---
 
+### `raglogs keys`
+
+Mint, list, and revoke HTTP API keys. The plaintext secret is printed **once** at create time and is never stored or logged — only an argon2 hash and a short prefix are kept.
+
+```bash
+raglogs keys create --role query --scope default --name "ci"
+raglogs keys list
+raglogs keys revoke <key-uuid>
+```
+
+| Flag | Description |
+|---|---|
+| `--role` | `ingest`, `query`, or `admin` (default `query`) |
+| `--scope` | Stored on the key for later tenant isolation (G8). Default `default`. Not used to filter log queries yet. |
+| `--name` | Optional label |
+
+Requires a migrated database (`raglogs init`). See [HTTP API authentication](#http-api-authentication).
+
+---
+
 ## Configuration
 
 All settings are read from `.env`, environment variables, or CLI flags. Priority: CLI > env var > `.env` file > defaults.
@@ -658,6 +678,13 @@ All settings are read from `.env`, environment variables, or CLI flags. Priority
 | `DATADOG_SITE` | `datadoghq.com` | Datadog site (`us3.datadoghq.com`, `datadoghq.eu`, …) |
 | `DATADOG_PAGE_SIZE` | `1000` | Logs per Datadog page (API max 1000) |
 | `DATADOG_MAX_ROWS` | `10000` | Max events pulled in one Datadog ingest run |
+| `AUTH_ENABLED` | `false` | Require `Authorization: Bearer` on the HTTP API (except `/health` and `/metrics`). Keep `false` for local demo; set `true` in production/Docker |
+| `AUTH_MODE` | `api_key` | `api_key`, `oidc`, or `both` |
+| `OIDC_ISSUER` | _(empty)_ | JWT issuer when `AUTH_MODE` is `oidc` or `both` |
+| `OIDC_AUDIENCE` | _(empty)_ | Optional JWT audience |
+| `OIDC_JWKS_URL` | _(empty)_ | Optional JWKS URL; default is `{issuer}/.well-known/openid-configuration` then `{issuer}/.well-known/jwks.json` |
+| `API_BIND_HOST` | `127.0.0.1` | Host the startup guard treats as the bind address. `make api` sets this to `0.0.0.0` to match uvicorn |
+| `AUTH_REFUSE_INSECURE_BIND` | `false` | If `true`, refuse to start when auth is off and the bind host is not loopback; if `false`, log a warning only |
 
 ---
 
@@ -872,10 +899,53 @@ Possible values: `low`, `medium`, `medium-high`, `high`.
 raglogs exposes a FastAPI server for integrations and future tooling.
 
 ```bash
-uvicorn raglogs.api.app:app --host 0.0.0.0 --port 8000 --reload
+uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --reload
 # or
 make api
 ```
+
+`make api` still binds `0.0.0.0`. With the default `AUTH_ENABLED=false` that logs a loud startup warning. Bind loopback instead with `make api API_BIND_HOST=127.0.0.1`, or enable auth (below).
+
+### HTTP API authentication
+
+Auth is **off by default** so local demo and existing clients keep working. Set `AUTH_ENABLED=true` before exposing the API on a network (including Docker Compose on `0.0.0.0`).
+
+```bash
+export AUTH_ENABLED=true
+raglogs keys create --role admin --name "local"
+# copy the rlk_… secret from the panel — it is shown only once
+
+curl -X POST http://localhost:8000/query/explain \
+  -H "Authorization: Bearer rlk_…" \
+  -H "Content-Type: application/json" \
+  -d '{"since": "30m", "no_llm": true}'
+```
+
+| Role | Allowed |
+|---|---|
+| `ingest` | `POST /ingestions` |
+| `query` | `GET /ingestions*`, `POST /query/*`, web UI (`GET /`, `/static`), OpenAPI (`/docs`) |
+| `admin` | everything, including `GET /config` |
+
+`GET /health` and `GET /metrics` (path reserved; no Prometheus body yet) are always unauthenticated. `/docs` is **not** exempt.
+
+Missing or invalid `Authorization: Bearer` returns **401**:
+
+```json
+{"error_code": "AUTH_UNAUTHORIZED", "message": "…"}
+```
+
+A valid key with the wrong role returns **403**:
+
+```json
+{"error_code": "AUTH_FORBIDDEN", "message": "…"}
+```
+
+Keys are stored argon2-hashed with a short indexed prefix. `scope` defaults to `default` and is stored for later isolation work — this release does **not** filter clusters or logs by scope.
+
+Optional OIDC: set `AUTH_MODE=oidc` or `both` and `OIDC_ISSUER`. A JWT (three dotted segments) is validated via JWKS (`iss`, `exp`, and `aud` when `OIDC_AUDIENCE` is set). Role comes from claim `raglogs_role` or `roles`, defaulting to `query`. When `AUTH_MODE=api_key`, JWTs are rejected.
+
+If auth is disabled and the process binds a non-loopback address (`0.0.0.0`, `::`, a public IP), raglogs logs a warning. Set `AUTH_REFUSE_INSECURE_BIND=true` to refuse startup instead.
 
 | Method | Endpoint | Description |
 |---|---|---|
@@ -964,9 +1034,10 @@ different ingestion or "All ingestions" to change what a query is scoped to.
 The UI is server-rendered (Jinja2 + vanilla JS/CSS, no CORS, no node/npm) and
 calls the same `/query/*` JSON endpoints listed above.
 
-There is no authentication — fine for local dev. If you deploy raglogs
-anywhere reachable outside your machine, put it behind a reverse proxy
-(nginx, Caddy, etc.) that handles auth.
+With default `AUTH_ENABLED=false` the UI is open — fine for local dev. When
+auth is on, load the UI with a `query` or `admin` bearer token (the browser
+does not attach `Authorization` on its own; put raglogs behind a proxy that
+injects the header, or keep auth off on loopback). `/health` stays public.
 
 ---
 
@@ -1000,6 +1071,7 @@ raglogs/
 ├── src/
 │   ├── adapters/            Log source adapters (file, cloudwatch, datadog, loki, k8s)
 │   ├── api/routes/          FastAPI route handlers
+│   ├── api/auth/            API keys, roles, OIDC, bind-host guard
 │   ├── cli/commands/        Typer CLI commands
 │   ├── config/              Pydantic settings
 │   ├── core/

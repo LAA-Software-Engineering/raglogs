@@ -52,3 +52,32 @@ def test_ignores_legacy_raglogs_prefix(monkeypatch):
 
     assert settings.llm_provider == "disabled"
     assert settings.db_url == "postgresql+psycopg://postgres:postgres@localhost:5432/raglogs"
+
+
+def test_auth_settings_defaults_disabled():
+    settings = Settings(_env_file=None)
+    assert settings.auth_enabled is False
+    assert settings.auth_mode == "api_key"
+    assert settings.oidc_issuer == ""
+    assert settings.api_bind_host == "127.0.0.1"
+    assert settings.auth_refuse_insecure_bind is False
+
+
+def test_auth_settings_from_env(monkeypatch):
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.setenv("AUTH_MODE", "both")
+    monkeypatch.setenv("OIDC_ISSUER", "https://idp.example")
+    monkeypatch.setenv("OIDC_AUDIENCE", "raglogs")
+    monkeypatch.setenv("OIDC_JWKS_URL", "https://idp.example/jwks.json")
+    monkeypatch.setenv("API_BIND_HOST", "0.0.0.0")
+    monkeypatch.setenv("AUTH_REFUSE_INSECURE_BIND", "true")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.auth_enabled is True
+    assert settings.auth_mode == "both"
+    assert settings.oidc_issuer == "https://idp.example"
+    assert settings.oidc_audience == "raglogs"
+    assert settings.oidc_jwks_url == "https://idp.example/jwks.json"
+    assert settings.api_bind_host == "0.0.0.0"
+    assert settings.auth_refuse_insecure_bind is True

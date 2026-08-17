@@ -1,4 +1,5 @@
 from .models import (
+    ApiKey,
     AppConfig,
     Base,
     Cluster,
@@ -22,6 +23,7 @@ __all__ = [
     "Cluster",
     "ClusterMember",
     "Explanation",
+    "ApiKey",
     "AppConfig",
     "get_db",
     "get_engine",

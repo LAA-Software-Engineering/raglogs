@@ -5,13 +5,19 @@ from fastapi import FastAPI
 from fastapi.responses import ORJSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from src.api.auth.middleware import AuthMiddleware
 from src.api.routes import ask, clusters, compare_windows, config, explain, health, ingestions, timeline, ui
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: check DB
+    from src.api.auth.bind_guard import warn_if_insecure_bind
+    from src.config import get_settings
     from src.db.session import check_connection
+
+    settings = get_settings()
+    warn_if_insecure_bind(settings.api_bind_host, settings)
+
     if not check_connection():
         import structlog
         log = structlog.get_logger()
@@ -26,6 +32,8 @@ app = FastAPI(
     default_response_class=ORJSONResponse,
     lifespan=lifespan,
 )
+
+app.add_middleware(AuthMiddleware)
 
 app.include_router(health.router, tags=["health"])
 app.include_router(ingestions.router, prefix="/ingestions", tags=["ingestions"])

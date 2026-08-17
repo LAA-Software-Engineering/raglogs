@@ -35,6 +35,18 @@ class Settings(BaseSettings):
     max_evidence_items: int = 8
     max_clusters_for_explain: int = 10
 
+    # HTTP API authentication (G2). Default off so local demo and existing
+    # TestClient tests stay unauthenticated. Production/Docker should set
+    # AUTH_ENABLED=true. Scope on keys is stored for later G8 isolation;
+    # queries are not filtered by scope yet.
+    auth_enabled: bool = False
+    auth_mode: Literal["api_key", "oidc", "both"] = "api_key"
+    oidc_issuer: str = ""
+    oidc_audience: str = ""
+    oidc_jwks_url: str = ""
+    api_bind_host: str = "127.0.0.1"
+    auth_refuse_insecure_bind: bool = False
+
     # Worker
     worker_poll_interval: int = 2          # seconds between idle polls
 
