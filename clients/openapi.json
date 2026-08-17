@@ -28,42 +28,42 @@
       }
     },
     "/v1/ingestions": {
-      "get": {
-        "tags": [
-          "ingestions"
-        ],
-        "summary": "List Ingestions",
-        "description": "List recent completed ingestion jobs, newest first. Used by the web UI's ingestion picker.",
-        "operationId": "v1_ingestions_list_ingestions__v1_ingestions",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/IngestionListResponse"
-                }
-              }
-            }
-          }
-        }
-      },
       "post": {
         "tags": [
           "ingestions"
         ],
         "summary": "Create Ingestion",
-        "description": "Enqueue an ingest job. Returns immediately with worker_job_id.\nPoll GET /ingestions/jobs/{worker_job_id} for progress.\nWhen done, use ingestion_job_id from the result to scope /query/explain.\n\n``mode=tail`` creates a long-lived job that the worker polls; the response\nincludes ``ingestion_job_id`` and no worker_job_id.\n\nOptional ``callback_url`` (http/https) is stored on batch worker jobs. The\nworker POSTs an HMAC-signed completion payload on terminal state. Tail jobs\ndo not fire callbacks (long-lived; poll or ``:stop`` instead).",
+        "description": "Enqueue an ingest job. Returns immediately with worker_job_id.\nPoll GET /ingestions/jobs/{worker_job_id} for progress.\nWhen done, use ingestion_job_id from the result to scope /query/explain.\n\n``mode=tail`` creates a long-lived job that the worker polls; the response\nincludes ``ingestion_job_id`` and no worker_job_id.\n\nOptional ``callback_url`` (http/https) is stored on batch worker jobs. The\nworker POSTs an HMAC-signed completion payload on terminal state. Tail jobs\ndo not fire callbacks (long-lived; poll or ``:stop`` instead).\n\nOptional ``Idempotency-Key`` (also accepted as ``idempotency-key``): a\nrepeat within the TTL returns the original 202 job rather than a new one.",
         "operationId": "v1_ingestions_create_ingestion__v1_ingestions",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "If set, a repeat POST within INGEST_IDEMPOTENCY_TTL_SECONDS (default 86400) returns the original job instead of enqueueing a new one. Empty values are rejected with 400. Applies to batch enqueue and tail create.",
+              "title": "Idempotency-Key"
+            },
+            "description": "If set, a repeat POST within INGEST_IDEMPOTENCY_TTL_SECONDS (default 86400) returns the original job instead of enqueueing a new one. Empty values are rejected with 400. Applies to batch enqueue and tail create."
+          }
+        ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/IngestRequest"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "202": {
@@ -82,6 +82,26 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "ingestions"
+        ],
+        "summary": "List Ingestions",
+        "description": "List recent completed ingestion jobs, newest first. Used by the web UI's ingestion picker.",
+        "operationId": "v1_ingestions_list_ingestions__v1_ingestions",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestionListResponse"
                 }
               }
             }
@@ -366,43 +386,43 @@
       }
     },
     "/ingestions": {
-      "get": {
-        "tags": [
-          "ingestions"
-        ],
-        "summary": "List Ingestions",
-        "description": "List recent completed ingestion jobs, newest first. Used by the web UI's ingestion picker.",
-        "operationId": "legacy_ingestions_list_ingestions__ingestions",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/IngestionListResponse"
-                }
-              }
-            }
-          }
-        },
-        "deprecated": true
-      },
       "post": {
         "tags": [
           "ingestions"
         ],
         "summary": "Create Ingestion",
-        "description": "Enqueue an ingest job. Returns immediately with worker_job_id.\nPoll GET /ingestions/jobs/{worker_job_id} for progress.\nWhen done, use ingestion_job_id from the result to scope /query/explain.\n\n``mode=tail`` creates a long-lived job that the worker polls; the response\nincludes ``ingestion_job_id`` and no worker_job_id.\n\nOptional ``callback_url`` (http/https) is stored on batch worker jobs. The\nworker POSTs an HMAC-signed completion payload on terminal state. Tail jobs\ndo not fire callbacks (long-lived; poll or ``:stop`` instead).",
+        "description": "Enqueue an ingest job. Returns immediately with worker_job_id.\nPoll GET /ingestions/jobs/{worker_job_id} for progress.\nWhen done, use ingestion_job_id from the result to scope /query/explain.\n\n``mode=tail`` creates a long-lived job that the worker polls; the response\nincludes ``ingestion_job_id`` and no worker_job_id.\n\nOptional ``callback_url`` (http/https) is stored on batch worker jobs. The\nworker POSTs an HMAC-signed completion payload on terminal state. Tail jobs\ndo not fire callbacks (long-lived; poll or ``:stop`` instead).\n\nOptional ``Idempotency-Key`` (also accepted as ``idempotency-key``): a\nrepeat within the TTL returns the original 202 job rather than a new one.",
         "operationId": "legacy_ingestions_create_ingestion__ingestions",
+        "deprecated": true,
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "If set, a repeat POST within INGEST_IDEMPOTENCY_TTL_SECONDS (default 86400) returns the original job instead of enqueueing a new one. Empty values are rejected with 400. Applies to batch enqueue and tail create.",
+              "title": "Idempotency-Key"
+            },
+            "description": "If set, a repeat POST within INGEST_IDEMPOTENCY_TTL_SECONDS (default 86400) returns the original job instead of enqueueing a new one. Empty values are rejected with 400. Applies to batch enqueue and tail create."
+          }
+        ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/IngestRequest"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "202": {
@@ -425,8 +445,28 @@
               }
             }
           }
-        },
-        "deprecated": true
+        }
+      },
+      "get": {
+        "tags": [
+          "ingestions"
+        ],
+        "summary": "List Ingestions",
+        "description": "List recent completed ingestion jobs, newest first. Used by the web UI's ingestion picker.",
+        "operationId": "legacy_ingestions_list_ingestions__ingestions",
+        "deprecated": true,
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestionListResponse"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/ingestions/jobs/{worker_job_id}": {

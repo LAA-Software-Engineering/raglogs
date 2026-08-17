@@ -688,6 +688,7 @@ All settings are read from `.env`, environment variables, or CLI flags. Priority
 | `WEBHOOK_SECRET` | _(empty)_ | Fallback HMAC secret for ingest completion callbacks when auth is off or the API key has no per-key `whsec_` |
 | `WEBHOOK_MAX_RETRIES` | `5` | Extra webhook POST attempts after the first (6 POSTs by default) on 5xx / 429 / connect errors |
 | `WEBHOOK_TIMEOUT` | `10` | Per-attempt HTTP timeout in seconds for completion callbacks |
+| `INGEST_IDEMPOTENCY_TTL_SECONDS` | `86400` | How long `Idempotency-Key` on `POST /v1/ingestions` is remembered (batch enqueue and tail create) |
 
 ---
 
@@ -992,6 +993,17 @@ curl -X POST http://localhost:8000/v1/ingestions/$ID:stop
 `stop` is terminal. After `TAIL_ERROR_THRESHOLD` consecutive poll failures (default 5) a tail job auto-pauses; `/health` reports `tail_jobs.running` and `tail_jobs.paused`.
 
 **Backpressure.** When pending worker jobs ≥ `INGEST_QUEUE_MAX` (default 100), `POST /v1/ingestions` and `POST /v1/ingestions/lines` return **429** with `Retry-After` (`INGEST_RETRY_AFTER_SECONDS`, default 5) and body `{"error_code":"INGEST_QUEUE_FULL","message":"..."}`. This is a queue-depth stand-in, not full API/LLM rate limiting.
+
+**Idempotency-Key.** `POST /v1/ingestions` (batch enqueue and tail create; also the deprecated `/ingestions` alias) honors an `Idempotency-Key` header (max 256 characters). A repeat within `INGEST_IDEMPOTENCY_TTL_SECONDS` (default 86400) returns the original **202** job — the same `worker_job_id` for batch, the same `ingestion_job_id` for tail — instead of starting a new one. Empty keys return **400**. GET routes ignore the header. `POST /v1/ingestions/lines` does not use the header; duplicate push/tail lines are handled by content dedup instead.
+
+```bash
+curl -X POST http://localhost:8000/v1/ingestions \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: incident-123-retry" \
+  -d '{"paths":["/var/log/app"]}'
+```
+
+**Content dedup.** Every persist path (`ingest_files`, `ingest_from_source` including tail ticks, and push `/lines`) stores `original_line_hash` (SHA-256 of the **raw** line, distinct from the normalized fingerprint) and upserts on `(scope, source_ref, original_line_hash, timestamp)`. Re-reading the same physical lines is a no-op, so cluster counts stay stable across overlapping windows and tail/push retries. Missing `source_ref` is stored as `""` so uniqueness works (Postgres NULLs are distinct). `scope` defaults to `"default"`, or the API key's scope when a principal is present; queries are **not** filtered by scope yet. Duplicate lines are skipped, not errors.
 
 **Completion callbacks.** Optional `callback_url` on `POST /v1/ingestions` (http or https only; `file:` and empty hosts are rejected). When a **batch** worker job reaches a terminal state (`done` / `failed`), raglogs POSTs an HMAC-SHA256-signed JSON body to that URL. Delivery is fail-open: retries with jittered exponential backoff (`WEBHOOK_MAX_RETRIES`, default 5 extra attempts) on 5xx, 429, and connect errors; 4xx other than 429 are not retried. Failures are logged and **do not** change ingest status — poll `GET /v1/ingestions/jobs/{worker_job_id}` still works.
 

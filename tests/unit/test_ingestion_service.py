@@ -105,6 +105,21 @@ def _patch_get_adapter(monkeypatch, adapter):
     )
 
 
+def _capture_flushed_entries(monkeypatch: pytest.MonkeyPatch) -> list:
+    """Snapshot LogEntry batches passed to ``_flush_log_batch``."""
+    from src.core.ingestion import service as svc
+
+    captured: list = []
+    original = svc._flush_log_batch
+
+    def wrapped(db, batch, embedder):
+        captured.extend(list(batch))
+        return original(db, batch, embedder)
+
+    monkeypatch.setattr(svc, "_flush_log_batch", wrapped)
+    return captured
+
+
 class TestIngestFromSource:
     def test_happy_path(self, monkeypatch):
         db = _mock_db()
@@ -131,6 +146,7 @@ class TestIngestFromSource:
         fake.default_host = "billing-worker-abc"
         fake.extra = {"kubernetes": {"pod": "billing-worker-abc"}}
         _patch_get_adapter(monkeypatch, fake)
+        entries = _capture_flushed_entries(monkeypatch)
 
         job, stats = ingest_from_source(
             db=db, spec=SourceSpec(adapter="fake", params={}), window=_WINDOW
@@ -138,9 +154,7 @@ class TestIngestFromSource:
 
         assert job.status == "completed"
         assert stats.parsed_count == 1
-        saved = [c for c in db.bulk_save_objects.call_args_list]
-        assert saved, "expected at least one bulk_save_objects call"
-        entries = saved[0].args[0]
+        assert entries, "expected at least one flushed log batch"
         assert entries[0].service == "billing-worker"
         assert entries[0].environment == "production"
         assert entries[0].host == "billing-worker-abc"
@@ -227,8 +241,7 @@ class TestIngestFromSource:
         query (clustering/explain filter on a non-null in-window timestamp).
         """
         db = _mock_db()
-        entries = []
-        db.bulk_save_objects.side_effect = lambda objs: entries.extend(objs)
+        entries = _capture_flushed_entries(monkeypatch)
 
         event_time = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
         fake = FakeAdapter(
@@ -244,7 +257,7 @@ class TestIngestFromSource:
         assert len(entries) == 1
         assert entries[0].timestamp == event_time
 
-    def test_raw_line_defaults_fill_service_env_host(self, monkeypatch):
+    def test_label_adapter_defaults_fill_service_env_host(self, monkeypatch):
         """Adapters (Loki labels, k8s fields) may set RawLogLine defaults; ingestion
         should persist them when the parsed line has no service/env/host."""
 
@@ -264,8 +277,7 @@ class TestIngestFromSource:
                 )
 
         db = _mock_db()
-        entries = []
-        db.bulk_save_objects.side_effect = lambda objs: entries.extend(objs)
+        entries = _capture_flushed_entries(monkeypatch)
         _patch_get_adapter(monkeypatch, LabelAdapter())
 
         job, stats = ingest_from_source(
@@ -297,8 +309,7 @@ class TestIngestFromSource:
                 )
 
         db = _mock_db()
-        entries = []
-        db.bulk_save_objects.side_effect = lambda objs: entries.extend(objs)
+        entries = _capture_flushed_entries(monkeypatch)
         _patch_get_adapter(monkeypatch, LabelAdapter())
 
         spec = SourceSpec(adapter="labels", params={}, service="cli-svc", env="staging")
@@ -494,7 +505,7 @@ class TestIngestFiles:
         log_file.write_text('{"message": "hello", "level": "info"}\n')
 
         db = _mock_db()
-        db.bulk_save_objects.side_effect = RuntimeError("db exploded")
+        db.execute.side_effect = RuntimeError("db exploded")
 
         with pytest.raises(RuntimeError):
             ingest_files(db=db, paths=[str(tmp_path)])

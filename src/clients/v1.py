@@ -68,11 +68,15 @@ class RaglogsClient:
         method: str,
         path: str,
         json_body: Optional[dict[str, Any]] = None,
+        extra_headers: Optional[dict[str, str]] = None,
     ) -> Any:
+        headers = self._headers()
+        if extra_headers:
+            headers.update(extra_headers)
         response = self._client.request(
             method,
             self._url(path),
-            headers=self._headers(),
+            headers=headers,
             json=json_body,
         )
         if response.status_code >= 400:
@@ -99,13 +103,26 @@ class RaglogsClient:
         """GET /v1/config."""
         return self._get("/v1/config")
 
-    def create_ingestion(self, **body: Any) -> dict[str, Any]:
+    def create_ingestion(
+        self,
+        *,
+        idempotency_key: Optional[str] = None,
+        **body: Any,
+    ) -> dict[str, Any]:
         """POST /v1/ingestions — enqueue an ingest job.
 
         Pass ``callback_url`` (http/https) for an HMAC-signed completion POST
-        when the batch worker reaches a terminal state.
+        when the batch worker reaches a terminal state. Pass
+        ``idempotency_key`` to send an ``Idempotency-Key`` header so a retry
+        within the TTL returns the original job.
         """
-        return self._post("/v1/ingestions", body)
+        extra = {"Idempotency-Key": idempotency_key} if idempotency_key else None
+        return self._request(
+            "POST",
+            "/v1/ingestions",
+            json_body=_omit_none(body),
+            extra_headers=extra,
+        )
 
     def list_ingestions(self) -> dict[str, Any]:
         """GET /v1/ingestions."""
