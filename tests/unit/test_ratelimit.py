@@ -185,15 +185,17 @@ class TestRateLimitHttp:
         assert 429 not in statuses
 
     def test_synthetic_load_exhausts_tiny_bucket(self) -> None:
+        # Empty body 400s at validation — stays in the limiter and does not
+        # wait on get_db, so a 1 rps refill cannot sneak extra tokens in.
         settings = _tiny_settings(ratelimit_query_rps=1.0, ratelimit_burst=2.0)
         with patch("src.config.get_settings", return_value=settings):
             statuses = [
-                client.post("/v1/query/explain", json={"since": "1h"}).status_code
+                client.post("/v1/query/explain", json={}).status_code
                 for _ in range(10)
             ]
-        assert statuses[0] != 429
-        assert statuses[1] != 429
-        assert statuses.count(429) >= 8
+        assert statuses[0] == 400
+        assert statuses[1] == 400
+        assert statuses.count(429) == 8
 
     def test_per_key_isolation_when_auth_enabled(self) -> None:
         key_a_id = uuid.uuid4()
