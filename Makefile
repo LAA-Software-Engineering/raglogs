@@ -87,18 +87,23 @@ ask:
 
 # ── Development servers ────────────────────────────────────────────────────────
 
+# Bind host passed to uvicorn *and* read by the startup auth guard (API_BIND_HOST).
+# 0.0.0.0 matches historical `make api` behaviour; with AUTH_ENABLED=false the
+# process logs a warning. Loopback: `make api API_BIND_HOST=127.0.0.1`.
+API_BIND_HOST ?= 0.0.0.0
+
 api:
-	uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --reload
+	API_BIND_HOST=$(API_BIND_HOST) uvicorn src.api.app:app --host $(API_BIND_HOST) --port 8000 --reload
 
 web: demo
 	@echo "Web UI: http://localhost:8000/ — open it in a browser"
-	uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --reload
+	API_BIND_HOST=$(API_BIND_HOST) uvicorn src.api.app:app --host $(API_BIND_HOST) --port 8000 --reload
 
 web-serve: db-up
 	@sleep 2
 	alembic upgrade head
 	@echo "Web UI: http://localhost:8000/ — open it in a browser"
-	uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --reload
+	API_BIND_HOST=$(API_BIND_HOST) uvicorn src.api.app:app --host $(API_BIND_HOST) --port 8000 --reload
 
 worker:
 	raglogs worker

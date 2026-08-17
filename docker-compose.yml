@@ -33,6 +33,11 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       EMBEDDINGS_PROVIDER: ${EMBEDDINGS_PROVIDER:-disabled}
+      API_BIND_HOST: "0.0.0.0"
+      # Compose binds 0.0.0.0 inside the container. Default AUTH_ENABLED=false
+      # keeps the demo open and logs a startup warning. Set AUTH_ENABLED=true
+      # (and mint a key with `raglogs keys create`) before exposing this API.
+      AUTH_ENABLED: ${AUTH_ENABLED:-false}
     command: >
       sh -c "alembic upgrade head && uvicorn src.api.app:app --host 0.0.0.0 --port 8000"
     volumes:
