@@ -433,12 +433,13 @@ def _call_llm_ask(
     concurrency semaphore with generate_summary.
 
     Order matches generate_summary: cap (slot) → breaker/retries (invoke_llm)
-    → single HTTP attempt on the unwrapped OpenAI/Ollama provider.
+    → single HTTP attempt on the unwrapped OpenAI/Ollama/Claude provider.
     """
     import json
 
     from src.config import get_settings
     from src.core.llm.provider import (
+        ClaudeLLMProvider,
         NoopLLMProvider,
         OpenAILLMProvider,
         OllamaLLMProvider,
@@ -458,12 +459,14 @@ def _call_llm_ask(
     def _attempt() -> str:
         if isinstance(inner, OpenAILLMProvider):
             return inner.complete(ASK_SYSTEM_PROMPT, user_message)
+        if isinstance(inner, ClaudeLLMProvider):
+            return inner.complete(ASK_SYSTEM_PROMPT, user_message)
         if isinstance(inner, OllamaLLMProvider):
             return inner.complete(ASK_SYSTEM_PROMPT, f"{user_message}\n\nAnswer:")
         return ""
 
     with llm_concurrency_slot(skip=isinstance(inner, NoopLLMProvider)):
-        if isinstance(inner, (OpenAILLMProvider, OllamaLLMProvider)):
+        if isinstance(inner, (OpenAILLMProvider, OllamaLLMProvider, ClaudeLLMProvider)):
             return invoke_llm(_attempt)
 
     return ""

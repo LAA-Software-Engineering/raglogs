@@ -28,6 +28,8 @@ def config_cmd(
             "DB_URL": settings.db_url,
             "LLM_PROVIDER": settings.llm_provider,
             "LLM_MODEL": settings.llm_model,
+            "OPENAI_API_KEY": settings.openai_api_key,
+            "ANTHROPIC_API_KEY": settings.anthropic_api_key,
             "EMBEDDINGS_PROVIDER": settings.embeddings_provider,
             "EMBEDDINGS_MODEL": settings.embeddings_model,
             "CLUSTER_MERGE_SIMILARITY_THRESHOLD": str(

@@ -32,6 +32,8 @@ services:
       LLM_MODEL: ${LLM_MODEL:-gpt-4.1-mini}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
       EMBEDDINGS_PROVIDER: ${EMBEDDINGS_PROVIDER:-disabled}
       API_BIND_HOST: "0.0.0.0"
       # Compose binds 0.0.0.0 inside the container. Default AUTH_ENABLED=false
@@ -56,6 +58,8 @@ services:
       LLM_MODEL: ${LLM_MODEL:-gpt-4.1-mini}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
       EMBEDDINGS_PROVIDER: ${EMBEDDINGS_PROVIDER:-disabled}
     command: raglogs worker
     volumes:

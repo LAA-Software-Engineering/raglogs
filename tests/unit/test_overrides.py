@@ -262,14 +262,29 @@ class TestResolveValidation:
 
     def test_unknown_provider_raises(self) -> None:
         with pytest.raises(OverrideValidationError) as exc:
-            _resolve(OverrideInput(llm_provider="claude"))
+            _resolve(OverrideInput(llm_provider="gemini"))
         assert exc.value.field == "llm.provider"
-        assert "claude" in exc.value.message
+        assert "gemini" in exc.value.message
+
+    def test_claude_provider_is_accepted(self) -> None:
+        resolved = _resolve(OverrideInput(llm_provider="claude"))
+        assert resolved.llm_provider == "claude"
+        assert resolved.llm_enabled is True
 
     def test_openai_without_key_still_noop(self) -> None:
         settings = _settings(llm_provider="disabled", openai_api_key="")
         resolved = _resolve(
             OverrideInput(llm_provider="openai"),
+            settings=settings,
+        )
+        overlaid = settings.model_copy(update={"llm_provider": resolved.llm_provider})
+        provider = unwrap_llm_provider(build_llm_provider(overlaid))
+        assert isinstance(provider, NoopLLMProvider)
+
+    def test_claude_without_key_still_noop(self) -> None:
+        settings = _settings(llm_provider="disabled", anthropic_api_key="")
+        resolved = _resolve(
+            OverrideInput(llm_provider="claude"),
             settings=settings,
         )
         overlaid = settings.model_copy(update={"llm_provider": resolved.llm_provider})
@@ -292,7 +307,9 @@ class TestKeyConfigJson:
         with pytest.raises(OverrideValidationError):
             build_key_config_json(max_clusters=0)
         with pytest.raises(OverrideValidationError):
-            build_key_config_json(llm_provider="claude")
+            build_key_config_json(llm_provider="gemini")
+        built = build_key_config_json(llm_provider="claude")
+        assert built == {"llm": {"provider": "claude"}}
 
 
 class TestExplainApiOverrides:
@@ -350,12 +367,31 @@ class TestExplainApiOverrides:
     def test_invalid_provider_returns_typed_400(self) -> None:
         resp = client.post(
             "/v1/query/explain",
-            json={"since": "1h", "llm": {"provider": "claude"}},
+            json={"since": "1h", "llm": {"provider": "gemini"}},
         )
         assert resp.status_code == 400
         body = resp.json()
         assert body["error_code"] == ERROR_INVALID_OVERRIDE
         assert body["field"] == "llm.provider"
+
+    def test_claude_provider_is_accepted_on_explain(self) -> None:
+        settings = _settings(llm_provider="disabled")
+        mock_db = _ctx_db()
+        with patch("src.config.get_settings", return_value=settings), \
+             patch("src.db.session.get_db", side_effect=lambda: mock_db), \
+             patch(
+                 "src.core.explain.summarizer.explain_window",
+                 return_value=_explain_result(),
+             ) as mock_explain, \
+             patch("src.api.routes.explain._load_from_cache", return_value=None), \
+             patch("src.api.routes.explain._save_to_cache"):
+            resp = client.post(
+                "/v1/query/explain",
+                json={"since": "1h", "no_llm": True, "llm": {"provider": "claude"}},
+            )
+
+        assert resp.status_code == 200
+        assert mock_explain.call_args.kwargs["llm_provider"] == "claude"
 
     def test_invalid_baseline_returns_typed_400(self) -> None:
         resp = client.post(

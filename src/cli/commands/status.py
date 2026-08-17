@@ -1,4 +1,3 @@
-import typer
 from rich.console import Console
 from rich.table import Table
 
@@ -38,9 +37,15 @@ def status_cmd():
             table.add_row("Log entries:", f"[red]Error: {e}[/red]")
 
     openai_key = settings.openai_api_key
+    if settings.llm_provider == "openai":
+        llm_key = openai_key
+    elif settings.llm_provider == "claude":
+        llm_key = settings.anthropic_api_key
+    else:
+        llm_key = "n/a"
 
     table.add_row("", "")
-    table.add_row("LLM provider:", _provider_status(settings.llm_provider, openai_key if settings.llm_provider == "openai" else "n/a"))
+    table.add_row("LLM provider:", _provider_status(settings.llm_provider, llm_key))
     table.add_row("LLM model:", settings.llm_model)
     table.add_row("Embeddings:", _provider_status(settings.embeddings_provider, openai_key if settings.embeddings_provider == "openai" else "n/a"))
 
@@ -52,6 +57,6 @@ def status_cmd():
 def _provider_status(provider: str, api_key: str) -> str:
     if provider == "disabled":
         return "[dim]disabled[/dim]"
-    if provider == "openai" and not api_key:
+    if provider in ("openai", "claude") and not api_key:
         return f"[yellow]{provider} (no API key)[/yellow]"
     return f"[green]{provider}[/green]"
