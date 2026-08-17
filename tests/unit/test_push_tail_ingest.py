@@ -3,20 +3,24 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
+from src.adapters.base import TimeWindow
 from src.api.app import app
 from src.core.ingestion.backpressure import ingest_queue_is_full
 from src.core.ingestion.push import NdjsonParseError, parse_ndjson_payload
 from src.core.ingestion.tail import (
     TailLifecycleError,
+    _due_tail_jobs,
     apply_tail_lifecycle,
     consecutive_errors_after_failure,
+    persist_cursors,
     tick_one_tail_job,
+    tick_window_for_job,
 )
 from src.db.models import IngestionJob
 
@@ -349,6 +353,40 @@ class TestTickAutoPause:
         assert job.status == "paused"
         assert job.consecutive_errors == 5
         assert "adapter down" in job.error_message
+        assert job.last_polled_at == now
+
+    def test_failed_tick_is_not_due_until_poll_interval(self) -> None:
+        job = MagicMock()
+        job.id = uuid.uuid4()
+        job.mode = "tail"
+        job.status = "running"
+        job.consecutive_errors = 0
+        job.metadata_json = {"adapter": "cloudwatch", "params": {"log_group": "g"}}
+        job.cursor = None
+        job.last_polled_at = None
+        job.source_adapter = "cloudwatch"
+        job.error_message = None
+
+        db = MagicMock()
+        now = datetime(2026, 8, 17, 12, 0, tzinfo=timezone.utc)
+        with patch(
+            "src.core.ingestion.service.ingest_from_source",
+            side_effect=RuntimeError("boom"),
+        ):
+            tick_one_tail_job(db, job, now, error_threshold=5)
+
+        assert job.last_polled_at == now
+        assert job.consecutive_errors == 1
+        assert job.status == "running"
+
+        db.execute.return_value.scalars.return_value.all.return_value = [job]
+        assert _due_tail_jobs(db, now + timedelta(seconds=1), poll_interval=30) == []
+        assert _due_tail_jobs(db, now + timedelta(seconds=31), poll_interval=30) == [
+            job
+        ]
+
+        job.status = "paused"
+        assert _due_tail_jobs(db, now + timedelta(seconds=31), poll_interval=30) == []
 
     def test_success_resets_counter(self) -> None:
         job = MagicMock()
@@ -375,3 +413,62 @@ class TestTickAutoPause:
         assert job.consecutive_errors == 0
         assert job.error_message is None
         assert job.last_polled_at == now
+
+
+class TestTailWindowPagination:
+    def test_open_cursor_holds_window_until_exhausted(self) -> None:
+        window_start = datetime(2026, 8, 17, 12, 0, tzinfo=timezone.utc)
+        window_end = datetime(2026, 8, 17, 12, 1, tzinfo=timezone.utc)
+        now = datetime(2026, 8, 17, 12, 1, 30, tzinfo=timezone.utc)
+        job = MagicMock()
+        job.id = uuid.uuid4()
+        job.mode = "tail"
+        job.status = "running"
+        job.consecutive_errors = 0
+        job.metadata_json = {"adapter": "datadog", "params": {"query": "*"}}
+        job.cursor = None
+        job.last_polled_at = None
+        job.source_adapter = "datadog"
+        job.error_message = None
+
+        def ingest_with_open_cursor(
+            *, existing_job: MagicMock, **_kwargs: object
+        ) -> tuple:
+            persist_cursors(existing_job, {"stream-0": "page-2"})
+            return existing_job, MagicMock()
+
+        db = MagicMock()
+        with (
+            patch(
+                "src.core.ingestion.service.ingest_from_source",
+                side_effect=ingest_with_open_cursor,
+            ),
+            patch(
+                "src.core.ingestion.tail.tick_window_for_job",
+                return_value=TimeWindow(start=window_start, end=window_end),
+            ),
+        ):
+            tick_one_tail_job(db, job, now, error_threshold=5)
+
+        assert job.last_polled_at == window_start
+        assert job.last_polled_at != now
+        assert job.metadata_json["tail_window_end"] == window_end.isoformat()
+
+        held = tick_window_for_job(job, now + timedelta(minutes=5))
+        assert held.start == window_start
+        assert held.end == window_end
+
+        later = now + timedelta(seconds=30)
+
+        def ingest_exhausted(*, existing_job: MagicMock, **_kwargs: object) -> tuple:
+            persist_cursors(existing_job, {"stream-0": None})
+            return existing_job, MagicMock()
+
+        with patch(
+            "src.core.ingestion.service.ingest_from_source",
+            side_effect=ingest_exhausted,
+        ):
+            tick_one_tail_job(db, job, later, error_threshold=5)
+
+        assert job.last_polled_at == later
+        assert "tail_window_end" not in job.metadata_json

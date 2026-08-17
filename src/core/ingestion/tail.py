@@ -89,17 +89,59 @@ def persist_cursors(job: IngestionJob, cursors: dict[str, Optional[str]]) -> Non
     job.metadata_json = meta
 
 
+def has_open_cursors(cursors: dict[str, Optional[str]]) -> bool:
+    """True when any stream still has a pagination token (not caught up)."""
+    return any(value is not None and str(value) != "" for value in cursors.values())
+
+
+def is_tail_job_due(job: IngestionJob, now: datetime, poll_interval: int) -> bool:
+    """Whether a tail job should be ticked at ``now`` given ``TAIL_POLL_INTERVAL``."""
+    if job.mode != "tail" or job.status != "running":
+        return False
+    if job.last_polled_at is None:
+        return True
+    return job.last_polled_at <= now - timedelta(seconds=poll_interval)
+
+
+def _parse_stored_datetime(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+
 def tick_window_for_job(
     job: IngestionJob,
     now: datetime,
 ) -> TimeWindow:
-    """Window for one tail poll: last poll → now, else first-window from spec / 1m."""
+    """Window for one tail poll: last poll → now, else first-window from spec / 1m.
+
+    While any stream still has a pagination cursor, reuse the window that
+    produced it (``last_polled_at`` … ``metadata_json['tail_window_end']``)
+    instead of growing ``end`` to now — Datadog/CloudWatch page tokens are
+    only valid for the original from/to.
+    """
+    meta = job.metadata_json or {}
+    stored_end = _parse_stored_datetime(meta.get("tail_window_end"))
+    if (
+        job.last_polled_at is not None
+        and stored_end is not None
+        and job.last_polled_at < stored_end
+        and has_open_cursors(cursors_from_job(job))
+    ):
+        return TimeWindow(start=job.last_polled_at, end=stored_end)
+
     if job.last_polled_at is not None:
         return TimeWindow(start=job.last_polled_at, end=now)
 
     from src.utils.time import resolve_window
 
-    meta = job.metadata_json or {}
     since = meta.get("since")
     from_raw = meta.get("from_time")
     to_raw = meta.get("to_time")
@@ -111,6 +153,27 @@ def tick_window_for_job(
 
     start, end = resolve_window(since="1m")
     return TimeWindow(start=start, end=end)
+
+
+def _apply_tail_window_progress(
+    job: IngestionJob, window: TimeWindow, now: datetime
+) -> None:
+    """Advance or hold the poll window after a successful tick.
+
+    Open pagination cursors stay bound to ``window``; only when every stream
+    is exhausted do we move ``last_polled_at`` to ``now``.
+    """
+    meta = dict(job.metadata_json or {})
+    if has_open_cursors(cursors_from_job(job)):
+        if job.last_polled_at is None:
+            job.last_polled_at = window.start
+        meta["tail_window_end"] = window.end.isoformat()
+        job.metadata_json = meta
+        return
+    job.last_polled_at = now
+    if "tail_window_end" in meta:
+        meta.pop("tail_window_end")
+        job.metadata_json = meta
 
 
 def spec_from_tail_job(job: IngestionJob) -> SourceSpec:
@@ -139,7 +202,10 @@ def _due_tail_jobs(
         )
         .with_for_update(skip_locked=True)
     )
-    return list(db.execute(stmt).scalars().all())
+    jobs = list(db.execute(stmt).scalars().all())
+    # Re-filter in Python so unit tests with mocked execute() still honor
+    # last_polled_at / paused status (SQL WHERE is not applied on MagicMock).
+    return [job for job in jobs if is_tail_job_due(job, now, poll_interval)]
 
 
 def tick_one_tail_job(
@@ -190,12 +256,15 @@ def tick_one_tail_job(
                 consecutive_errors=new_count,
                 error=str(exc),
             )
+        # Stamp last_polled_at so the job is not due again until TAIL_POLL_INTERVAL
+        # (otherwise the worker busy-loops and re-reads already-flushed lines).
+        job.last_polled_at = now
         db.flush()
         return
 
     job.consecutive_errors = 0
     job.error_message = None
-    job.last_polled_at = now
+    _apply_tail_window_progress(job, window, now)
     db.flush()
 
 
