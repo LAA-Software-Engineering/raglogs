@@ -680,7 +680,7 @@ raglogs keys revoke <key-uuid>
 | `--max-clusters` | Per-key default `max_clusters` (1–100) stored on `api_keys.config_json` |
 | `--max-evidence-items` | Per-key default `max_evidence_items` (1–50) |
 | `--baseline-window` | Per-key default baseline duration (e.g. `24h`) |
-| `--llm-provider` | Per-key default `openai` / `ollama` / `disabled` |
+| `--llm-provider` | Per-key default `openai` / `ollama` / `claude` / `disabled` |
 | `--llm-enabled` / `--no-llm-enabled` | Per-key default for whether the LLM is used |
 
 `raglogs keys set-defaults` merges flags into the key's `config_json`. `--clear` removes all per-key query defaults. Requires a migrated database (`raglogs init`). See [HTTP API authentication](#http-api-authentication) and [per-request overrides](#per-request-query-overrides).
@@ -694,11 +694,13 @@ All settings are read from `.env`, environment variables, or CLI flags. Priority
 | Variable | Default | Description |
 |---|---|---|
 | `DB_URL` | `postgresql+psycopg://postgres:postgres@localhost:5432/raglogs` | PostgreSQL connection URL |
-| `LLM_PROVIDER` | `disabled` | `disabled`, `openai`, `ollama` |
-| `LLM_MODEL` | `gpt-4.1-mini` | LLM model name |
+| `LLM_PROVIDER` | `disabled` | `disabled`, `openai`, `ollama`, `claude` |
+| `LLM_MODEL` | `gpt-4.1-mini` | LLM model name. Use `claude-haiku-4-5` when `LLM_PROVIDER=claude` |
 | `OPENAI_API_KEY` | _(empty)_ | API key for OpenAI or compatible endpoint |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Base URL for OpenAI-compatible API |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
+| `ANTHROPIC_API_KEY` | _(empty)_ | API key for Claude (`LLM_PROVIDER=claude`). Empty falls back to noop |
+| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Anthropic Messages API host |
 | `EMBEDDINGS_PROVIDER` | `disabled` | `disabled`, `openai`, `local`. Cluster merge, semantic `ask`, and `/similar` ANN skip when `disabled` |
 | `EMBEDDINGS_MODEL` | `text-embedding-3-small` | Embeddings model name |
 | `EMBEDDINGS_DIMENSIONS` | `1536` | Vector size passed to the OpenAI embeddings API. Persist/ask skip unless this is 1536 (stored column width) |
@@ -775,6 +777,16 @@ LLM_PROVIDER=ollama
 LLM_MODEL=llama3
 OLLAMA_BASE_URL=http://localhost:11434
 ```
+
+### Claude (Anthropic)
+
+```env
+LLM_PROVIDER=claude
+LLM_MODEL=claude-haiku-4-5
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Uses the Anthropic Messages API (`POST /v1/messages`) via raw httpx. An empty `ANTHROPIC_API_KEY` falls back to the deterministic template provider. Override `ANTHROPIC_BASE_URL` only for a proxy. The OpenAI default model (`gpt-4.1-mini`) is unchanged when `LLM_PROVIDER=openai`.
 
 ### Any OpenAI-compatible endpoint
 
@@ -1215,10 +1227,10 @@ curl -X POST http://localhost:8000/v1/query/explain \
 | `baseline_window` | duration parsed like CLI (`30m`, `24h`, `7d`) | `DEFAULT_BASELINE_WINDOW` (`24h`) |
 | `max_clusters` | 1–100 | `MAX_CLUSTERS_FOR_EXPLAIN` (`10`) |
 | `max_evidence_items` | 1–50 | `MAX_EVIDENCE_ITEMS` (`8`) |
-| `llm.provider` | `openai` / `ollama` / `disabled` | `LLM_PROVIDER` |
+| `llm.provider` | `openai` / `ollama` / `claude` / `disabled` | `LLM_PROVIDER` |
 | `llm.enabled` | bool; `false` acts like `no_llm` | inferred from `LLM_PROVIDER` |
 
-**Precedence:** request field > per-key default (`api_keys.config_json`) > server env default. Omitted fields fall through. When `AUTH_ENABLED=false` the per-key layer is skipped. `llm.provider` does not persist globally; openai without `OPENAI_API_KEY` still uses the noop provider. The explain cache key includes the **resolved** overrides so different `max_clusters` values do not share an entry.
+**Precedence:** request field > per-key default (`api_keys.config_json`) > server env default. Omitted fields fall through. When `AUTH_ENABLED=false` the per-key layer is skipped. `llm.provider` does not persist globally; openai without `OPENAI_API_KEY` and claude without `ANTHROPIC_API_KEY` still use the noop provider. The explain cache key includes the **resolved** overrides so different `max_clusters` values do not share an entry.
 
 Invalid values return **400**:
 

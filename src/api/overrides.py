@@ -7,7 +7,7 @@ Bounds (inclusive):
 - ``max_clusters``: 1–100
 - ``max_evidence_items``: 1–50
 - ``baseline_window``: duration string parsed by ``parse_duration``
-- ``llm.provider``: ``openai`` | ``ollama`` | ``disabled``
+- ``llm.provider``: ``openai`` | ``ollama`` | ``claude`` | ``disabled``
 """
 
 from __future__ import annotations
@@ -29,8 +29,8 @@ MAX_CLUSTERS_MAX = 100
 MAX_EVIDENCE_ITEMS_MIN = 1
 MAX_EVIDENCE_ITEMS_MAX = 50
 
-LLM_PROVIDERS: frozenset[str] = frozenset({"openai", "ollama", "disabled"})
-LlmProviderName = Literal["disabled", "openai", "ollama"]
+LLM_PROVIDERS: frozenset[str] = frozenset({"openai", "ollama", "claude", "disabled"})
+LlmProviderName = Literal["disabled", "openai", "ollama", "claude"]
 
 
 class OverrideValidationError(Exception):
@@ -74,7 +74,7 @@ class LlmOverride(BaseModel):
 
     provider: Optional[str] = Field(
         default=None,
-        description="openai | ollama | disabled. Omitted: per-key default, then LLM_PROVIDER.",
+        description="openai | ollama | claude | disabled. Omitted: per-key default, then LLM_PROVIDER.",
     )
     enabled: Optional[bool] = Field(
         default=None,

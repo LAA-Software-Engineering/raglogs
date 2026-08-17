@@ -89,7 +89,7 @@ class TestHealth:
         data = resp.json()
         assert data["status"] == "ok"
         assert data["db"] == "connected"
-        assert data["llm"]["provider"] in {"disabled", "openai", "ollama"}
+        assert data["llm"]["provider"] in {"disabled", "openai", "ollama", "claude"}
         assert "status" in data["llm"]
 
     def test_health_degraded_when_db_disconnected(self):

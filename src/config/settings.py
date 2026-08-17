@@ -27,12 +27,14 @@ class Settings(BaseSettings):
     # Similar-incident search (pgvector over cluster_embeddings; fingerprint fallback)
     similar_semantic_min_similarity: float = 0.80
 
-    llm_provider: Literal["disabled", "openai", "ollama"] = "disabled"
+    llm_provider: Literal["disabled", "openai", "ollama", "claude"] = "disabled"
     llm_model: str = "gpt-4.1-mini"
 
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
     ollama_base_url: str = "http://localhost:11434"
+    anthropic_api_key: str = ""
+    anthropic_base_url: str = "https://api.anthropic.com"
 
     default_baseline_window: str = "24h"
     max_evidence_items: int = 8

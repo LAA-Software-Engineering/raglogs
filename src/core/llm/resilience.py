@@ -4,7 +4,7 @@ Call order (outer → inner), shared by ``generate_summary`` and ask HTTP:
 
   CappedLLMProvider          # G9 process-wide in-flight cap
     ResilientLLMProvider     # this module: breaker → token budget → retries
-      OpenAI / Ollama        # single HTTP attempt with LLM_TIMEOUT / LLM_MAX_TOKENS
+      OpenAI / Ollama / Claude  # single HTTP attempt with LLM_TIMEOUT / LLM_MAX_TOKENS
 
 Noop is not wrapped, so ``LLM_PROVIDER=disabled`` never trips the breaker.
 While the breaker is open the provider is not called (no failure increment).

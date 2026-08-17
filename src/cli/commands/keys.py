@@ -49,7 +49,7 @@ def create_cmd(
         None, "--baseline-window", help="Per-key default baseline window (e.g. 24h)"
     ),
     llm_provider: Optional[str] = typer.Option(
-        None, "--llm-provider", help="Per-key default LLM provider: openai|ollama|disabled"
+        None, "--llm-provider", help="Per-key default LLM provider: openai|ollama|claude|disabled"
     ),
     llm_enabled: Optional[bool] = typer.Option(
         None,
@@ -196,7 +196,7 @@ def set_defaults_cmd(
         None, "--baseline-window", help="Per-key default baseline window (e.g. 24h)"
     ),
     llm_provider: Optional[str] = typer.Option(
-        None, "--llm-provider", help="Per-key default LLM provider: openai|ollama|disabled"
+        None, "--llm-provider", help="Per-key default LLM provider: openai|ollama|claude|disabled"
     ),
     llm_enabled: Optional[bool] = typer.Option(
         None,

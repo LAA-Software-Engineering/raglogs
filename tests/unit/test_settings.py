@@ -66,6 +66,37 @@ def test_ignores_legacy_raglogs_prefix(monkeypatch):
     )
 
 
+def test_anthropic_settings_from_env(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "claude")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://proxy.example/anthropic")
+    monkeypatch.setenv("LLM_MODEL", "claude-haiku-4-5")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.llm_provider == "claude"
+    assert settings.anthropic_api_key == "sk-ant-test"
+    assert settings.anthropic_base_url == "https://proxy.example/anthropic"
+    assert settings.llm_model == "claude-haiku-4-5"
+
+
+def test_anthropic_settings_defaults_and_openai_model_unchanged():
+    settings = Settings(_env_file=None)
+    assert settings.llm_provider == "disabled"
+    assert settings.llm_model == "gpt-4.1-mini"
+    assert settings.anthropic_api_key == ""
+    assert settings.anthropic_base_url == "https://api.anthropic.com"
+
+
+def test_ignores_legacy_raglogs_prefix_for_anthropic(monkeypatch):
+    monkeypatch.setenv("RAGLOGS_ANTHROPIC_API_KEY", "sk-ant-legacy")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.anthropic_api_key == ""
+
+
 def test_auth_settings_defaults_disabled():
     settings = Settings(_env_file=None)
     assert settings.auth_enabled is False

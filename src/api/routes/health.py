@@ -19,7 +19,7 @@ class LlmBreakerHealth(BaseModel):
 
 
 class LlmProviderHealth(BaseModel):
-    provider: str  # disabled | openai | ollama
+    provider: str  # disabled | openai | ollama | claude
     status: str    # ok | disabled | unavailable: <reason>
 
 
@@ -77,7 +77,7 @@ def _llm_breaker_health() -> LlmBreakerHealth:
 
 
 def _llm_provider_health() -> LlmProviderHealth:
-    """Local-only status — does not ping OpenAI or Ollama."""
+    """Local-only status — does not ping OpenAI, Ollama, or Anthropic."""
     from src.config import get_settings
 
     settings = get_settings()
@@ -91,6 +91,13 @@ def _llm_provider_health() -> LlmProviderHealth:
                 status="unavailable: OPENAI_API_KEY is not set",
             )
         return LlmProviderHealth(provider="openai", status="ok")
+    if provider == "claude":
+        if not settings.anthropic_api_key:
+            return LlmProviderHealth(
+                provider="claude",
+                status="unavailable: ANTHROPIC_API_KEY is not set",
+            )
+        return LlmProviderHealth(provider="claude", status="ok")
     if provider == "ollama":
         if not settings.ollama_base_url:
             return LlmProviderHealth(

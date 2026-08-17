@@ -14,6 +14,7 @@ _REDACT_KEYS: frozenset[str] = frozenset(
         "authorization",
         "api_key",
         "openai_api_key",
+        "anthropic_api_key",
         "password",
         "token",
         "bearer",
