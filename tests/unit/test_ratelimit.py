@@ -69,6 +69,7 @@ class TestRateLimitKind:
 
     def test_exempt_paths(self) -> None:
         assert rate_limit_kind("GET", "/health") is None
+        assert rate_limit_kind("GET", "/metrics") is None
         assert rate_limit_kind("GET", "/docs") is None
         assert rate_limit_kind("GET", "/static/js/app.js") is None
         assert rate_limit_kind("GET", "/v1/config") is None

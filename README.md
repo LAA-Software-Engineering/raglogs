@@ -707,6 +707,10 @@ All settings are read from `.env`, environment variables, or CLI flags. Priority
 | `WEBHOOK_MAX_RETRIES` | `5` | Extra webhook POST attempts after the first (6 POSTs by default) on 5xx / 429 / connect errors |
 | `WEBHOOK_TIMEOUT` | `10` | Per-attempt HTTP timeout in seconds for completion callbacks |
 | `INGEST_IDEMPOTENCY_TTL_SECONDS` | `86400` | How long `Idempotency-Key` on `POST /v1/ingestions` is remembered (batch enqueue and tail create) |
+| `LOG_FORMAT` | `json` | Structured log renderer: `json` or `console`. API uses this; CLI switches to console on a TTY |
+| `OTEL_SDK_DISABLED` | `false` | Skip the OpenTelemetry SDK. Request ids are still generated |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | _(empty)_ | Optional OTLP HTTP traces endpoint. Empty = no exporter (no collector required) |
+| `OTEL_SERVICE_NAME` | `raglogs` | Resource `service.name` on exported spans |
 
 ---
 
@@ -952,7 +956,7 @@ curl -X POST http://localhost:8000/v1/query/explain \
 | `query` | `GET /v1/ingestions*`, `POST /v1/query/*`, web UI (`GET /`, `/static`), OpenAPI (`/docs`) |
 | `admin` | everything, including `GET /v1/config` |
 
-`GET /health` and `GET /metrics` (path reserved; no Prometheus body yet) are always unauthenticated. `/docs` is **not** exempt.
+`GET /health` and `GET /metrics` are always unauthenticated. `/docs` is **not** exempt. `/metrics` returns Prometheus text (`text/plain`) and is not rate-limited.
 
 Missing or invalid `Authorization: Bearer` returns **401**:
 
@@ -989,7 +993,8 @@ If auth is disabled and the process binds a non-loopback address (`0.0.0.0`, `::
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/health` | Service and DB health check (unversioned). Includes `tail_jobs: {running, paused}` and `llm_breaker` (`closed` / `open` / `half_open`). Open breaker → `status: degraded`, still HTTP 200. |
+| `GET` | `/health` | Service and DB health check (unversioned). Includes `adapters`, `tail_jobs`, `llm: {provider, status}`, and `llm_breaker` (`closed` / `open` / `half_open`). Open breaker → `status: degraded`, still HTTP 200. |
+| `GET` | `/metrics` | Prometheus scrape (unversioned, unauthenticated). Ingest/query latency, ingest line counts, cluster counts, LLM latency/fallback/tokens, breaker state, worker queue depth. |
 | `POST` | `/v1/ingestions` | Enqueue a batch ingest job (`adapter`: `file`, `cloudwatch`, `datadog`, `loki`, or `k8s`). Set `"mode": "tail"` for pull adapters to start a long-lived tail job. |
 | `POST` | `/v1/ingestions/lines` | Push NDJSON of raw or pre-parsed log lines (sync persist) |
 | `POST` | `/v1/ingestions/{id}:pause` | Pause a tail job |
@@ -1032,9 +1037,26 @@ curl -X POST http://localhost:8000/v1/ingestions/$ID:stop
 **Backpressure and rate limiting.** Two independent 429s:
 
 - **Queue depth.** When pending worker jobs ≥ `INGEST_QUEUE_MAX` (default 100), `POST /v1/ingestions` and `POST /v1/ingestions/lines` return **429** with `Retry-After` (`INGEST_RETRY_AFTER_SECONDS`, default 5) and body `{"error_code":"INGEST_QUEUE_FULL","message":"..."}`. Tail ticks skip the same ceiling.
-- **API token bucket.** `POST /v1/ingestions*` (writes) and `/v1/query*` (plus unversioned aliases) are limited per API key (`request.state.auth_principal.key_id`, or a single `anonymous` bucket when `AUTH_ENABLED=false`). Exceeding the bucket returns **429** with `Retry-After` (`RATELIMIT_RETRY_AFTER_SECONDS`, default 1) and body `{"error_code":"RATE_LIMITED","message":"..."}`. Defaults (`RATELIMIT_INGEST_RPS` / `RATELIMIT_QUERY_RPS` / `RATELIMIT_BURST` = 100) are high enough for local demo and tests; `0` rps means unlimited for that category. `/health`, `/docs`, static UI, and `/config` are not limited. Buckets are in-memory per process.
+- **API token bucket.** `POST /v1/ingestions*` (writes) and `/v1/query*` (plus unversioned aliases) are limited per API key (`request.state.auth_principal.key_id`, or a single `anonymous` bucket when `AUTH_ENABLED=false`). Exceeding the bucket returns **429** with `Retry-After` (`RATELIMIT_RETRY_AFTER_SECONDS`, default 1) and body `{"error_code":"RATE_LIMITED","message":"..."}`. Defaults (`RATELIMIT_INGEST_RPS` / `RATELIMIT_QUERY_RPS` / `RATELIMIT_BURST` = 100) are high enough for local demo and tests; `0` rps means unlimited for that category. `/health`, `/metrics`, `/docs`, static UI, and `/config` are not limited. Buckets are in-memory per process.
 
 LLM calls are separately capped by `LLM_MAX_CONCURRENCY` (default 4) so a burst of `explain` cannot fan out unbounded provider requests. Timeouts, retries, automatic template fallback (`llm.fell_back`), and the process-local circuit breaker are described under [LLM integration](#llm-integration).
+
+**Observability.** Every response echoes `X-Request-Id` (honors incoming `X-Request-Id` / `X-Request-ID`, otherwise a UUID) and W3C `traceparent` plus `X-Trace-Id`. Structured JSON logs (structlog) include `request_id` and resolved `scope` via contextvars; secrets and bearer tokens are never logged. `GET /metrics` names:
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `raglogs_ingest_duration_seconds` | histogram | Pipeline ingest wall time |
+| `raglogs_ingest_lines_total` | counter (`result`) | Lines inserted / deduped / error |
+| `raglogs_ingest_request_duration_seconds` | histogram | HTTP ingest write latency |
+| `raglogs_cluster_count` | histogram | Clusters produced per run |
+| `raglogs_query_request_duration_seconds` | histogram (`endpoint`) | HTTP query latency |
+| `raglogs_llm_request_duration_seconds` | histogram | LLM provider call latency |
+| `raglogs_llm_fallback_total` | counter | G10 template fallbacks |
+| `raglogs_llm_estimated_tokens_total` | counter | Estimated input tokens (UTF-8 chars/4, not USD) |
+| `raglogs_llm_breaker_state` | gauge | `0` closed, `1` half_open, `2` open |
+| `raglogs_worker_queue_depth` | gauge | Pending worker jobs (omitted until a successful scrape; left stale if DB fails) |
+
+OpenTelemetry spans cover ingest → cluster → explain (and the HTTP request). The default exporter is none; set `OTEL_EXPORTER_OTLP_ENDPOINT` to export, or `OTEL_SDK_DISABLED=true` to skip the SDK. Trace ids stay on response headers so `/v1/query/*` JSON (`schema_version` 1.0) is unchanged.
 
 **Idempotency-Key.** `POST /v1/ingestions` (batch enqueue and tail create; also the deprecated `/ingestions` alias) honors an `Idempotency-Key` header (max 256 characters). A repeat **in the same isolation scope** within `INGEST_IDEMPOTENCY_TTL_SECONDS` (default 86400) returns the original **202** job — the same `worker_job_id` for batch, the same `ingestion_job_id` for tail — instead of starting a new one. Reusing another scope's key returns **409** `IDEMPOTENCY_SCOPE_CONFLICT`. Empty keys return **400**. GET routes ignore the header. `POST /v1/ingestions/lines` does not use the header; duplicate push/tail lines are handled by content dedup instead.
 
@@ -1092,7 +1114,7 @@ Tail jobs and `POST /v1/ingestions/lines` (sync push) do **not** fire callbacks 
 
 Overlapping tail poll windows can **double-count** the same physical lines until content dedup (G6) lands. Prefer a single tail job per source and avoid also batch-ingesting the same window.
 
-Unversioned `/ingestions`, `/query/*`, and `/config` remain as **deprecated aliases** for one release. They behave the same as the `/v1` paths and send `Deprecation: true` plus a `Link: </v1/...>; rel="successor-version"` header. `/health`, the web UI (`/`), and `/static` stay unversioned.
+Unversioned `/ingestions`, `/query/*`, and `/config` remain as **deprecated aliases** for one release. They behave the same as the `/v1` paths and send `Deprecation: true` plus a `Link: </v1/...>; rel="successor-version"` header. `/health`, `/metrics`, the web UI (`/`), and `/static` stay unversioned.
 
 **Compatibility policy.** Additive changes stay in `v1`. Breaking path or method removals require `v2`. `/v1/query/*` JSON bodies are **schema_version 1.0**: structured fields plus an `llm` provenance block (`used`, `provider`, `model`, `fell_back`). Prose is `rendered_text` (and `format: text` still adds a `text` alias; `format: markdown` still adds `markdown`). Additive fields may appear in 1.x; a breaking body change requires `schema_version` 2.0 / `v2`.
 

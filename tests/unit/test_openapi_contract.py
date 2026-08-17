@@ -15,6 +15,7 @@ from src.api.deprecation import (
 
 REQUIRED_GET: tuple[str, ...] = (
     "/health",
+    "/metrics",
     "/v1/ingestions",
     "/v1/config",
 )
@@ -87,6 +88,15 @@ def test_health_is_unversioned() -> None:
     assert "/health" in paths
     assert "/v1/health" not in paths
     assert "get" in paths["/health"]
+
+
+def test_metrics_is_unversioned() -> None:
+    paths = app.openapi()["paths"]
+    assert "/metrics" in paths
+    assert "/v1/metrics" not in paths
+    assert "get" in paths["/metrics"]
+    content = paths["/metrics"]["get"]["responses"]["200"]["content"]
+    assert "text/plain" in content
 
 
 def test_deprecation_helpers() -> None:

@@ -12,7 +12,21 @@ from src.api.auth.middleware import AuthMiddleware
 from src.api.auth.scope import ScopeResolutionError, scope_error_response
 from src.api.deprecation import DeprecationHeaderMiddleware
 from src.api.ratelimit import RateLimitMiddleware
-from src.api.routes import ask, clusters, compare_windows, config, explain, health, ingestions, similar, timeline, ui
+from src.api.routes import (
+    ask,
+    clusters,
+    compare_windows,
+    config,
+    explain,
+    health,
+    ingestions,
+    metrics,
+    similar,
+    timeline,
+    ui,
+)
+from src.observability import setup_observability
+from src.observability.middleware import ObservabilityMiddleware
 
 _OPENAPI_DESCRIPTION = """Incident explanation API — ask your logs what happened.
 
@@ -33,6 +47,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from src.db.session import check_connection
 
     settings = get_settings()
+    setup_observability(log_format=settings.log_format)
     warn_if_insecure_bind(settings.api_bind_host, settings)
 
     if not check_connection():
@@ -61,11 +76,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Last added middleware is outermost: deprecation headers apply even to auth
-# errors. Rate limiting sits inside auth so request.state.auth_principal is set.
+# Last added middleware is outermost. Request-id/tracing wrap auth so 401s
+# still get an id. Rate limiting sits inside auth so request.state.auth_principal
+# is set. Deprecation headers apply even to auth errors.
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(AuthMiddleware)
 app.add_middleware(DeprecationHeaderMiddleware)
+app.add_middleware(ObservabilityMiddleware)
+
+setup_observability()
 
 
 @app.exception_handler(ScopeResolutionError)
@@ -75,6 +94,7 @@ async def handle_scope_resolution_error(
     return scope_error_response(exc)
 
 app.include_router(health.router, tags=["health"])
+app.include_router(metrics.router, tags=["metrics"])
 app.include_router(ui.router, tags=["ui"])
 
 

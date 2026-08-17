@@ -194,3 +194,25 @@ def test_llm_resilience_settings_from_env(monkeypatch):
     assert settings.llm_max_input_tokens == 3000
     assert settings.llm_breaker_threshold == 3
     assert settings.llm_breaker_cooldown_seconds == pytest.approx(45.0)
+
+
+def test_observability_settings_defaults():
+    settings = Settings(_env_file=None)
+    assert settings.log_format == "json"
+    assert settings.otel_sdk_disabled is False
+    assert settings.otel_exporter_otlp_endpoint == ""
+    assert settings.otel_service_name == "raglogs"
+
+
+def test_observability_settings_from_env(monkeypatch):
+    monkeypatch.setenv("LOG_FORMAT", "console")
+    monkeypatch.setenv("OTEL_SDK_DISABLED", "true")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318/v1/traces")
+    monkeypatch.setenv("OTEL_SERVICE_NAME", "raglogs-test")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.log_format == "console"
+    assert settings.otel_sdk_disabled is True
+    assert settings.otel_exporter_otlp_endpoint == "http://localhost:4318/v1/traces"
+    assert settings.otel_service_name == "raglogs-test"

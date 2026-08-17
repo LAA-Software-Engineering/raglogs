@@ -124,6 +124,10 @@ def authorize_request(request: Request) -> JSONResponse | None:
     request.state.auth_principal = principal
     request.state.auth_role = principal.role
     request.state.auth_scope = principal.scope
+    if principal.scope:
+        from structlog.contextvars import bind_contextvars
+
+        bind_contextvars(scope=principal.scope)
     return None
 
 

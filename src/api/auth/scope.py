@@ -11,6 +11,8 @@ from typing import Optional
 from fastapi import Request
 from starlette.responses import JSONResponse
 
+from structlog.contextvars import bind_contextvars
+
 from src.api.auth.middleware import AuthPrincipal
 from src.db.models import DEFAULT_LOG_SCOPE
 
@@ -134,4 +136,5 @@ def bind_request_scope(
         principal=principal,
     )
     request.state.resolved_scope = resolved
+    bind_contextvars(scope=resolved)
     return resolved

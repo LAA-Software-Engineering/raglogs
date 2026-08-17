@@ -96,6 +96,9 @@ def _process_line(
         parsed = _parse_line(line, fmt, default_service=default_service)
     except Exception:
         stats.error_count += 1
+        from src.observability.metrics import record_ingest_lines
+
+        record_ingest_lines(1, result="error")
         return None
 
     if parsed is None:
@@ -103,6 +106,9 @@ def _process_line(
 
     if parsed.parse_error:
         stats.error_count += 1
+        from src.observability.metrics import record_ingest_lines
+
+        record_ingest_lines(1, result="error")
         return None
 
     if parsed.timestamp is None and received_at is not None:
@@ -218,6 +224,15 @@ def _flush_log_batch(
     return len(inserted_entries), skipped
 
 
+def _observe_ingest_elapsed(start_time: float, stats: IngestionStats) -> None:
+    import time
+
+    from src.observability.metrics import record_ingest_duration
+
+    stats.duration_seconds = time.time() - start_time
+    record_ingest_duration(stats.duration_seconds)
+
+
 def _flush_and_count(
     db: Session,
     batch: list[LogEntry],
@@ -226,6 +241,10 @@ def _flush_and_count(
 ) -> None:
     _inserted, skipped = _flush_log_batch(db, batch, embedder)
     stats.deduped_count += skipped
+    from src.observability.metrics import record_ingest_lines
+
+    record_ingest_lines(_inserted, result="inserted")
+    record_ingest_lines(skipped, result="deduped")
 
 
 def ingest_files(
@@ -292,55 +311,62 @@ def ingest_files(
     # job row won't persist at all rather than being left "failed". Both outcomes are
     # fine (no job stuck at "running" either way) — don't "simplify" by dropping the
     # re-raise, it's what lets get_db() know to roll back for those callers.
-    try:
-        for file_path in files:
-            file_fmt = detect_format(file_path, hint=fmt)
-            file_service = default_service or _infer_service_from_filename(file_path)
+    from src.observability.tracing import start_span
 
-            for line in read_lines(file_path):
-                entry = _process_line(
-                    line,
-                    file_fmt,
-                    file_service,
-                    default_env,
-                    source,
-                    job,
-                    "file",
-                    str(file_path),
-                    stats,
-                    scope=scope,
-                )
-                if entry is None:
-                    continue
+    with start_span(
+        "ingest",
+        **{"raglogs.adapter": "file", "raglogs.scope": scope or ""},
+    ):
+        try:
+            for file_path in files:
+                file_fmt = detect_format(file_path, hint=fmt)
+                file_service = default_service or _infer_service_from_filename(file_path)
 
-                batch.append(entry)
+                for line in read_lines(file_path):
+                    entry = _process_line(
+                        line,
+                        file_fmt,
+                        file_service,
+                        default_env,
+                        source,
+                        job,
+                        "file",
+                        str(file_path),
+                        stats,
+                        scope=scope,
+                    )
+                    if entry is None:
+                        continue
 
-                if len(batch) >= BATCH_SIZE:
-                    _flush_and_count(db, batch, embedder, stats)
+                    batch.append(entry)
 
-                    if progress_callback:
-                        progress_callback(stats.lines_read, stats.parsed_count)
+                    if len(batch) >= BATCH_SIZE:
+                        _flush_and_count(db, batch, embedder, stats)
 
-        if batch:
-            _flush_and_count(db, batch, embedder, stats)
+                        if progress_callback:
+                            progress_callback(stats.lines_read, stats.parsed_count)
 
-        stats.duration_seconds = time.time() - start_time
+            if batch:
+                _flush_and_count(db, batch, embedder, stats)
 
-        job.status = "completed"
-        job.finished_at = datetime.now(tz=timezone.utc)
-        job.line_count = stats.lines_read
-        job.error_count = stats.error_count
-        job.parsed_count = stats.parsed_count
-        db.flush()
-    except Exception as exc:
-        job.status = "failed"
-        job.error_message = str(exc)
-        job.finished_at = datetime.now(tz=timezone.utc)
-        job.line_count = stats.lines_read
-        job.error_count = stats.error_count
-        job.parsed_count = stats.parsed_count
-        db.flush()
-        raise
+            _observe_ingest_elapsed(start_time, stats)
+
+            job.status = "completed"
+            job.finished_at = datetime.now(tz=timezone.utc)
+            job.line_count = stats.lines_read
+            job.error_count = stats.error_count
+            job.parsed_count = stats.parsed_count
+            db.flush()
+        except Exception as exc:
+            _observe_ingest_elapsed(start_time, stats)
+            job.status = "failed"
+            job.error_message = str(exc)
+            job.finished_at = datetime.now(tz=timezone.utc)
+            job.line_count = stats.lines_read
+            job.error_count = stats.error_count
+            job.parsed_count = stats.parsed_count
+            db.flush()
+            raise
 
     return job, stats
 
@@ -461,84 +487,91 @@ def ingest_from_source(
     completed_streams: set[str] = set(completed_at_start)
 
     # See the matching NOTE in ingest_files() re: this try/except and get_db() rollback.
-    try:
-        for ref in refs:
-            if ref.stream_id in completed_at_start:
-                continue  # already fully ingested in a prior run — don't duplicate it
+    from src.observability.tracing import start_span
 
-            try:
-                for raw in adapter.read(ref, window):
-                    effective_fmt = _resolve_fmt(raw.text, fmt)
-                    entry = _process_line(
-                        raw.text,
-                        effective_fmt,
-                        spec.service or raw.default_service,
-                        spec.env or raw.default_environment,
-                        source,
-                        job,
-                        spec.adapter,
-                        raw.source_ref,
-                        stats,
-                        received_at=raw.received_at,
-                        default_host=raw.default_host,
-                        extra=raw.extra or None,
-                        scope=scope,
-                    )
-                    if entry is None:
-                        continue
+    with start_span(
+        "ingest",
+        **{"raglogs.adapter": spec.adapter, "raglogs.scope": scope or ""},
+    ):
+        try:
+            for ref in refs:
+                if ref.stream_id in completed_at_start:
+                    continue  # already fully ingested in a prior run — don't duplicate it
 
-                    batch.append(entry)
+                try:
+                    for raw in adapter.read(ref, window):
+                        effective_fmt = _resolve_fmt(raw.text, fmt)
+                        entry = _process_line(
+                            raw.text,
+                            effective_fmt,
+                            spec.service or raw.default_service,
+                            spec.env or raw.default_environment,
+                            source,
+                            job,
+                            spec.adapter,
+                            raw.source_ref,
+                            stats,
+                            received_at=raw.received_at,
+                            default_host=raw.default_host,
+                            extra=raw.extra or None,
+                            scope=scope,
+                        )
+                        if entry is None:
+                            continue
 
-                    if len(batch) >= BATCH_SIZE:
-                        _flush_and_count(db, batch, embedder, stats)
+                        batch.append(entry)
 
-                        if progress_callback:
-                            progress_callback(stats.lines_read, stats.parsed_count)
-            except AdapterUnavailableError as e:
-                adapter_errors.append(str(e))
-            else:
-                # Tail ticks re-read the same streams forever; cursor=None means
-                # "caught up for this window", not "never read again".
-                if finalize and ref.cursor is None:
-                    completed_streams.add(ref.stream_id)
-            finally:
-                cursors[ref.stream_id] = ref.cursor
+                        if len(batch) >= BATCH_SIZE:
+                            _flush_and_count(db, batch, embedder, stats)
 
-        if adapter_errors and stats.lines_read == 0:
-            # every stream failed before yielding anything — no partial silent ingest
-            raise AdapterUnavailableError("; ".join(adapter_errors))
+                            if progress_callback:
+                                progress_callback(stats.lines_read, stats.parsed_count)
+                except AdapterUnavailableError as e:
+                    adapter_errors.append(str(e))
+                else:
+                    # Tail ticks re-read the same streams forever; cursor=None means
+                    # "caught up for this window", not "never read again".
+                    if finalize and ref.cursor is None:
+                        completed_streams.add(ref.stream_id)
+                finally:
+                    cursors[ref.stream_id] = ref.cursor
 
-        if batch:
-            _flush_and_count(db, batch, embedder, stats)
+            if adapter_errors and stats.lines_read == 0:
+                # every stream failed before yielding anything — no partial silent ingest
+                raise AdapterUnavailableError("; ".join(adapter_errors))
 
-        stats.duration_seconds = time.time() - start_time
-        _apply_ingest_counts(job, stats, additive=existing_job is not None)
-        _store_job_cursors(
-            job,
-            cursors,
-            completed_streams,
-            adapter_errors,
-            finalize=finalize,
-        )
-        if finalize:
-            job.status = "completed"
-            job.finished_at = datetime.now(tz=timezone.utc)
-        db.flush()
-    except Exception as exc:
-        if finalize:
-            job.status = "failed"
-            job.error_message = str(exc)
-            job.finished_at = datetime.now(tz=timezone.utc)
+            if batch:
+                _flush_and_count(db, batch, embedder, stats)
+
+            _observe_ingest_elapsed(start_time, stats)
             _apply_ingest_counts(job, stats, additive=existing_job is not None)
             _store_job_cursors(
                 job,
                 cursors,
                 completed_streams,
                 adapter_errors,
-                finalize=True,
+                finalize=finalize,
             )
+            if finalize:
+                job.status = "completed"
+                job.finished_at = datetime.now(tz=timezone.utc)
             db.flush()
-        raise
+        except Exception as exc:
+            _observe_ingest_elapsed(start_time, stats)
+            if finalize:
+                job.status = "failed"
+                job.error_message = str(exc)
+                job.finished_at = datetime.now(tz=timezone.utc)
+                _apply_ingest_counts(job, stats, additive=existing_job is not None)
+                _store_job_cursors(
+                    job,
+                    cursors,
+                    completed_streams,
+                    adapter_errors,
+                    finalize=True,
+                )
+                db.flush()
+            raise
 
     return job, stats
 
@@ -577,46 +610,53 @@ def ingest_push_lines(
     db.flush()
 
     batch: list[LogEntry] = []
-    try:
-        for line in raw_lines:
-            effective_fmt = _resolve_fmt(line, fmt)
-            entry = _process_line(
-                line,
-                effective_fmt,
-                default_service,
-                default_env,
-                source,
-                job,
-                "push",
-                "push",
-                stats,
-                scope=scope,
-            )
-            if entry is None:
-                continue
-            batch.append(entry)
-            if len(batch) >= BATCH_SIZE:
+    from src.observability.tracing import start_span
+
+    with start_span(
+        "ingest",
+        **{"raglogs.adapter": "push", "raglogs.scope": scope or ""},
+    ):
+        try:
+            for line in raw_lines:
+                effective_fmt = _resolve_fmt(line, fmt)
+                entry = _process_line(
+                    line,
+                    effective_fmt,
+                    default_service,
+                    default_env,
+                    source,
+                    job,
+                    "push",
+                    "push",
+                    stats,
+                    scope=scope,
+                )
+                if entry is None:
+                    continue
+                batch.append(entry)
+                if len(batch) >= BATCH_SIZE:
+                    _flush_and_count(db, batch, embedder, stats)
+
+            if batch:
                 _flush_and_count(db, batch, embedder, stats)
 
-        if batch:
-            _flush_and_count(db, batch, embedder, stats)
-
-        stats.duration_seconds = time.time() - start_time
-        job.status = "completed"
-        job.finished_at = datetime.now(tz=timezone.utc)
-        job.line_count = stats.lines_read
-        job.error_count = stats.error_count
-        job.parsed_count = stats.parsed_count
-        db.flush()
-    except Exception as exc:
-        job.status = "failed"
-        job.error_message = str(exc)
-        job.finished_at = datetime.now(tz=timezone.utc)
-        job.line_count = stats.lines_read
-        job.error_count = stats.error_count
-        job.parsed_count = stats.parsed_count
-        db.flush()
-        raise
+            _observe_ingest_elapsed(start_time, stats)
+            job.status = "completed"
+            job.finished_at = datetime.now(tz=timezone.utc)
+            job.line_count = stats.lines_read
+            job.error_count = stats.error_count
+            job.parsed_count = stats.parsed_count
+            db.flush()
+        except Exception as exc:
+            _observe_ingest_elapsed(start_time, stats)
+            job.status = "failed"
+            job.error_message = str(exc)
+            job.finished_at = datetime.now(tz=timezone.utc)
+            job.line_count = stats.lines_read
+            job.error_count = stats.error_count
+            job.parsed_count = stats.parsed_count
+            db.flush()
+            raise
 
     return job, stats
 
