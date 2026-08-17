@@ -3,6 +3,7 @@
 The core retrieval path already accepts `ingestion_job_id`; these tests
 cover Typer flag wiring only (no database).
 """
+import re
 import uuid
 from unittest.mock import MagicMock, patch
 
@@ -12,6 +13,13 @@ from src.cli.main import app
 from src.core.retrieval.question_router import AskResult
 
 runner = CliRunner()
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain_help(text: str) -> str:
+    """Strip ANSI and whitespace so wrapped flags like `--ingestion-\\njob` match."""
+    return re.sub(r"\s+", "", _ANSI_RE.sub("", text))
 
 
 def _mock_result() -> AskResult:
@@ -34,10 +42,15 @@ def _ctx_db() -> MagicMock:
 
 class TestAskCliIngestionFlags:
     def test_help_lists_ingestion_flags(self):
-        result = runner.invoke(app, ["ask", "--help"])
+        result = runner.invoke(
+            app,
+            ["ask", "--help"],
+            env={"COLUMNS": "120", "NO_COLOR": "1", "TERM": "dumb"},
+        )
         assert result.exit_code == 0
-        assert "--ingestion-job" in result.output
-        assert "--all-ingestions" in result.output
+        help_text = _plain_help(result.output)
+        assert "--ingestion-job" in help_text
+        assert "--all-ingestions" in help_text
 
     def test_defaults_to_latest_completed_ingestion(self):
         job_id = uuid.uuid4()
