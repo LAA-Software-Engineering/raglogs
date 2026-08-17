@@ -72,6 +72,7 @@ def clusters_endpoint(request: ClustersRequest):
                 "change_ratio": round(c.change_ratio, 2),
                 "importance_score": round(c.importance_score, 2),
                 "is_trigger": c.is_trigger,
+                "merged_fingerprints": c.merged_fingerprints,
             }
             for c in clusters
         ],
