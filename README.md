@@ -1262,7 +1262,8 @@ that: `make web-serve` starts Postgres, migrates, and serves without
 reseeding. Already have Postgres running and migrated? `make api` starts
 just the server.
 
-Pick a time window (presets or a duration like `2h`), then switch between the
+Pick a time window — relative presets or a duration like `2h` (the default), or
+switch to absolute UTC `from`/`to` datetimes — then switch between the
 **Explain**, **Timeline**, **Compare**, and **Ask** tabs. The **ingestion**
 dropdown in the top bar lists your 25 most recent completed ingestions (via
 `GET /v1/ingestions`) and defaults to the latest one, matching the CLI; pick a

@@ -28,14 +28,24 @@
 
     <!-- Explain -->
     <section class="panel tab-panel active" id="panel-explain">
-      <form class="window-form" data-endpoint="/v1/query/explain" data-render="explain">
-        <div class="presets">
-          <button type="button" class="preset-btn" data-since="15m">15m</button>
-          <button type="button" class="preset-btn" data-since="1h">1h</button>
-          <button type="button" class="preset-btn active" data-since="2h">2h</button>
-          <button type="button" class="preset-btn" data-since="24h">24h</button>
+      <form class="window-form" data-endpoint="/v1/query/explain" data-render="explain" data-window-mode="relative">
+        <div class="window-mode" role="group" aria-label="Time window mode">
+          <button type="button" class="mode-btn active" data-mode="relative" aria-pressed="true">Relative</button>
+          <button type="button" class="mode-btn" data-mode="absolute" aria-pressed="false">Absolute</button>
         </div>
-        <label>since <input type="text" name="since" value="2h" class="since-input"></label>
+        <div class="window-relative">
+          <div class="presets">
+            <button type="button" class="preset-btn" data-since="15m">15m</button>
+            <button type="button" class="preset-btn" data-since="1h">1h</button>
+            <button type="button" class="preset-btn active" data-since="2h">2h</button>
+            <button type="button" class="preset-btn" data-since="24h">24h</button>
+          </div>
+          <label>since <input type="text" name="since" value="2h" class="since-input"></label>
+        </div>
+        <div class="window-absolute" hidden>
+          <label>from (UTC) <input type="datetime-local" name="from_time" class="datetime-input" disabled></label>
+          <label>to (UTC) <input type="datetime-local" name="to_time" class="datetime-input" disabled></label>
+        </div>
         <label>service <input type="text" name="service" placeholder="optional"></label>
         <label>env <input type="text" name="env" placeholder="optional"></label>
         <button type="submit" class="run-btn">Explain</button>
@@ -47,14 +57,24 @@
 
     <!-- Timeline -->
     <section class="panel tab-panel" id="panel-timeline">
-      <form class="window-form" data-endpoint="/v1/query/timeline" data-render="timeline">
-        <div class="presets">
-          <button type="button" class="preset-btn" data-since="15m">15m</button>
-          <button type="button" class="preset-btn" data-since="1h">1h</button>
-          <button type="button" class="preset-btn active" data-since="2h">2h</button>
-          <button type="button" class="preset-btn" data-since="24h">24h</button>
+      <form class="window-form" data-endpoint="/v1/query/timeline" data-render="timeline" data-window-mode="relative">
+        <div class="window-mode" role="group" aria-label="Time window mode">
+          <button type="button" class="mode-btn active" data-mode="relative" aria-pressed="true">Relative</button>
+          <button type="button" class="mode-btn" data-mode="absolute" aria-pressed="false">Absolute</button>
         </div>
-        <label>since <input type="text" name="since" value="2h" class="since-input"></label>
+        <div class="window-relative">
+          <div class="presets">
+            <button type="button" class="preset-btn" data-since="15m">15m</button>
+            <button type="button" class="preset-btn" data-since="1h">1h</button>
+            <button type="button" class="preset-btn active" data-since="2h">2h</button>
+            <button type="button" class="preset-btn" data-since="24h">24h</button>
+          </div>
+          <label>since <input type="text" name="since" value="2h" class="since-input"></label>
+        </div>
+        <div class="window-absolute" hidden>
+          <label>from (UTC) <input type="datetime-local" name="from_time" class="datetime-input" disabled></label>
+          <label>to (UTC) <input type="datetime-local" name="to_time" class="datetime-input" disabled></label>
+        </div>
         <label>service <input type="text" name="service" placeholder="optional"></label>
         <label>env <input type="text" name="env" placeholder="optional"></label>
         <button type="submit" class="run-btn">Build timeline</button>
@@ -66,15 +86,27 @@
 
     <!-- Compare -->
     <section class="panel tab-panel" id="panel-compare">
-      <form class="window-form" data-endpoint="/v1/query/compare" data-render="compare">
-        <div class="presets" data-preset-target="since">
-          <button type="button" class="preset-btn" data-since="15m">15m</button>
-          <button type="button" class="preset-btn active" data-since="30m">30m</button>
-          <button type="button" class="preset-btn" data-since="1h">1h</button>
-          <button type="button" class="preset-btn" data-since="2h">2h</button>
+      <form class="window-form" data-endpoint="/v1/query/compare" data-render="compare" data-window-mode="relative">
+        <div class="window-mode" role="group" aria-label="Time window mode">
+          <button type="button" class="mode-btn active" data-mode="relative" aria-pressed="true">Relative</button>
+          <button type="button" class="mode-btn" data-mode="absolute" aria-pressed="false">Absolute</button>
         </div>
-        <label>since (incident) <input type="text" name="since" value="30m" class="since-input"></label>
-        <label>baseline <input type="text" name="baseline" value="24h" class="since-input"></label>
+        <div class="window-relative">
+          <div class="presets" data-preset-target="since">
+            <button type="button" class="preset-btn" data-since="15m">15m</button>
+            <button type="button" class="preset-btn active" data-since="30m">30m</button>
+            <button type="button" class="preset-btn" data-since="1h">1h</button>
+            <button type="button" class="preset-btn" data-since="2h">2h</button>
+          </div>
+          <label>since (incident) <input type="text" name="since" value="30m" class="since-input"></label>
+          <label>baseline <input type="text" name="baseline" value="24h" class="since-input"></label>
+        </div>
+        <div class="window-absolute" hidden>
+          <label>incident from (UTC) <input type="datetime-local" name="window_a_from" class="datetime-input" disabled></label>
+          <label>incident to (UTC) <input type="datetime-local" name="window_a_to" class="datetime-input" disabled></label>
+          <label>baseline from (UTC) <input type="datetime-local" name="window_b_from" class="datetime-input" disabled></label>
+          <label>baseline to (UTC) <input type="datetime-local" name="window_b_to" class="datetime-input" disabled></label>
+        </div>
         <label>service <input type="text" name="service" placeholder="optional"></label>
         <label>env <input type="text" name="env" placeholder="optional"></label>
         <button type="submit" class="run-btn">Compare</button>
@@ -86,14 +118,24 @@
 
     <!-- Ask -->
     <section class="panel tab-panel" id="panel-ask">
-      <form class="window-form" data-endpoint="/v1/query/ask" data-render="ask">
-        <div class="presets">
-          <button type="button" class="preset-btn" data-since="15m">15m</button>
-          <button type="button" class="preset-btn" data-since="1h">1h</button>
-          <button type="button" class="preset-btn active" data-since="2h">2h</button>
-          <button type="button" class="preset-btn" data-since="24h">24h</button>
+      <form class="window-form" data-endpoint="/v1/query/ask" data-render="ask" data-window-mode="relative">
+        <div class="window-mode" role="group" aria-label="Time window mode">
+          <button type="button" class="mode-btn active" data-mode="relative" aria-pressed="true">Relative</button>
+          <button type="button" class="mode-btn" data-mode="absolute" aria-pressed="false">Absolute</button>
         </div>
-        <label>since <input type="text" name="since" value="2h" class="since-input"></label>
+        <div class="window-relative">
+          <div class="presets">
+            <button type="button" class="preset-btn" data-since="15m">15m</button>
+            <button type="button" class="preset-btn" data-since="1h">1h</button>
+            <button type="button" class="preset-btn active" data-since="2h">2h</button>
+            <button type="button" class="preset-btn" data-since="24h">24h</button>
+          </div>
+          <label>since <input type="text" name="since" value="2h" class="since-input"></label>
+        </div>
+        <div class="window-absolute" hidden>
+          <label>from (UTC) <input type="datetime-local" name="from_time" class="datetime-input" disabled></label>
+          <label>to (UTC) <input type="datetime-local" name="to_time" class="datetime-input" disabled></label>
+        </div>
         <label>service <input type="text" name="service" placeholder="optional"></label>
         <label class="question-label">question
           <input type="text" name="question" placeholder="e.g. why did checkout fail?" class="question-input" required>

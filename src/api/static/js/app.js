@@ -17,6 +17,29 @@ function fmtTime(iso) {
   }
 }
 
+// datetime-local yields "YYYY-MM-DDTHH:MM" (seconds optional, no timezone).
+// The API treats naive timestamps as UTC, so we emit explicit UTC ISO-8601.
+const DATETIME_WINDOW_KEYS = {
+  from_time: true,
+  to_time: true,
+  window_a_from: true,
+  window_a_to: true,
+  window_b_from: true,
+  window_b_to: true,
+};
+
+function datetimeLocalToIso(value) {
+  const trimmed = String(value == null ? "" : value).trim();
+  if (!trimmed) return "";
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(trimmed)) {
+    return trimmed + ":00Z";
+  }
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(trimmed)) {
+    return trimmed + "Z";
+  }
+  return trimmed;
+}
+
 function confidenceBadge(confidence) {
   const label = confidence && typeof confidence === "object" ? confidence.label : confidence;
   const cls = label === "high" ? "badge-high" : label === "medium" || label === "medium-high" ? "badge-medium" : "badge-low";
@@ -90,6 +113,43 @@ function initTabs() {
   });
 }
 
+// ── Window mode (relative duration vs absolute from/to) ──────────────────────
+
+function applyWindowMode(form, mode) {
+  const next = mode === "absolute" ? "absolute" : "relative";
+  form.dataset.windowMode = next;
+
+  form.querySelectorAll(".mode-btn").forEach((btn) => {
+    const active = btn.dataset.mode === next;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+
+  const relative = form.querySelector(".window-relative");
+  const absolute = form.querySelector(".window-absolute");
+  if (relative) {
+    relative.hidden = next !== "relative";
+    relative.querySelectorAll("input, button").forEach((el) => {
+      el.disabled = next !== "relative";
+    });
+  }
+  if (absolute) {
+    absolute.hidden = next !== "absolute";
+    absolute.querySelectorAll("input").forEach((el) => {
+      el.disabled = next !== "absolute";
+    });
+  }
+}
+
+function initWindowModes() {
+  document.querySelectorAll(".window-form").forEach((form) => {
+    applyWindowMode(form, form.dataset.windowMode || "relative");
+    form.querySelectorAll(".mode-btn").forEach((btn) => {
+      btn.addEventListener("click", () => applyWindowMode(form, btn.dataset.mode));
+    });
+  });
+}
+
 // ── Presets ──────────────────────────────────────────────────────────────────
 
 function initPresets() {
@@ -99,7 +159,7 @@ function initPresets() {
       btn.addEventListener("click", () => {
         form.querySelectorAll(".preset-btn").forEach((b) => b.classList.remove("active"));
         btn.classList.add("active");
-        sinceInput.value = btn.dataset.since;
+        if (sinceInput) sinceInput.value = btn.dataset.since;
       });
     });
   });
@@ -111,7 +171,13 @@ function formToBody(form) {
   const body = {};
   new FormData(form).forEach((value, key) => {
     const trimmed = String(value).trim();
-    if (trimmed !== "") body[key] = trimmed;
+    if (trimmed === "") return;
+    if (DATETIME_WINDOW_KEYS[key]) {
+      const iso = datetimeLocalToIso(trimmed);
+      if (iso) body[key] = iso;
+      return;
+    }
+    body[key] = trimmed;
   });
 
   const jobId = selectedIngestionJobId();
@@ -146,6 +212,16 @@ function initForms() {
       resultEl.innerHTML = '<p class="empty-state">Loading…</p>';
 
       try {
+        if ((form.dataset.windowMode || "relative") === "absolute") {
+          const missing = Array.from(form.querySelectorAll('input[type="datetime-local"]:not([disabled])')).some(
+            (input) => !String(input.value || "").trim()
+          );
+          if (missing) {
+            resultEl.innerHTML = '<p class="error-state">Pick from and to datetimes for the absolute window.</p>';
+            return;
+          }
+        }
+
         const resp = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -292,6 +368,7 @@ function renderAsk(el, data) {
 
 document.addEventListener("DOMContentLoaded", () => {
   initTabs();
+  initWindowModes();
   initPresets();
   initForms();
   loadIngestions();

@@ -119,11 +119,26 @@ body {
   border-bottom: 1px solid var(--panel-border);
 }
 
+.window-mode,
 .presets {
   display: flex;
   gap: 4px;
 }
 
+.window-relative,
+.window-absolute {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+}
+
+.window-relative[hidden],
+.window-absolute[hidden] {
+  display: none;
+}
+
+.mode-btn,
 .preset-btn {
   background: var(--bg);
   border: 1px solid var(--panel-border);
@@ -135,6 +150,8 @@ body {
   font-size: 12px;
 }
 
+.mode-btn.active,
+.mode-btn:hover,
 .preset-btn.active,
 .preset-btn:hover {
   color: var(--accent);
@@ -158,6 +175,11 @@ body {
   font-family: inherit;
   font-size: 13px;
   min-width: 90px;
+}
+
+.window-form input[type="datetime-local"] {
+  min-width: 190px;
+  color-scheme: dark;
 }
 
 .question-label {
