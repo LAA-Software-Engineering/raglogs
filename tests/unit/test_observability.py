@@ -23,8 +23,11 @@ from src.observability.metrics import (
     LLM_FALLBACK,
     REGISTRY,
     classify_http_path,
+    queue_gauge_value,
     record_llm_fallback,
+    reset_queue_gauge,
 )
+from src.observability.middleware import _apply_trace_headers, _w3c_trace_id_from_request_id
 
 client = TestClient(app, raise_server_exceptions=False)
 
@@ -85,7 +88,6 @@ def test_metrics_returns_prometheus_text() -> None:
         "raglogs_llm_request_duration_seconds",
         "raglogs_llm_fallback_total",
         "raglogs_llm_breaker_state",
-        "raglogs_worker_queue_depth",
         "raglogs_cluster_count",
     ):
         assert name in body, f"missing metric {name}"
@@ -208,12 +210,91 @@ def test_g10_fallback_increments_counter() -> None:
 
 
 def test_classify_http_path() -> None:
-    assert classify_http_path("/v1/query/explain") == ("query", "explain")
-    assert classify_http_path("/query/ask") == ("query", "ask")
-    assert classify_http_path("/v1/ingestions") == ("ingest", None)
-    assert classify_http_path("/v1/ingestions/lines") == ("ingest", None)
-    assert classify_http_path("/health") == ("other", None)
-    assert classify_http_path("/metrics") == ("other", None)
+    assert classify_http_path("POST", "/v1/query/explain") == ("query", "explain")
+    assert classify_http_path("POST", "/query/ask") == ("query", "ask")
+    assert classify_http_path("POST", "/v1/ingestions") == ("ingest", None)
+    assert classify_http_path("POST", "/v1/ingestions/lines") == ("ingest", None)
+    assert classify_http_path("POST", "/v1/ingestions/abc:pause") == ("ingest", None)
+    assert classify_http_path("GET", "/v1/ingestions") == ("query", "ingestions")
+    assert classify_http_path("GET", "/v1/ingestions/latest") == ("query", "ingestions")
+    assert classify_http_path("GET", "/health") == ("other", None)
+    assert classify_http_path("GET", "/metrics") == ("other", None)
+
+
+def _histogram_count(name: str) -> float:
+    for metric in REGISTRY.collect():
+        if metric.name != name:
+            continue
+        for sample in metric.samples:
+            if sample.name == f"{name}_count":
+                return float(sample.value)
+    return 0.0
+
+
+def test_get_ingestions_not_counted_as_ingest_write() -> None:
+    before = _histogram_count("raglogs_ingest_request_duration_seconds")
+    with patch("src.db.session.get_db") as get_db:
+        mock_db = MagicMock()
+        mock_db.__enter__ = MagicMock(return_value=mock_db)
+        mock_db.__exit__ = MagicMock(return_value=False)
+        mock_db.execute.return_value.scalars.return_value.all.return_value = []
+        mock_db.execute.return_value.scalar_one.return_value = 0
+        get_db.side_effect = lambda: mock_db
+        client.get("/v1/ingestions")
+    assert _histogram_count("raglogs_ingest_request_duration_seconds") == before
+    client.post("/v1/ingestions", json={"paths": ["/tmp/no-such-file.log"]})
+    assert _histogram_count("raglogs_ingest_request_duration_seconds") == before + 1
+
+
+def test_invalid_request_id_does_not_emit_illegal_traceparent() -> None:
+    import re
+
+    from starlette.responses import Response
+
+    raw = "req-from-caller"
+    hashed = _w3c_trace_id_from_request_id(raw)
+    assert re.fullmatch(r"[0-9a-f]{32}", hashed)
+    assert hashed != raw.replace("-", "")[:32].ljust(32, "0")
+
+    with patch(
+        "src.observability.middleware.current_trace_ids",
+        return_value=(None, None, False),
+    ):
+        resp = Response()
+        _apply_trace_headers(resp, raw)
+    traceparent = resp.headers.get("traceparent")
+    assert traceparent is not None
+    parts = traceparent.split("-")
+    assert len(parts) == 4
+    assert parts[0] == "00"
+    assert re.fullmatch(r"[0-9a-f]{32}", parts[1])
+    assert "req" not in parts[1]
+    assert resp.headers["X-Trace-Id"] == hashed
+
+    with patch("src.db.session.check_connection", return_value=False):
+        http = client.get("/health", headers={"X-Request-Id": raw})
+    tp = http.headers.get("traceparent")
+    assert tp is not None
+    tid = tp.split("-")[1]
+    assert re.fullmatch(r"[0-9a-f]{32}", tid)
+
+
+def test_queue_depth_not_zero_on_db_failure() -> None:
+    from src.observability.metrics import _set_queue_depth
+
+    reset_queue_gauge()
+    with patch("src.db.session.check_connection", return_value=False):
+        resp = client.get("/metrics")
+    assert resp.status_code == 200
+    assert queue_gauge_value() is None
+    assert "raglogs_worker_queue_depth" not in resp.text
+
+    _set_queue_depth(7)
+    assert queue_gauge_value() == 7.0
+    with patch("src.db.session.check_connection", return_value=False):
+        again = client.get("/metrics")
+    assert queue_gauge_value() == 7.0
+    assert "raglogs_worker_queue_depth 7" in again.text
 
 
 def test_record_llm_fallback_shows_in_scrape() -> None:

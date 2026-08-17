@@ -1052,9 +1052,9 @@ LLM calls are separately capped by `LLM_MAX_CONCURRENCY` (default 4) so a burst 
 | `raglogs_query_request_duration_seconds` | histogram (`endpoint`) | HTTP query latency |
 | `raglogs_llm_request_duration_seconds` | histogram | LLM provider call latency |
 | `raglogs_llm_fallback_total` | counter | G10 template fallbacks |
-| `raglogs_llm_estimated_tokens_total` | counter | Estimated input tokens |
+| `raglogs_llm_estimated_tokens_total` | counter | Estimated input tokens (UTF-8 chars/4, not USD) |
 | `raglogs_llm_breaker_state` | gauge | `0` closed, `1` half_open, `2` open |
-| `raglogs_worker_queue_depth` | gauge | Pending worker jobs (`0` if DB is down) |
+| `raglogs_worker_queue_depth` | gauge | Pending worker jobs (omitted until a successful scrape; left stale if DB fails) |
 
 OpenTelemetry spans cover ingest → cluster → explain (and the HTTP request). The default exporter is none; set `OTEL_EXPORTER_OTLP_ENDPOINT` to export, or `OTEL_SDK_DISABLED=true` to skip the SDK. Trace ids stay on response headers so `/v1/query/*` JSON (`schema_version` 1.0) is unchanged.
 

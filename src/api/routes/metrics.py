@@ -9,7 +9,16 @@ from src.observability.metrics import REGISTRY, refresh_runtime_gauges
 router = APIRouter()
 
 
-@router.get("/metrics")
+@router.get(
+    "/metrics",
+    response_class=Response,
+    responses={
+        200: {
+            "description": "Prometheus text exposition format",
+            "content": {"text/plain": {"schema": {"type": "string"}}},
+        }
+    },
+)
 def prometheus_metrics() -> Response:
     """Expose Prometheus text format. Exempt from auth (G2) and rate limits."""
     refresh_runtime_gauges()

@@ -37,10 +37,12 @@
         "operationId": "prometheus_metrics_metrics_get",
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "Prometheus text exposition format",
             "content": {
-              "application/json": {
-                "schema": {}
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
               }
             }
           }

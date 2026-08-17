@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import re
 import time
 import uuid
 from typing import Awaitable, Callable
@@ -25,6 +27,8 @@ from src.observability.tracing import (
 
 log = structlog.get_logger()
 
+_W3C_TRACE_ID = re.compile(r"^[0-9a-f]{32}$")
+
 
 def resolve_request_id(request: Request) -> str:
     """Honor ``X-Request-Id`` / ``X-Request-ID``, else generate a UUID4."""
@@ -34,16 +38,26 @@ def resolve_request_id(request: Request) -> str:
     return str(uuid.uuid4())
 
 
+def _w3c_trace_id_from_request_id(request_id: str) -> str:
+    """Return a 32-char hex trace-id. Hash when the request id is not already hex."""
+    stripped = request_id.replace("-", "").lower()
+    if _W3C_TRACE_ID.fullmatch(stripped):
+        return stripped
+    return hashlib.sha256(request_id.encode("utf-8")).hexdigest()[:32]
+
+
 def _apply_trace_headers(response: Response, request_id: str) -> None:
     trace_id, span_id, sampled = current_trace_ids()
-    if trace_id is None or span_id is None:
-        fallback = request_id.replace("-", "")[:32].ljust(32, "0")
-        trace_id = fallback
-        span_id = "0" * 16
-        sampled = False
-    flags = "01" if sampled else "00"
-    response.headers["traceparent"] = f"00-{trace_id}-{span_id}-{flags}"
-    response.headers["X-Trace-Id"] = trace_id
+    if trace_id is not None and span_id is not None and _W3C_TRACE_ID.fullmatch(trace_id):
+        flags = "01" if sampled else "00"
+        response.headers["traceparent"] = f"00-{trace_id}-{span_id}-{flags}"
+        response.headers["X-Trace-Id"] = trace_id
+        return
+    # No valid span: still correlate via X-Trace-Id. Only emit traceparent when
+    # we have a legal 32-hex id (UUID request ids, or a sha256 fallback).
+    fallback_id = _w3c_trace_id_from_request_id(request_id)
+    response.headers["X-Trace-Id"] = fallback_id
+    response.headers["traceparent"] = f"00-{fallback_id}-{'0' * 16}-00"
 
 
 class ObservabilityMiddleware(BaseHTTPMiddleware):
@@ -61,7 +75,7 @@ class ObservabilityMiddleware(BaseHTTPMiddleware):
         request.state.request_id = request_id
         bind_contextvars(request_id=request_id)
 
-        kind, query_endpoint = classify_http_path(request.url.path)
+        kind, query_endpoint = classify_http_path(request.method, request.url.path)
         tracer = get_tracer()
         parent = extract_parent_context(request.headers)
         started = time.perf_counter()

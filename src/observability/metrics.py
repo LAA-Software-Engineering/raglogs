@@ -15,6 +15,7 @@ _QUERY_ENDPOINTS: tuple[str, ...] = (
     "timeline",
     "compare",
     "similar",
+    "ingestions",
 )
 _INGEST_RESULTS: tuple[str, ...] = ("inserted", "deduped", "error")
 
@@ -62,7 +63,7 @@ LLM_FALLBACK = Counter(
 )
 LLM_ESTIMATED_TOKENS = Counter(
     "raglogs_llm_estimated_tokens_total",
-    "Estimated input tokens sent toward the LLM (chars/4).",
+    "Estimated LLM input tokens (UTF-8 chars/4 heuristic, not USD cost).",
     registry=REGISTRY,
 )
 LLM_BREAKER_STATE = Gauge(
@@ -70,11 +71,13 @@ LLM_BREAKER_STATE = Gauge(
     "LLM circuit breaker: 0=closed, 1=half_open, 2=open.",
     registry=REGISTRY,
 )
-WORKER_QUEUE_DEPTH = Gauge(
-    "raglogs_worker_queue_depth",
-    "Pending worker jobs. 0 when the database is unreachable.",
-    registry=REGISTRY,
+_QUEUE_GAUGE_NAME = "raglogs_worker_queue_depth"
+_QUEUE_GAUGE_HELP = (
+    "Pending worker jobs. Published after a successful scrape and left stale "
+    "if the database is unreachable (never set to 0 solely because DB is down)."
 )
+_queue_gauge: Gauge | None = None
+_QUEUE_STATEMENT_TIMEOUT_MS = 2000
 
 # Pre-register labeled series so /metrics always includes the names/labels
 # even before the first observation (Prometheus scrapes empty time series).
@@ -141,31 +144,63 @@ def _refresh_breaker_gauge() -> None:
     LLM_BREAKER_STATE.set(BREAKER_STATE_VALUES.get(state, 0.0))
 
 
+def _set_queue_depth(depth: int) -> None:
+    """Publish a successful queue-depth scrape (registers the gauge on first set)."""
+    global _queue_gauge
+    if _queue_gauge is None:
+        _queue_gauge = Gauge(_QUEUE_GAUGE_NAME, _QUEUE_GAUGE_HELP, registry=REGISTRY)
+    _queue_gauge.set(int(depth))
+
+
+def reset_queue_gauge() -> None:
+    """Drop the queue gauge so tests start from 'never scraped'."""
+    global _queue_gauge
+    if _queue_gauge is not None:
+        REGISTRY.unregister(_queue_gauge)
+        _queue_gauge = None
+
+
+def queue_gauge_value() -> float | None:
+    """Current published queue depth, or None if never successfully scraped."""
+    if _queue_gauge is None:
+        return None
+    for metric in REGISTRY.collect():
+        if metric.name != _QUEUE_GAUGE_NAME:
+            continue
+        for sample in metric.samples:
+            if sample.name == _QUEUE_GAUGE_NAME:
+                return float(sample.value)
+    return None
+
+
 def _refresh_queue_depth() -> None:
     from src.db.session import check_connection, get_db
 
     if not check_connection():
-        WORKER_QUEUE_DEPTH.set(0)
         return
     try:
-        from sqlalchemy import func, select
+        from sqlalchemy import func, select, text
 
         from src.db.models import WorkerJob
 
         with get_db() as db:
+            try:
+                db.execute(text(f"SET LOCAL statement_timeout = '{_QUEUE_STATEMENT_TIMEOUT_MS}'"))
+            except Exception:
+                pass
             depth = db.execute(
                 select(func.count()).select_from(WorkerJob).where(WorkerJob.status == "pending")
             ).scalar_one()
-        WORKER_QUEUE_DEPTH.set(int(depth or 0))
+        _set_queue_depth(int(depth or 0))
     except Exception:
-        WORKER_QUEUE_DEPTH.set(0)
+        return
 
 
-def classify_http_path(path: str) -> tuple[str, str | None]:
+def classify_http_path(method: str, path: str) -> tuple[str, str | None]:
     """Return ``(kind, query_endpoint)`` for HTTP latency recording.
 
-    ``kind`` is ``ingest``, ``query``, or ``other``. ``query_endpoint`` is the
-    operation name (explain, ask, …) when kind is query.
+    ``kind`` is ``ingest`` (POST writes only), ``query``, or ``other``.
+    GET ingest list/status is ``query`` so it does not pollute ingest p99.
     """
     import re
 
@@ -173,9 +208,12 @@ def classify_http_path(path: str) -> tuple[str, str | None]:
     if len(normalized) > 1 and normalized.endswith("/"):
         normalized = normalized.rstrip("/")
     normalized = re.sub(r"^/v\d+(?=/|$)", "", normalized) or "/"
+    verb = method.upper()
 
     if normalized == "/ingestions" or normalized.startswith("/ingestions/"):
-        return "ingest", None
+        if verb == "POST":
+            return "ingest", None
+        return "query", "ingestions"
     if normalized == "/query" or normalized.startswith("/query/"):
         rest = normalized[len("/query/") :] if normalized.startswith("/query/") else ""
         operation = rest.split("/")[0] if rest else "explain"

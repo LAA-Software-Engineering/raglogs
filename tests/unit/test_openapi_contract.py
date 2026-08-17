@@ -95,6 +95,8 @@ def test_metrics_is_unversioned() -> None:
     assert "/metrics" in paths
     assert "/v1/metrics" not in paths
     assert "get" in paths["/metrics"]
+    content = paths["/metrics"]["get"]["responses"]["200"]["content"]
+    assert "text/plain" in content
 
 
 def test_deprecation_helpers() -> None:
