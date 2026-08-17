@@ -681,6 +681,17 @@ class TestUIShell:
         assert "/v1/ingestions" in js.text
         assert 'fetch("/ingestions")' not in js.text
 
+    def test_window_forms_support_absolute_mode(self):
+        html = client.get("/").text
+        assert 'data-window-mode="relative"' in html
+        assert 'data-mode="absolute"' in html
+        assert 'type="datetime-local"' in html
+        assert 'name="from_time"' in html
+        assert 'name="window_a_from"' in html
+        js = client.get("/static/js/app.js").text
+        assert "function datetimeLocalToIso(" in js
+        assert "function applyWindowMode(" in js
+
 
 # ── POST /query/explain ───────────────────────────────────────────────────────
 
