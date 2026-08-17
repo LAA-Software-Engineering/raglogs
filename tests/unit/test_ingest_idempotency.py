@@ -102,7 +102,6 @@ class TestStoreIdempotencyKey:
 
 class TestCreateIngestionIdempotency:
     def test_same_key_returns_original_worker_job_id(self) -> None:
-        job_id = uuid.uuid4()
         stored: dict[str, IngestIdempotencyKey | None] = {"row": None}
         mock_db = _ctx_db()
 
@@ -117,13 +116,11 @@ class TestCreateIngestionIdempotency:
 
         def capture_add(obj: object) -> None:
             if isinstance(obj, WorkerJob):
-                obj.id = job_id
+                obj.id = uuid.uuid4()
             if isinstance(obj, IngestIdempotencyKey):
                 stored["row"] = obj
-                obj.worker_job_id = job_id
-                obj.mode = "batch"
-                obj.ingestion_job_id = None
-                obj.expires_at = datetime.now(tz=timezone.utc) + timedelta(hours=1)
+                if getattr(obj, "expires_at", None) is None:
+                    obj.expires_at = datetime.now(tz=timezone.utc) + timedelta(hours=1)
 
         mock_db.query.side_effect = query_side_effect
         mock_db.add.side_effect = capture_add
@@ -145,11 +142,9 @@ class TestCreateIngestionIdempotency:
 
         assert first.status_code == 202
         assert second.status_code == 202
-        assert first.json()["worker_job_id"] == str(job_id)
-        assert second.json()["worker_job_id"] == str(job_id)
+        assert first.json()["worker_job_id"] == second.json()["worker_job_id"]
 
     def test_same_key_on_unversioned_alias(self) -> None:
-        job_id = uuid.uuid4()
         stored: dict[str, IngestIdempotencyKey | None] = {"row": None}
         mock_db = _ctx_db()
 
@@ -164,12 +159,11 @@ class TestCreateIngestionIdempotency:
 
         def capture_add(obj: object) -> None:
             if isinstance(obj, WorkerJob):
-                obj.id = job_id
+                obj.id = uuid.uuid4()
             if isinstance(obj, IngestIdempotencyKey):
                 stored["row"] = obj
-                obj.worker_job_id = job_id
-                obj.mode = "batch"
-                obj.expires_at = datetime.now(tz=timezone.utc) + timedelta(hours=1)
+                if getattr(obj, "expires_at", None) is None:
+                    obj.expires_at = datetime.now(tz=timezone.utc) + timedelta(hours=1)
 
         mock_db.query.side_effect = query_side_effect
         mock_db.add.side_effect = capture_add
@@ -189,11 +183,9 @@ class TestCreateIngestionIdempotency:
                 headers={"Idempotency-Key": "alias-1"},
             )
 
-        assert (
-            first.json()["worker_job_id"]
-            == second.json()["worker_job_id"]
-            == str(job_id)
-        )
+        assert first.status_code == 202
+        assert second.status_code == 202
+        assert first.json()["worker_job_id"] == second.json()["worker_job_id"]
 
     def test_different_keys_create_two_jobs(self) -> None:
         ids: list[uuid.UUID] = []

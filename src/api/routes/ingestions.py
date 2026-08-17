@@ -238,10 +238,11 @@ def _ingest_payload(
         "with_embeddings": request.with_embeddings,
         "mode": request.mode,
     }
+    if callback_meta:
+        # scope / api_key_id belong on every ingest, not only webhook deliveries.
+        payload.update(callback_meta)
     if request.callback_url:
         payload["callback_url"] = request.callback_url
-        if callback_meta:
-            payload.update(callback_meta)
     return payload
 
 

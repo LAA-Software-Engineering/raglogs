@@ -99,6 +99,11 @@ def test_upsert_statement_compiles_on_conflict_do_nothing() -> None:
     assert "SCOPE" in compiled
     assert "SOURCE_REF" in compiled
     assert "ORIGINAL_LINE_HASH" in compiled
+    assert "TIMESTAMP" in compiled
+    assert "WHERE" in compiled
+    assert "ORIGINAL_LINE_HASH IS NOT NULL" in compiled
+    assert "TIMESTAMP IS NOT NULL" in compiled
+    assert "SOURCE_REF IS NOT NULL" in compiled
 
 
 def test_flush_log_batch_executes_on_conflict_insert() -> None:

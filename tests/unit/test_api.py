@@ -389,6 +389,7 @@ class TestCreateIngestion:
 
         assert resp.status_code == 202
         assert "callback_url" not in added[0].payload_json
+        assert added[0].payload_json["scope"] == "default"
 
     def test_422_on_file_callback_url(self):
         with patch("src.adapters.file.adapter.discover_files", return_value=["f.log"]):
@@ -444,6 +445,45 @@ class TestCreateIngestion:
         assert resp.status_code == 202
         assert added[0].payload_json["api_key_id"] == str(key_id)
         assert added[0].payload_json["scope"] == "incident:INC-9"
+
+    def test_scope_on_payload_without_callback_url(self):
+        from src.config.settings import Settings
+
+        key_id = uuid.uuid4()
+        record = MagicMock()
+        record.id = key_id
+        record.name = "ingest"
+        record.key_prefix = "rlk_testhash"
+        record.role = "ingest"
+        record.scope = "incident:A"
+        record.revoked_at = None
+
+        mock_db = _ctx_db()
+        added = []
+
+        def capture_add(obj):
+            added.append(obj)
+            obj.id = uuid.uuid4()
+
+        mock_db.add.side_effect = capture_add
+        settings = Settings(_env_file=None, auth_enabled=True, auth_mode="api_key")
+
+        with patch("src.config.get_settings", return_value=settings), \
+             patch("src.api.auth.keys.lookup_api_key", return_value=record), \
+             patch("src.adapters.file.adapter.discover_files", return_value=["f.log"]), \
+             patch("src.db.session.get_db", side_effect=lambda: mock_db):
+            resp = client.post(
+                "/v1/ingestions",
+                json={"paths": ["/logs"]},
+                headers={"Authorization": "Bearer rlk_ingestrole1"},
+            )
+
+        assert resp.status_code == 202
+        jobs = [obj for obj in added if hasattr(obj, "payload_json")]
+        assert jobs, "expected a WorkerJob to be enqueued"
+        assert "callback_url" not in jobs[0].payload_json
+        assert jobs[0].payload_json["scope"] == "incident:A"
+        assert jobs[0].payload_json["api_key_id"] == str(key_id)
 
 
 # ── GET /ingestions/jobs/{id} ─────────────────────────────────────────────────
