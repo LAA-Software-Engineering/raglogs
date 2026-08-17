@@ -396,10 +396,10 @@ def test_timeline_meta_singular_count_and_skips_duplicate_label() -> None:
             "duration_minutes": None,
         }
     )
-    assert "1 event" in meta
-    assert "events" not in meta
-    assert "deployment-controller" in meta
-    assert meta.count("deploy") == 0
+        assert "1 event" in meta
+        assert "events" not in meta
+        assert "deployment-controller" in meta
+        assert "deploy" not in [part.strip() for part in meta.split("·")]
 
 
 def test_timeline_event_html_shows_description_and_meta() -> None:
