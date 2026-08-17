@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from src.api.auth.middleware import AuthMiddleware
 from src.api.auth.scope import ScopeResolutionError, scope_error_response
 from src.api.deprecation import DeprecationHeaderMiddleware
+from src.api.ratelimit import RateLimitMiddleware
 from src.api.routes import ask, clusters, compare_windows, config, explain, health, ingestions, timeline, ui
 
 _OPENAPI_DESCRIPTION = """Incident explanation API — ask your logs what happened.
@@ -60,7 +61,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Last added middleware is outermost: deprecation headers apply even to auth errors.
+# Last added middleware is outermost: deprecation headers apply even to auth
+# errors. Rate limiting sits inside auth so request.state.auth_principal is set.
+app.add_middleware(RateLimitMiddleware)
 app.add_middleware(AuthMiddleware)
 app.add_middleware(DeprecationHeaderMiddleware)
 

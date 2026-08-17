@@ -249,7 +249,11 @@ def answer_question(
     scope: str = DEFAULT_LOG_SCOPE,
 ) -> AskResult:
     from src.config import get_settings
-    from src.core.llm.provider import NoopLLMProvider, build_llm_provider
+    from src.core.llm.provider import (
+        NoopLLMProvider,
+        build_llm_provider,
+        unwrap_llm_provider,
+    )
     from src.utils.time import resolve_window
 
     settings = get_settings()
@@ -313,7 +317,7 @@ def answer_question(
     answer_text = ""
 
     llm = build_llm_provider(settings)
-    if not isinstance(llm, NoopLLMProvider):
+    if not isinstance(unwrap_llm_provider(llm), NoopLLMProvider):
         try:
             answer_text = _call_llm_ask(llm, question, evidence_packet)
             if answer_text:
@@ -393,53 +397,62 @@ def _retrieve_matching_logs(
     return matching, "fallback"
 
 
-def _call_llm_ask(llm, question: str, evidence_packet: dict) -> str:
+def _call_llm_ask(llm: object, question: str, evidence_packet: dict) -> str:
     """
     Call the LLM provider with the ask-specific system prompt.
     Constructs the HTTP call directly rather than reusing generate_summary,
-    which uses the incident-summary system prompt.
+    which uses the incident-summary system prompt. Shares the G9 LLM
+    concurrency semaphore with generate_summary.
     """
     import json
     import httpx
-    from src.core.llm.provider import OpenAILLMProvider, OllamaLLMProvider
+    from src.core.llm.provider import (
+        NoopLLMProvider,
+        OpenAILLMProvider,
+        OllamaLLMProvider,
+        llm_concurrency_slot,
+        unwrap_llm_provider,
+    )
 
+    inner = unwrap_llm_provider(llm)
     payload_str = json.dumps(evidence_packet, default=str, indent=2)
     user_message = f"Question: {question}\n\nLog evidence:\n{payload_str}"
 
-    if isinstance(llm, OpenAILLMProvider):
-        with httpx.Client(timeout=60) as client:
-            resp = client.post(
-                f"{llm.base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {llm.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": llm.model,
-                    "max_tokens": 400,
-                    "temperature": 0,
-                    "messages": [
-                        {"role": "system", "content": ASK_SYSTEM_PROMPT},
-                        {"role": "user", "content": user_message},
-                    ],
-                },
-            )
-            resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"].strip()
+    with llm_concurrency_slot(skip=isinstance(inner, NoopLLMProvider)):
+        if isinstance(inner, OpenAILLMProvider):
+            with httpx.Client(timeout=60) as client:
+                resp = client.post(
+                    f"{inner.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {inner.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": inner.model,
+                        "max_tokens": 400,
+                        "temperature": 0,
+                        "messages": [
+                            {"role": "system", "content": ASK_SYSTEM_PROMPT},
+                            {"role": "user", "content": user_message},
+                        ],
+                    },
+                )
+                resp.raise_for_status()
+                return resp.json()["choices"][0]["message"]["content"].strip()
 
-    elif isinstance(llm, OllamaLLMProvider):
-        prompt = f"{ASK_SYSTEM_PROMPT}\n\n{user_message}\n\nAnswer:"
-        with httpx.Client(timeout=120) as client:
-            resp = client.post(
-                f"{llm.base_url}/api/generate",
-                json={
-                    "model": llm.model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": {"temperature": 0},
-                },
-            )
-            resp.raise_for_status()
-            return resp.json().get("response", "").strip()
+        if isinstance(inner, OllamaLLMProvider):
+            prompt = f"{ASK_SYSTEM_PROMPT}\n\n{user_message}\n\nAnswer:"
+            with httpx.Client(timeout=120) as client:
+                resp = client.post(
+                    f"{inner.base_url}/api/generate",
+                    json={
+                        "model": inner.model,
+                        "prompt": prompt,
+                        "stream": False,
+                        "options": {"temperature": 0},
+                    },
+                )
+                resp.raise_for_status()
+                return resp.json().get("response", "").strip()
 
     return ""

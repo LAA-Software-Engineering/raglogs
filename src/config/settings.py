@@ -50,12 +50,27 @@ class Settings(BaseSettings):
     # Worker
     worker_poll_interval: int = 2  # seconds between idle polls
 
-    # Ingest backpressure (minimal G9 stand-in) and push/tail (G4)
+    # Ingest backpressure (G9) and push/tail (G4). Tail ticks skip when the
+    # pending worker queue is at ingest_queue_max.
     ingest_queue_max: int = 100
     ingest_retry_after_seconds: int = 5
     ingest_push_max_lines: int = 5000
     tail_poll_interval: int = 30
     tail_error_threshold: int = 5
+
+    # API token-bucket rate limiting (G9). In-memory per process — not shared
+    # across workers. Defaults are high so local demo and TestClient suites
+    # are not 429'd. 0 rps = unlimited for that category. Identity is
+    # auth_principal.key_id, else "anonymous" when AUTH_ENABLED=false.
+    ratelimit_enabled: bool = True
+    ratelimit_ingest_rps: float = 100.0
+    ratelimit_query_rps: float = 100.0
+    ratelimit_burst: float = 100.0
+    ratelimit_retry_after_seconds: int = 1
+
+    # Process-wide cap on in-flight LLM provider calls (G9). Independent of
+    # API concurrency. 0 = unlimited. Noop provider skips the wait.
+    llm_max_concurrency: int = 4
 
     # HMAC-signed ingest completion webhooks (G5). WEBHOOK_SECRET is the
     # fallback when AUTH_ENABLED=false or the API key has no per-key secret.

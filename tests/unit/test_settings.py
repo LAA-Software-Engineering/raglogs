@@ -131,3 +131,34 @@ def test_ingest_idempotency_ttl_from_env(monkeypatch):
     monkeypatch.setenv("INGEST_IDEMPOTENCY_TTL_SECONDS", "60")
     settings = Settings(_env_file=None)
     assert settings.ingest_idempotency_ttl_seconds == 60
+
+
+def test_ratelimit_and_llm_concurrency_defaults():
+    settings = Settings(_env_file=None)
+    assert settings.ratelimit_enabled is True
+    assert settings.ratelimit_ingest_rps == 100.0
+    assert settings.ratelimit_query_rps == 100.0
+    assert settings.ratelimit_burst == 100.0
+    assert settings.ratelimit_retry_after_seconds == 1
+    assert settings.llm_max_concurrency == 4
+    assert settings.ingest_queue_max == 100
+
+
+def test_ratelimit_and_llm_concurrency_from_env(monkeypatch):
+    monkeypatch.setenv("RATELIMIT_ENABLED", "false")
+    monkeypatch.setenv("RATELIMIT_INGEST_RPS", "2")
+    monkeypatch.setenv("RATELIMIT_QUERY_RPS", "3")
+    monkeypatch.setenv("RATELIMIT_BURST", "5")
+    monkeypatch.setenv("RATELIMIT_RETRY_AFTER_SECONDS", "9")
+    monkeypatch.setenv("LLM_MAX_CONCURRENCY", "1")
+    monkeypatch.setenv("INGEST_QUEUE_MAX", "7")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.ratelimit_enabled is False
+    assert settings.ratelimit_ingest_rps == 2.0
+    assert settings.ratelimit_query_rps == 3.0
+    assert settings.ratelimit_burst == 5.0
+    assert settings.ratelimit_retry_after_seconds == 9
+    assert settings.llm_max_concurrency == 1
+    assert settings.ingest_queue_max == 7

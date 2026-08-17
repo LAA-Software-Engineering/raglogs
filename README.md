@@ -688,6 +688,14 @@ All settings are read from `.env`, environment variables, or CLI flags. Priority
 | `OIDC_JWKS_URL` | _(empty)_ | Optional JWKS URL; default is `{issuer}/.well-known/openid-configuration` then `{issuer}/.well-known/jwks.json` |
 | `API_BIND_HOST` | `127.0.0.1` | Host the startup guard treats as the bind address. `make api` sets this to `0.0.0.0` to match uvicorn |
 | `AUTH_REFUSE_INSECURE_BIND` | `false` | If `true`, refuse to start when auth is off and the bind host is not loopback; if `false`, log a warning only |
+| `RATELIMIT_ENABLED` | `true` | Token-bucket rate limiting on ingest writes and query routes. In-memory per process (not shared across workers) |
+| `RATELIMIT_INGEST_RPS` | `100` | Steady-state tokens/sec for `POST /v1/ingestions*`. `0` = unlimited |
+| `RATELIMIT_QUERY_RPS` | `100` | Steady-state tokens/sec for `/v1/query*`. `0` = unlimited |
+| `RATELIMIT_BURST` | `100` | Bucket size (max tokens) per API key (or `anonymous` when auth is off) |
+| `RATELIMIT_RETRY_AFTER_SECONDS` | `1` | `Retry-After` value on `429 RATE_LIMITED` |
+| `INGEST_QUEUE_MAX` | `100` | Pending worker-job ceiling; over this, ingest returns `429 INGEST_QUEUE_FULL` |
+| `INGEST_RETRY_AFTER_SECONDS` | `5` | `Retry-After` value on `429 INGEST_QUEUE_FULL` |
+| `LLM_MAX_CONCURRENCY` | `4` | Max in-flight LLM provider calls process-wide. `0` = unlimited. Noop does not wait |
 | `WEBHOOK_SECRET` | _(empty)_ | Fallback HMAC secret for ingest completion callbacks when auth is off or the API key has no per-key `whsec_` |
 | `WEBHOOK_MAX_RETRIES` | `5` | Extra webhook POST attempts after the first (6 POSTs by default) on 5xx / 429 / connect errors |
 | `WEBHOOK_TIMEOUT` | `10` | Per-attempt HTTP timeout in seconds for completion callbacks |
@@ -699,7 +707,7 @@ All settings are read from `.env`, environment variables, or CLI flags. Priority
 
 raglogs is fully useful without any LLM. The `--no-llm` flag (or `LLM_PROVIDER=disabled`) activates deterministic template-based summaries.
 
-When an LLM is configured, it receives only a small curated evidence packet — not raw logs. The prompt enforces fixed output structure, prohibits fabrication, and requires explicit uncertainty statements when evidence is insufficient.
+When an LLM is configured, it receives only a small curated evidence packet — not raw logs. The prompt enforces fixed output structure, prohibits fabrication, and requires explicit uncertainty statements when evidence is insufficient. In-flight provider calls are capped by `LLM_MAX_CONCURRENCY` (CLI and API share the process semaphore; the noop provider does not block).
 
 ### OpenAI
 
@@ -1001,7 +1009,12 @@ curl -X POST http://localhost:8000/v1/ingestions/$ID:stop
 
 `stop` is terminal. After `TAIL_ERROR_THRESHOLD` consecutive poll failures (default 5) a tail job auto-pauses; `/health` reports `tail_jobs.running` and `tail_jobs.paused`.
 
-**Backpressure.** When pending worker jobs ≥ `INGEST_QUEUE_MAX` (default 100), `POST /v1/ingestions` and `POST /v1/ingestions/lines` return **429** with `Retry-After` (`INGEST_RETRY_AFTER_SECONDS`, default 5) and body `{"error_code":"INGEST_QUEUE_FULL","message":"..."}`. This is a queue-depth stand-in, not full API/LLM rate limiting.
+**Backpressure and rate limiting.** Two independent 429s:
+
+- **Queue depth.** When pending worker jobs ≥ `INGEST_QUEUE_MAX` (default 100), `POST /v1/ingestions` and `POST /v1/ingestions/lines` return **429** with `Retry-After` (`INGEST_RETRY_AFTER_SECONDS`, default 5) and body `{"error_code":"INGEST_QUEUE_FULL","message":"..."}`. Tail ticks skip the same ceiling.
+- **API token bucket.** `POST /v1/ingestions*` (writes) and `/v1/query*` (plus unversioned aliases) are limited per API key (`request.state.auth_principal.key_id`, or a single `anonymous` bucket when `AUTH_ENABLED=false`). Exceeding the bucket returns **429** with `Retry-After` (`RATELIMIT_RETRY_AFTER_SECONDS`, default 1) and body `{"error_code":"RATE_LIMITED","message":"..."}`. Defaults (`RATELIMIT_INGEST_RPS` / `RATELIMIT_QUERY_RPS` / `RATELIMIT_BURST` = 100) are high enough for local demo and tests; `0` rps means unlimited for that category. `/health`, `/docs`, static UI, and `/config` are not limited. Buckets are in-memory per process.
+
+LLM calls are separately capped by `LLM_MAX_CONCURRENCY` (default 4) so a burst of `explain` cannot fan out unbounded provider requests.
 
 **Idempotency-Key.** `POST /v1/ingestions` (batch enqueue and tail create; also the deprecated `/ingestions` alias) honors an `Idempotency-Key` header (max 256 characters). A repeat **in the same isolation scope** within `INGEST_IDEMPOTENCY_TTL_SECONDS` (default 86400) returns the original **202** job — the same `worker_job_id` for batch, the same `ingestion_job_id` for tail — instead of starting a new one. Reusing another scope's key returns **409** `IDEMPOTENCY_SCOPE_CONFLICT`. Empty keys return **400**. GET routes ignore the header. `POST /v1/ingestions/lines` does not use the header; duplicate push/tail lines are handled by content dedup instead.
 

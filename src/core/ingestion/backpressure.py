@@ -1,4 +1,9 @@
-"""Ingest worker-queue backpressure (minimal G9 stand-in)."""
+"""Ingest worker-queue backpressure (G9).
+
+When pending WorkerJobs >= INGEST_QUEUE_MAX, POST /ingestions and
+POST /ingestions/lines return 429 INGEST_QUEUE_FULL. Tail ticks skip
+the same ceiling. Distinct from API RATE_LIMITED (token bucket).
+"""
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session

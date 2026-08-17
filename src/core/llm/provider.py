@@ -1,5 +1,8 @@
 import json
-from typing import Optional, Protocol, runtime_checkable
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import Any, Protocol, runtime_checkable
 
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -103,8 +106,73 @@ class OllamaLLMProvider:
             return data.get("response", "").strip()
 
 
-def build_llm_provider(settings) -> LLMProvider:
-    """Factory: build the configured LLM provider."""
+_llm_sem_lock = threading.Lock()
+_llm_semaphore: threading.Semaphore | None = None
+_llm_semaphore_n: int | None = None
+
+
+def reset_llm_concurrency_limiter() -> None:
+    """Drop the process semaphore so tests can change LLM_MAX_CONCURRENCY."""
+    global _llm_semaphore, _llm_semaphore_n
+    with _llm_sem_lock:
+        _llm_semaphore = None
+        _llm_semaphore_n = None
+
+
+def _semaphore_for(n: int) -> threading.Semaphore:
+    global _llm_semaphore, _llm_semaphore_n
+    with _llm_sem_lock:
+        if _llm_semaphore is None or _llm_semaphore_n != n:
+            _llm_semaphore = threading.Semaphore(n)
+            _llm_semaphore_n = n
+        return _llm_semaphore
+
+
+@contextmanager
+def llm_concurrency_slot(*, skip: bool = False) -> Iterator[None]:
+    """Acquire the global LLM in-flight cap, or skip (noop / unlimited)."""
+    if skip:
+        yield
+        return
+    from src.config import get_settings
+
+    n = int(get_settings().llm_max_concurrency)
+    if n <= 0:
+        yield
+        return
+    sem = _semaphore_for(n)
+    sem.acquire()
+    try:
+        yield
+    finally:
+        sem.release()
+
+
+class CappedLLMProvider:
+    """Wrap an inner provider with the process-wide concurrency semaphore.
+
+    Noop inner providers skip the wait so deterministic mode never blocks,
+    but still go through this entrypoint (CLI and API share the semaphore).
+    """
+
+    def __init__(self, inner: LLMProvider) -> None:
+        self.inner = inner
+
+    def generate_summary(self, evidence_packet: dict) -> str:
+        skip = isinstance(self.inner, NoopLLMProvider)
+        with llm_concurrency_slot(skip=skip):
+            return self.inner.generate_summary(evidence_packet)
+
+
+def unwrap_llm_provider(provider: LLMProvider) -> LLMProvider:
+    """Return the inner provider if ``provider`` is concurrency-capped."""
+    inner: LLMProvider = provider
+    while isinstance(inner, CappedLLMProvider):
+        inner = inner.inner
+    return inner
+
+
+def _build_inner_llm_provider(settings: Any) -> LLMProvider:
     if settings.llm_provider == "openai":
         if not settings.openai_api_key:
             return NoopLLMProvider()
@@ -113,9 +181,14 @@ def build_llm_provider(settings) -> LLMProvider:
             model=settings.llm_model,
             base_url=settings.openai_base_url,
         )
-    elif settings.llm_provider == "ollama":
+    if settings.llm_provider == "ollama":
         return OllamaLLMProvider(
             model=settings.llm_model,
             base_url=settings.ollama_base_url,
         )
     return NoopLLMProvider()
+
+
+def build_llm_provider(settings: Any) -> LLMProvider:
+    """Factory: build the configured LLM provider (concurrency-capped)."""
+    return CappedLLMProvider(_build_inner_llm_provider(settings))
