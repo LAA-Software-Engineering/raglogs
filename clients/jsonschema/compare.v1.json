@@ -1,0 +1,239 @@
+{
+  "$defs": {
+    "ClusterDiffModel": {
+      "properties": {
+        "fingerprint": {
+          "title": "Fingerprint",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "services": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Services",
+          "type": "array"
+        },
+        "count_a": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Count A"
+        },
+        "count_b": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Count B"
+        },
+        "marker": {
+          "title": "Marker",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fingerprint",
+        "message",
+        "marker"
+      ],
+      "title": "ClusterDiffModel",
+      "type": "object"
+    },
+    "LlmProvenance": {
+      "properties": {
+        "used": {
+          "title": "Used",
+          "type": "boolean"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "fell_back": {
+          "title": "Fell Back",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "used",
+        "provider",
+        "model",
+        "fell_back"
+      ],
+      "title": "LlmProvenance",
+      "type": "object"
+    },
+    "TimeWindow": {
+      "description": "Inclusive analysis window. Serialized as ``from`` / ``to`` (ISO-8601).",
+      "properties": {
+        "from": {
+          "title": "From",
+          "type": "string"
+        },
+        "to": {
+          "title": "To",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "title": "TimeWindow",
+      "type": "object"
+    },
+    "TriggerDiffModel": {
+      "properties": {
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service"
+        },
+        "only_in": {
+          "title": "Only In",
+          "type": "string"
+        },
+        "marker": {
+          "title": "Marker",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "only_in",
+        "marker"
+      ],
+      "title": "TriggerDiffModel",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "schema_version": {
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "scope": {
+      "default": "default",
+      "title": "Scope",
+      "type": "string"
+    },
+    "window_a": {
+      "$ref": "#/$defs/TimeWindow"
+    },
+    "window_b": {
+      "$ref": "#/$defs/TimeWindow"
+    },
+    "has_changes": {
+      "title": "Has Changes",
+      "type": "boolean"
+    },
+    "new_clusters": {
+      "items": {
+        "$ref": "#/$defs/ClusterDiffModel"
+      },
+      "title": "New Clusters",
+      "type": "array"
+    },
+    "disappeared_clusters": {
+      "items": {
+        "$ref": "#/$defs/ClusterDiffModel"
+      },
+      "title": "Disappeared Clusters",
+      "type": "array"
+    },
+    "increased_clusters": {
+      "items": {
+        "$ref": "#/$defs/ClusterDiffModel"
+      },
+      "title": "Increased Clusters",
+      "type": "array"
+    },
+    "decreased_clusters": {
+      "items": {
+        "$ref": "#/$defs/ClusterDiffModel"
+      },
+      "title": "Decreased Clusters",
+      "type": "array"
+    },
+    "new_triggers": {
+      "items": {
+        "$ref": "#/$defs/TriggerDiffModel"
+      },
+      "title": "New Triggers",
+      "type": "array"
+    },
+    "dropped_triggers": {
+      "items": {
+        "$ref": "#/$defs/TriggerDiffModel"
+      },
+      "title": "Dropped Triggers",
+      "type": "array"
+    },
+    "llm": {
+      "$ref": "#/$defs/LlmProvenance"
+    },
+    "rendered_text": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Rendered Text"
+    },
+    "text": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Text"
+    }
+  },
+  "required": [
+    "window_a",
+    "window_b",
+    "has_changes",
+    "llm"
+  ],
+  "title": "CompareResponse",
+  "type": "object"
+}

@@ -2,7 +2,7 @@
         db-up db-down docker-up docker-down docker-demo docker-logs \
         init migrate demo ingest explain clusters ask \
         api web web-serve worker test test-unit test-int test-cov lint format \
-        openapi client-go client-python clean
+        openapi jsonschema client-go client-python clean
 
 PYTHON  := python
 PIP     := pip
@@ -41,6 +41,7 @@ help:
 	@echo "  make lint            Ruff lint"
 	@echo "  make format          Ruff format"
 	@echo "  make openapi         Export OpenAPI schema to clients/openapi.json"
+	@echo "  make jsonschema      Export /v1/query JSON Schemas to clients/jsonschema/"
 	@echo "  make client-go       Generate Go client (oapi-codegen; no-op if missing)"
 	@echo "  make client-python   Optional OpenAPI Python generator, or use src/clients/v1.py"
 	@echo "  make clean           Remove build artifacts"
@@ -155,6 +156,9 @@ format:
 
 openapi:
 	PYTHONPATH=. $(PYTHON) scripts/export_openapi.py
+
+jsonschema:
+	PYTHONPATH=. $(PYTHON) scripts/export_jsonschema.py
 
 # Generates clients/go/client.go when oapi-codegen is installed.
 # Missing binary: print install hint and exit 0 so CI without Go still passes.

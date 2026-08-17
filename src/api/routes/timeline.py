@@ -5,9 +5,17 @@ import uuid
 from datetime import datetime
 from typing import Literal, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from src.api.schemas.v1 import (
+    SCHEMA_VERSION,
+    TimelineEventModel,
+    TimelineResponse,
+    llm_rules_only,
+    scope_from_request,
+    window_from_bounds,
+)
 from src.core.timeline.plain_text import format_timeline_plain
 
 router = APIRouter()
@@ -24,23 +32,28 @@ class TimelineRequest(BaseModel):
     format: Literal["json", "text"] = "json"
 
 
-def _events_to_json(events) -> list[dict]:
+def _events_to_models(events) -> list[TimelineEventModel]:
     return [
-        {
-            "timestamp": e.timestamp.isoformat(),
-            "category": e.category,
-            "label": e.label,
-            "description": e.description,
-            "count": e.count,
-            "services": e.services,
-            "duration_minutes": e.duration_minutes,
-        }
+        TimelineEventModel(
+            timestamp=e.timestamp.isoformat(),
+            category=e.category,
+            label=e.label,
+            description=e.description,
+            count=e.count,
+            services=e.services,
+            duration_minutes=e.duration_minutes,
+        )
         for e in events
     ]
 
 
-@router.post("/timeline")
-def timeline_endpoint(request: TimelineRequest):
+@router.post(
+    "/timeline",
+    response_model=TimelineResponse,
+    response_model_exclude_unset=True,
+    response_model_by_alias=True,
+)
+def timeline_endpoint(request: TimelineRequest, http_request: Request) -> TimelineResponse:
     from src.core.clustering.clusterer import run_clustering
     from src.core.explain.evidence import assemble_evidence
     from src.core.explain.summarizer import get_latest_ingestion_job_id
@@ -97,17 +110,16 @@ def timeline_endpoint(request: TimelineRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    payload: dict = {
-        "window": {
-            "start": window_start.isoformat(),
-            "end": window_end.isoformat(),
-        },
-        "ingestion_job_id": request.ingestion_job_id,
-        "all_ingestions": request.all_ingestions,
-        "events": _events_to_json(events),
-    }
-
+    body = TimelineResponse(
+        schema_version=SCHEMA_VERSION,
+        scope=scope_from_request(http_request),
+        window=window_from_bounds(window_start, window_end),
+        events=_events_to_models(events),
+        llm=llm_rules_only(),
+        ingestion_job_id=request.ingestion_job_id,
+        all_ingestions=request.all_ingestions,
+    )
     if request.format == "text":
-        payload["text"] = format_timeline_plain(events, window_start, window_end)
-
-    return payload
+        rendered = format_timeline_plain(events, window_start, window_end)
+        body = body.model_copy(update={"rendered_text": rendered, "text": rendered})
+    return body

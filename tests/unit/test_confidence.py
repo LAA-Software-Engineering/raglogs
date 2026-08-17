@@ -10,7 +10,11 @@ import pytest
 from datetime import datetime, timezone, timedelta
 
 from src.core.clustering.clusterer import ClusterData
-from src.core.explain.confidence import compute_confidence
+from src.core.explain.confidence import (
+    compute_confidence,
+    compute_confidence_score,
+    score_from_label,
+)
 from src.core.explain.evidence import EvidencePacket, TriggerCandidate
 
 
@@ -198,3 +202,21 @@ class TestReturnValues:
         ]
         for p in cases:
             assert compute_confidence(p) in self.VALID
+
+
+class TestScoreFromLabel:
+    def test_design_example_medium_high(self):
+        assert score_from_label("medium-high") == 0.72
+
+    def test_unknown_label_is_zero(self):
+        assert score_from_label("mystery") == 0.0
+
+    def test_no_primary_score_is_zero(self):
+        assert compute_confidence_score(_packet(primary=None)) == 0.0
+
+    def test_score_matches_label_table(self):
+        p = _packet(primary=_cluster(count=100), secondary=[_cluster()],
+                    services=["api", "worker"], triggers=[_trigger()])
+        assert compute_confidence(p) == "high"
+        assert compute_confidence_score(p) == 0.90
+

@@ -673,10 +673,19 @@ class TestExplainEndpoint:
 
         assert resp.status_code == 200
         data = resp.json()
+        assert data["schema_version"] == "1.0"
         assert "summary" in data
-        assert data["confidence"] == "high"
+        assert data["confidence"]["label"] == "high"
+        assert data["confidence"]["score"] == 0.9
+        assert data["trigger"]["detected"] is False
+        assert data["llm"]["used"] is False
+        assert data["llm"]["fell_back"] is False
+        assert set(data["llm"]) >= {"used", "provider", "model", "fell_back"}
         assert data["cached"] is False
         assert "markdown" not in data
+        assert "from" in data["window"]
+        assert "to" in data["window"]
+        assert data["rendered_text"]
 
     def test_format_markdown_includes_rendered_field(self):
         mock_db = _ctx_db()
@@ -716,6 +725,9 @@ class TestExplainEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert data["cached"] is True
+        assert data["schema_version"] == "1.0"
+        assert data["confidence"]["label"] == "high"
+        assert data["llm"]["used"] is False
         assert "markdown" not in data
 
     def test_cache_hit_markdown_is_derived_not_stored(self):
@@ -783,6 +795,69 @@ class TestExplainEndpoint:
         resp = client.post("/query/explain", json={})
         assert resp.status_code == 400
 
+    def test_no_llm_sets_used_and_fell_back_false(self):
+        mock_db = _ctx_db()
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db), \
+             patch("src.core.explain.summarizer.explain_window", return_value=self._mock_result()), \
+             patch("src.api.routes.explain._load_from_cache", return_value=None), \
+             patch("src.api.routes.explain._save_to_cache"):
+            resp = client.post("/v1/query/explain", json={"since": "1h", "no_llm": True})
+
+        assert resp.status_code == 200
+        llm = resp.json()["llm"]
+        assert llm["used"] is False
+        assert llm["fell_back"] is False
+
+    def test_llm_fell_back_when_provider_configured_but_rules_used(self):
+        from src.config.settings import Settings
+
+        settings = Settings(_env_file=None, llm_provider="openai", openai_api_key="sk-test")
+        mock_db = _ctx_db()
+        with patch("src.config.get_settings", return_value=settings), \
+             patch("src.db.session.get_db", side_effect=lambda: mock_db), \
+             patch("src.core.explain.summarizer.explain_window", return_value=self._mock_result()), \
+             patch("src.api.routes.explain._load_from_cache", return_value=None), \
+             patch("src.api.routes.explain._save_to_cache"):
+            resp = client.post("/v1/query/explain", json={"since": "1h"})
+
+        assert resp.status_code == 200
+        llm = resp.json()["llm"]
+        assert llm["used"] is False
+        assert llm["fell_back"] is True
+        assert llm["provider"] == "openai"
+
+    def test_trigger_detected_from_candidate(self):
+        result = self._mock_result()
+        result.trigger_candidates = [
+            {
+                "message": "Deploy completed for billing-worker version v2.4.1",
+                "timestamp": "2026-03-12T13:05:00+00:00",
+                "service": "deployment-controller",
+            }
+        ]
+        result.primary_cluster = {
+            "message": "connection refused",
+            "fingerprint": "abc",
+            "count": 10,
+            "services": ["api"],
+            "first_seen": "2026-03-12T13:10:00+00:00",
+            "last_seen": "2026-03-12T13:50:00+00:00",
+        }
+        mock_db = _ctx_db()
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db), \
+             patch("src.core.explain.summarizer.explain_window", return_value=result), \
+             patch("src.api.routes.explain._load_from_cache", return_value=None), \
+             patch("src.api.routes.explain._save_to_cache"):
+            resp = client.post("/v1/query/explain", json={"since": "1h", "no_llm": True})
+
+        assert resp.status_code == 200
+        trigger = resp.json()["trigger"]
+        assert trigger["detected"] is True
+        assert trigger["type"] == "deploy"
+        assert trigger["service"] == "deployment-controller"
+        assert trigger["correlation"] == "precedes_primary_spike"
+        assert resp.json()["primary_cluster"]["template"] == "connection refused"
+
 
 # ── POST /query/ask ────────────────────────────────────────────────────────────
 
@@ -809,6 +884,10 @@ class TestAskEndpoint:
         assert data["answer"] == "Stripe signature verification failed for /webhooks/stripe."
         assert data["total_matches"] == 184
         assert data["retrieval_mode"] == "keyword"
+        assert data["schema_version"] == "1.0"
+        assert set(data["llm"]) >= {"used", "provider", "model", "fell_back"}
+        assert data["llm"]["used"] is False
+        assert data["llm"]["fell_back"] is False
 
     def test_ingestion_job_id_passed_through(self):
         """
@@ -856,6 +935,8 @@ class TestClustersEndpoint:
 
         assert resp.status_code == 200
         assert "clusters" in resp.json()
+        assert resp.json()["schema_version"] == "1.0"
+        assert set(resp.json()["llm"]) >= {"used", "provider", "model", "fell_back"}
 
     def test_invalid_ingestion_job_id_returns_400(self):
         resp = client.post("/query/clusters", json={
@@ -895,6 +976,11 @@ class TestTimelineEndpoint:
         assert len(data["events"]) == 1
         assert data["events"][0]["category"] == "deploy"
         assert data["events"][0]["label"] == "deploy"
+        assert data["schema_version"] == "1.0"
+        assert data["llm"]["used"] is False
+        assert data["llm"]["fell_back"] is False
+        assert set(data["llm"]) >= {"used", "provider", "model", "fell_back"}
+        assert "from" in data["window"]
 
     def test_format_text_includes_rendered_field(self):
         from src.core.timeline.builder import TimelineEvent
@@ -919,6 +1005,7 @@ class TestTimelineEndpoint:
 
         assert resp.status_code == 200
         assert "text" in resp.json()
+        assert resp.json()["rendered_text"] == resp.json()["text"]
         assert "Incident timeline" in resp.json()["text"]
 
     def test_invalid_ingestion_job_id_returns_400(self):
@@ -967,11 +1054,17 @@ class TestCompareEndpoint:
 
         assert resp.status_code == 200
         data = resp.json()
+        assert data["schema_version"] == "1.0"
         assert data["has_changes"] is True
         assert len(data["new_clusters"]) == 1
         assert data["new_clusters"][0]["message"] == "New error"
+        assert data["new_clusters"][0]["marker"] == "+"
         assert data["new_triggers"][0]["service"] == "deploy"
         assert "only_in" in data["new_triggers"][0]
+        assert data["new_triggers"][0]["marker"] == "+⚡"
+        assert data["llm"]["used"] is False
+        assert data["llm"]["fell_back"] is False
+        assert set(data["llm"]) >= {"used", "provider", "model", "fell_back"}
 
     def test_missing_window_params_returns_400(self):
         resp = client.post("/query/compare", json={})
@@ -990,6 +1083,7 @@ class TestCompareEndpoint:
 
         assert resp.status_code == 200
         assert "text" in resp.json()
+        assert resp.json()["rendered_text"] == resp.json()["text"]
         assert "Incident comparison" in resp.json()["text"]
 
     def test_invalid_ingestion_job_id_returns_400(self):

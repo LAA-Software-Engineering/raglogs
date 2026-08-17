@@ -3,8 +3,16 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+
+from src.api.schemas.v1 import (
+    SCHEMA_VERSION,
+    ClustersResponse,
+    llm_rules_only,
+    scope_from_request,
+    window_from_bounds,
+)
 
 router = APIRouter()
 
@@ -19,8 +27,13 @@ class ClustersRequest(BaseModel):
     ingestion_job_id: Optional[str] = None
 
 
-@router.post("/clusters")
-def clusters_endpoint(request: ClustersRequest):
+@router.post(
+    "/clusters",
+    response_model=ClustersResponse,
+    response_model_exclude_unset=True,
+    response_model_by_alias=True,
+)
+def clusters_endpoint(request: ClustersRequest, http_request: Request) -> ClustersResponse:
     from src.core.clustering.clusterer import run_clustering
     from src.db.session import get_db
     from src.utils.time import resolve_window
@@ -56,10 +69,13 @@ def clusters_endpoint(request: ClustersRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    return {
-        "window": {"start": window_start.isoformat(), "end": window_end.isoformat()},
-        "ingestion_job_id": request.ingestion_job_id,
-        "clusters": [
+    return ClustersResponse(
+        schema_version=SCHEMA_VERSION,
+        scope=scope_from_request(http_request),
+        window=window_from_bounds(window_start, window_end),
+        ingestion_job_id=request.ingestion_job_id,
+        llm=llm_rules_only(),
+        clusters=[
             {
                 "fingerprint": c.fingerprint,
                 "message": c.representative_message,
@@ -76,4 +92,4 @@ def clusters_endpoint(request: ClustersRequest):
             }
             for c in clusters
         ],
-    }
+    )

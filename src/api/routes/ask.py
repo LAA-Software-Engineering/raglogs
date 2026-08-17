@@ -5,6 +5,13 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from src.api.schemas.v1 import (
+    SCHEMA_VERSION,
+    AskResponse,
+    llm_from_mode,
+    llm_requested,
+)
+
 router = APIRouter()
 
 
@@ -17,8 +24,12 @@ class AskRequest(BaseModel):
     ingestion_job_id: Optional[str] = None
 
 
-@router.post("/ask")
-def ask_endpoint(request: AskRequest):
+@router.post(
+    "/ask",
+    response_model=AskResponse,
+    response_model_exclude_unset=True,
+)
+def ask_endpoint(request: AskRequest) -> AskResponse:
     from src.core.retrieval.question_router import answer_question
     from src.db.session import get_db
     from src.utils.time import resolve_window
@@ -54,11 +65,15 @@ def ask_endpoint(request: AskRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    return {
-        "question": result.question,
-        "answer": result.answer_text,
-        "evidence": result.evidence_items,
-        "clusters": result.clusters_used,
-        "total_matches": result.total_matches,
-        "retrieval_mode": result.retrieval_mode,
-    }
+    return AskResponse(
+        schema_version=SCHEMA_VERSION,
+        question=result.question,
+        answer=result.answer_text,
+        evidence=result.evidence_items,
+        clusters=result.clusters_used,
+        total_matches=result.total_matches,
+        retrieval_mode=result.retrieval_mode,
+        llm=llm_from_mode(mode=result.mode, requested=llm_requested()),
+        rendered_text=result.answer_text,
+        mode=result.mode,
+    )

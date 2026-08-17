@@ -59,3 +59,28 @@ def is_trigger_message(message: str) -> bool:
         if pattern.search(message):
             return True
     return False
+
+
+# Coarse type labels for the v1 JSON trigger object (G7). Order matters:
+# more specific families first so "pod restarted" is pod, not restart.
+_TRIGGER_TYPE_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"deploy(?:ment)?|rollout|release\s+\S+\s+(?:deployed|started|live)", re.IGNORECASE), "deploy"),
+    (re.compile(r"pod\s+(?:restart|restarted|terminated|evicted)", re.IGNORECASE), "pod"),
+    (re.compile(r"config(?:uration)?\s+(?:reloaded|changed|updated)", re.IGNORECASE), "config"),
+    (re.compile(r"migration\s+(?:started|completed|running)", re.IGNORECASE), "migration"),
+    (re.compile(r"queue\s+(?:full|saturated|overflow)", re.IGNORECASE), "queue"),
+    (re.compile(r"circuit[\s_]?breaker\s+(?:open|tripped|activated)", re.IGNORECASE), "circuit_breaker"),
+    (re.compile(r"webhook\s+(?:secret|key|config)\s+(?:changed|invalid|expired)", re.IGNORECASE), "webhook"),
+    (re.compile(r"token\s+(?:expired|expiration|invalid)", re.IGNORECASE), "token"),
+    (re.compile(r"(?:application|service)\s+(?:started|restarted|restart)|restart", re.IGNORECASE), "restart"),
+]
+
+
+def infer_trigger_type(message: str) -> str | None:
+    """Best-effort trigger family from a candidate message, or None."""
+    if not message:
+        return None
+    for pattern, trigger_type in _TRIGGER_TYPE_PATTERNS:
+        if pattern.search(message):
+            return trigger_type
+    return None
