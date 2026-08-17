@@ -53,7 +53,7 @@
           "ingestions"
         ],
         "summary": "Create Ingestion",
-        "description": "Enqueue an ingest job. Returns immediately with worker_job_id.\nPoll GET /ingestions/jobs/{worker_job_id} for progress.\nWhen done, use ingestion_job_id from the result to scope /query/explain.\n\n``mode=tail`` creates a long-lived job that the worker polls; the response\nincludes ``ingestion_job_id`` and no worker_job_id.",
+        "description": "Enqueue an ingest job. Returns immediately with worker_job_id.\nPoll GET /ingestions/jobs/{worker_job_id} for progress.\nWhen done, use ingestion_job_id from the result to scope /query/explain.\n\n``mode=tail`` creates a long-lived job that the worker polls; the response\nincludes ``ingestion_job_id`` and no worker_job_id.\n\nOptional ``callback_url`` (http/https) is stored on batch worker jobs. The\nworker POSTs an HMAC-signed completion payload on terminal state. Tail jobs\ndo not fire callbacks (long-lived; poll or ``:stop`` instead).",
         "operationId": "v1_ingestions_create_ingestion__v1_ingestions",
         "requestBody": {
           "content": {
@@ -392,7 +392,7 @@
           "ingestions"
         ],
         "summary": "Create Ingestion",
-        "description": "Enqueue an ingest job. Returns immediately with worker_job_id.\nPoll GET /ingestions/jobs/{worker_job_id} for progress.\nWhen done, use ingestion_job_id from the result to scope /query/explain.\n\n``mode=tail`` creates a long-lived job that the worker polls; the response\nincludes ``ingestion_job_id`` and no worker_job_id.",
+        "description": "Enqueue an ingest job. Returns immediately with worker_job_id.\nPoll GET /ingestions/jobs/{worker_job_id} for progress.\nWhen done, use ingestion_job_id from the result to scope /query/explain.\n\n``mode=tail`` creates a long-lived job that the worker polls; the response\nincludes ``ingestion_job_id`` and no worker_job_id.\n\nOptional ``callback_url`` (http/https) is stored on batch worker jobs. The\nworker POSTs an HMAC-signed completion payload on terminal state. Tail jobs\ndo not fire callbacks (long-lived; poll or ``:stop`` instead).",
         "operationId": "legacy_ingestions_create_ingestion__ingestions",
         "requestBody": {
           "content": {
@@ -1758,6 +1758,17 @@
             ],
             "title": "Mode",
             "default": "batch"
+          },
+          "callback_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Callback Url"
           }
         },
         "type": "object",

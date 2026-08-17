@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     auth_refuse_insecure_bind: bool = False
 
     # Worker
-    worker_poll_interval: int = 2          # seconds between idle polls
+    worker_poll_interval: int = 2  # seconds between idle polls
 
     # Ingest backpressure (minimal G9 stand-in) and push/tail (G4)
     ingest_queue_max: int = 100
@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     ingest_push_max_lines: int = 5000
     tail_poll_interval: int = 30
     tail_error_threshold: int = 5
+
+    # HMAC-signed ingest completion webhooks (G5). WEBHOOK_SECRET is the
+    # fallback when AUTH_ENABLED=false or the API key has no per-key secret.
+    webhook_secret: str = ""
+    webhook_max_retries: int = 5
+    webhook_timeout: float = 10.0
 
     # Adapters
     adapter_cloudwatch_region: str = "us-east-1"

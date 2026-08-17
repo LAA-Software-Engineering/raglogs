@@ -349,6 +349,102 @@ class TestCreateIngestion:
         assert resp.status_code == 400
         assert resp.json()["detail"]["error_code"] == "ADAPTER_UNAVAILABLE"
 
+    def test_stores_callback_url_on_worker_job(self):
+        wj_id = str(uuid.uuid4())
+        mock_db = _ctx_db()
+        added = []
+
+        def capture_add(obj):
+            added.append(obj)
+            obj.id = uuid.UUID(wj_id)
+
+        mock_db.add.side_effect = capture_add
+
+        with patch("src.adapters.file.adapter.discover_files", return_value=["f.log"]), \
+             patch("src.db.session.get_db", side_effect=lambda: mock_db):
+            resp = client.post("/v1/ingestions", json={
+                "paths": ["/logs"],
+                "callback_url": "https://hooks.example.com/ingest",
+            })
+
+        assert resp.status_code == 202
+        assert added[0].payload_json["callback_url"] == "https://hooks.example.com/ingest"
+        assert added[0].payload_json["scope"] == "default"
+        assert "api_key_id" not in added[0].payload_json
+
+    def test_omitted_callback_url_is_not_on_payload(self):
+        wj_id = str(uuid.uuid4())
+        mock_db = _ctx_db()
+        added = []
+
+        def capture_add(obj):
+            added.append(obj)
+            obj.id = uuid.UUID(wj_id)
+
+        mock_db.add.side_effect = capture_add
+
+        with patch("src.adapters.file.adapter.discover_files", return_value=["f.log"]), \
+             patch("src.db.session.get_db", side_effect=lambda: mock_db):
+            resp = client.post("/v1/ingestions", json={"paths": ["/logs"]})
+
+        assert resp.status_code == 202
+        assert "callback_url" not in added[0].payload_json
+
+    def test_422_on_file_callback_url(self):
+        with patch("src.adapters.file.adapter.discover_files", return_value=["f.log"]):
+            resp = client.post("/v1/ingestions", json={
+                "paths": ["/logs"],
+                "callback_url": "file:///etc/passwd",
+            })
+        assert resp.status_code == 422
+
+    def test_422_on_empty_host_callback_url(self):
+        resp = client.post("/v1/ingestions", json={
+            "paths": ["/logs"],
+            "callback_url": "https://",
+        })
+        assert resp.status_code == 422
+
+    def test_stores_api_key_id_when_authenticated(self):
+        from src.config.settings import Settings
+
+        key_id = uuid.uuid4()
+        record = MagicMock()
+        record.id = key_id
+        record.name = "ingest"
+        record.key_prefix = "rlk_testhash"
+        record.role = "ingest"
+        record.scope = "incident:INC-9"
+        record.revoked_at = None
+
+        wj_id = str(uuid.uuid4())
+        mock_db = _ctx_db()
+        added = []
+
+        def capture_add(obj):
+            added.append(obj)
+            obj.id = uuid.UUID(wj_id)
+
+        mock_db.add.side_effect = capture_add
+        settings = Settings(_env_file=None, auth_enabled=True, auth_mode="api_key")
+
+        with patch("src.config.get_settings", return_value=settings), \
+             patch("src.api.auth.keys.lookup_api_key", return_value=record), \
+             patch("src.adapters.file.adapter.discover_files", return_value=["f.log"]), \
+             patch("src.db.session.get_db", side_effect=lambda: mock_db):
+            resp = client.post(
+                "/v1/ingestions",
+                json={
+                    "paths": ["/logs"],
+                    "callback_url": "https://hooks.example.com/cb",
+                },
+                headers={"Authorization": "Bearer rlk_ingestrole1"},
+            )
+
+        assert resp.status_code == 202
+        assert added[0].payload_json["api_key_id"] == str(key_id)
+        assert added[0].payload_json["scope"] == "incident:INC-9"
+
 
 # ── GET /ingestions/jobs/{id} ─────────────────────────────────────────────────
 

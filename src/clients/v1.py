@@ -100,7 +100,11 @@ class RaglogsClient:
         return self._get("/v1/config")
 
     def create_ingestion(self, **body: Any) -> dict[str, Any]:
-        """POST /v1/ingestions — enqueue an ingest job."""
+        """POST /v1/ingestions — enqueue an ingest job.
+
+        Pass ``callback_url`` (http/https) for an HMAC-signed completion POST
+        when the batch worker reaches a terminal state.
+        """
         return self._post("/v1/ingestions", body)
 
     def list_ingestions(self) -> dict[str, Any]:

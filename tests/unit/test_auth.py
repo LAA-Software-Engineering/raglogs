@@ -20,8 +20,10 @@ from src.api.auth.keys import (
     create_api_key,
     find_verified_key,
     generate_api_key,
+    generate_webhook_secret,
     hash_api_key,
     key_prefix,
+    mask_webhook_secret,
     verify_api_key,
 )
 from src.api.auth.middleware import AuthPrincipal
@@ -116,6 +118,13 @@ class TestApiKeyCrypto:
     def test_create_rejects_unknown_role_before_db(self) -> None:
         with pytest.raises(ValueError, match="role"):
             create_api_key(role="superuser")
+
+    def test_generate_webhook_secret_has_whsec_prefix(self) -> None:
+        secret = generate_webhook_secret()
+        assert secret.startswith("whsec_")
+        assert len(secret) > 12
+        assert mask_webhook_secret(secret) == "whsec_****"
+        assert mask_webhook_secret(None) is None
 
 
 # ── Role map ──────────────────────────────────────────────────────────────────

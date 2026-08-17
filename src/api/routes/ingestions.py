@@ -16,7 +16,7 @@ from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 from src.core.ingestion.tail import TAIL_ADAPTERS
 
@@ -45,6 +45,16 @@ class IngestRequest(BaseModel):
     resume_ingestion_job_id: Optional[str] = None
     with_embeddings: bool = False
     mode: Literal["batch", "tail"] = "batch"
+    callback_url: Optional[str] = None
+
+    @field_validator("callback_url")
+    @classmethod
+    def _validate_callback_url(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or value.strip() == "":
+            return None
+        from src.core.ingestion.webhooks import validate_callback_url
+
+        return validate_callback_url(value)
 
     @model_validator(mode="after")
     def _require_paths_for_file_adapter(self):
@@ -206,8 +216,13 @@ def _validate_non_file_adapter(request: IngestRequest) -> dict[str, Any]:
     return params
 
 
-def _ingest_payload(request: IngestRequest, params: dict[str, Any]) -> dict[str, Any]:
-    return {
+def _ingest_payload(
+    request: IngestRequest,
+    params: dict[str, Any],
+    *,
+    callback_meta: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "paths": request.paths,
         "recursive": request.recursive,
         "format": request.format,
@@ -223,10 +238,34 @@ def _ingest_payload(request: IngestRequest, params: dict[str, Any]) -> dict[str,
         "with_embeddings": request.with_embeddings,
         "mode": request.mode,
     }
+    if request.callback_url:
+        payload["callback_url"] = request.callback_url
+        if callback_meta:
+            payload.update(callback_meta)
+    return payload
+
+
+def _callback_meta_from_request(http_request: Request) -> dict[str, Any]:
+    """Stash scope + api_key_id for HMAC at delivery time (not the bearer token)."""
+    meta: dict[str, Any] = {"scope": "default"}
+    principal = getattr(http_request.state, "auth_principal", None)
+    if principal is None:
+        return meta
+    scope = getattr(principal, "scope", None)
+    if scope:
+        meta["scope"] = scope
+    key_id = getattr(principal, "key_id", None)
+    if key_id:
+        meta["api_key_id"] = key_id
+    return meta
 
 
 def _create_tail_job(
-    request: IngestRequest, params: dict[str, Any], db: Any
+    request: IngestRequest,
+    params: dict[str, Any],
+    db: Any,
+    *,
+    callback_meta: Optional[dict[str, Any]] = None,
 ) -> EnqueuedResponse:
     from src.core.ingestion.service import _get_or_create_source
     from src.db.models import IngestionJob
@@ -239,7 +278,7 @@ def _create_tail_job(
         source_id=source.id,
         status="running",
         started_at=now,
-        metadata_json=_ingest_payload(request, params),
+        metadata_json=_ingest_payload(request, params, callback_meta=callback_meta),
         source_adapter=request.adapter,
         source_ref=source_name,
         mode="tail",
@@ -292,7 +331,7 @@ def _apply_tail_action(
 
 
 @router.post("", response_model=EnqueuedResponse, status_code=202)
-def create_ingestion(request: IngestRequest):
+def create_ingestion(request: IngestRequest, http_request: Request):
     """
     Enqueue an ingest job. Returns immediately with worker_job_id.
     Poll GET /ingestions/jobs/{worker_job_id} for progress.
@@ -300,6 +339,10 @@ def create_ingestion(request: IngestRequest):
 
     ``mode=tail`` creates a long-lived job that the worker polls; the response
     includes ``ingestion_job_id`` and no worker_job_id.
+
+    Optional ``callback_url`` (http/https) is stored on batch worker jobs. The
+    worker POSTs an HMAC-signed completion payload on terminal state. Tail jobs
+    do not fire callbacks (long-lived; poll or ``:stop`` instead).
     """
     from src.db.models import WorkerJob
     from src.db.session import get_db
@@ -316,15 +359,17 @@ def create_ingestion(request: IngestRequest):
     else:
         params = _validate_non_file_adapter(request)
 
+    callback_meta = _callback_meta_from_request(http_request)
+
     with get_db() as db:
         rejected = _reject_if_queue_full(db)
         if rejected is not None:
             return rejected
 
         if request.mode == "tail":
-            return _create_tail_job(request, params, db)
+            return _create_tail_job(request, params, db, callback_meta=callback_meta)
 
-        payload = _ingest_payload(request, params)
+        payload = _ingest_payload(request, params, callback_meta=callback_meta)
         job = WorkerJob(
             id=uuid.uuid4(),
             job_type="ingest",

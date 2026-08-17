@@ -632,7 +632,7 @@ raglogs config llm_provider
 
 ### `raglogs keys`
 
-Mint, list, and revoke HTTP API keys. The plaintext secret is printed **once** at create time and is never stored or logged — only an argon2 hash and a short prefix are kept.
+Mint, list, and revoke HTTP API keys. The API bearer token is printed **once** at create time and is never stored or logged — only an argon2 hash and a short prefix are kept. A separate **webhook signing secret** (`whsec_…`) is also printed once; it is stored server-side so ingest completion callbacks can be HMAC-signed. It is not the bearer token. `raglogs keys list` shows `whsec_****` when a signing secret exists (legacy keys minted before this column fall back to `WEBHOOK_SECRET`).
 
 ```bash
 raglogs keys create --role query --scope default --name "ci"
@@ -685,6 +685,9 @@ All settings are read from `.env`, environment variables, or CLI flags. Priority
 | `OIDC_JWKS_URL` | _(empty)_ | Optional JWKS URL; default is `{issuer}/.well-known/openid-configuration` then `{issuer}/.well-known/jwks.json` |
 | `API_BIND_HOST` | `127.0.0.1` | Host the startup guard treats as the bind address. `make api` sets this to `0.0.0.0` to match uvicorn |
 | `AUTH_REFUSE_INSECURE_BIND` | `false` | If `true`, refuse to start when auth is off and the bind host is not loopback; if `false`, log a warning only |
+| `WEBHOOK_SECRET` | _(empty)_ | Fallback HMAC secret for ingest completion callbacks when auth is off or the API key has no per-key `whsec_` |
+| `WEBHOOK_MAX_RETRIES` | `5` | Extra webhook POST attempts after the first (6 POSTs by default) on 5xx / 429 / connect errors |
+| `WEBHOOK_TIMEOUT` | `10` | Per-attempt HTTP timeout in seconds for completion callbacks |
 
 ---
 
@@ -913,7 +916,7 @@ Auth is **off by default** so local demo and existing clients keep working. Set 
 ```bash
 export AUTH_ENABLED=true
 raglogs keys create --role admin --name "local"
-# copy the rlk_… secret from the panel — it is shown only once
+# copy the rlk_… API key and the whsec_… webhook secret from the panels — each is shown only once
 
 curl -X POST http://localhost:8000/v1/query/explain \
   -H "Authorization: Bearer rlk_…" \
@@ -941,7 +944,7 @@ A valid key with the wrong role returns **403**:
 {"error_code": "AUTH_FORBIDDEN", "message": "…"}
 ```
 
-Keys are stored argon2-hashed with a short indexed prefix. `scope` defaults to `default` and is stored for later isolation work — this release does **not** filter clusters or logs by scope.
+Keys are stored argon2-hashed with a short indexed prefix. `scope` defaults to `default` and is stored for later isolation work — this release does **not** filter clusters or logs by scope. Each new key also gets a `whsec_…` webhook signing secret (shown once; `keys list` shows `whsec_****` only).
 
 Optional OIDC: set `AUTH_MODE=oidc` or `both` and `OIDC_ISSUER`. A JWT (three dotted segments) is validated via JWKS (`iss`, `exp`, and `aud` when `OIDC_AUDIENCE` is set). Role comes from claim `raglogs_role` or `roles`, defaulting to `query`. When `AUTH_MODE=api_key`, JWTs are rejected.
 
@@ -989,6 +992,49 @@ curl -X POST http://localhost:8000/v1/ingestions/$ID:stop
 `stop` is terminal. After `TAIL_ERROR_THRESHOLD` consecutive poll failures (default 5) a tail job auto-pauses; `/health` reports `tail_jobs.running` and `tail_jobs.paused`.
 
 **Backpressure.** When pending worker jobs ≥ `INGEST_QUEUE_MAX` (default 100), `POST /v1/ingestions` and `POST /v1/ingestions/lines` return **429** with `Retry-After` (`INGEST_RETRY_AFTER_SECONDS`, default 5) and body `{"error_code":"INGEST_QUEUE_FULL","message":"..."}`. This is a queue-depth stand-in, not full API/LLM rate limiting.
+
+**Completion callbacks.** Optional `callback_url` on `POST /v1/ingestions` (http or https only; `file:` and empty hosts are rejected). When a **batch** worker job reaches a terminal state (`done` / `failed`), raglogs POSTs an HMAC-SHA256-signed JSON body to that URL. Delivery is fail-open: retries with jittered exponential backoff (`WEBHOOK_MAX_RETRIES`, default 5 extra attempts) on 5xx, 429, and connect errors; 4xx other than 429 are not retried. Failures are logged and **do not** change ingest status — poll `GET /v1/ingestions/jobs/{worker_job_id}` still works.
+
+`job_id` in the payload is the **ingestion_job_id** when ingest created a row; if the worker failed before that, it is the `worker_job_id`. `scope` is the authenticated key's scope, or `"default"` when auth is off. `counts.clusters` is `0` (clustering is not part of ingest). Worker `done` maps to `"succeeded"` (or `"partial"` when `error_count > 0`); `failed` maps to `"failed"`.
+
+```bash
+curl -X POST http://localhost:8000/v1/ingestions \
+  -H "Content-Type: application/json" \
+  -d '{"paths":["/var/log/app"],"callback_url":"https://example.com/hooks/raglogs"}'
+```
+
+Example body:
+
+```json
+{
+  "job_id": "a1b2c3d4-…",
+  "status": "succeeded",
+  "scope": "default",
+  "counts": { "lines": 48213, "clusters": 0 },
+  "partial": false
+}
+```
+
+The signature is **not** inside the JSON. It is sent as:
+
+```
+X-Raglogs-Signature: sha256=<hex>
+```
+
+Verify by HMAC-SHA256 of the **raw request body** with the webhook secret, then compare to the header (constant-time). Use the per-key `whsec_…` from `raglogs keys create` when the ingest request was authenticated with that API key; otherwise `WEBHOOK_SECRET`. Do not HMAC the `rlk_…` bearer token — it is not stored.
+
+Python:
+
+```python
+import hmac, hashlib
+
+def verify(secret: str, body: bytes, header: str) -> bool:
+    digest = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    expected = "sha256=" + digest
+    return hmac.compare_digest(expected, header)
+```
+
+Tail jobs and `POST /v1/ingestions/lines` (sync push) do **not** fire callbacks in this release — tail jobs are long-lived (poll or `:stop`); push completes in the HTTP response.
 
 Overlapping tail poll windows can **double-count** the same physical lines until content dedup (G6) lands. Prefer a single tail job per source and avoid also batch-ingesting the same window.
 
@@ -1124,7 +1170,7 @@ raglogs/
 │   │   ├── compare/         Window diffing — new, disappeared, increased, decreased
 │   │   ├── embeddings/      Provider abstraction + ingest persist helper
 │   │   ├── explain/         Evidence assembly, templates, confidence, summarizer
-│   │   ├── ingestion/       Ingestion orchestration and batch persistence
+│   │   ├── ingestion/       Ingestion orchestration, webhooks, batch persistence
 │   │   ├── llm/             Provider abstraction (OpenAI, Ollama, noop)
 │   │   ├── normalization/   Message normalization, fingerprinting, trigger patterns
 │   │   ├── parsing/         JSON and text parsers, field extractors, timestamps
