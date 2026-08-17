@@ -485,6 +485,16 @@ class TestUIShell:
         resp = client.get("/static/js/app.js")
         assert resp.status_code == 200
 
+    def test_ui_calls_versioned_endpoints(self):
+        html = client.get("/")
+        assert "/v1/query/explain" in html.text
+        assert "/v1/query/timeline" in html.text
+        assert "/v1/query/compare" in html.text
+        assert "/v1/query/ask" in html.text
+        js = client.get("/static/js/app.js")
+        assert "/v1/ingestions" in js.text
+        assert 'fetch("/ingestions")' not in js.text
+
 
 # ── POST /query/explain ───────────────────────────────────────────────────────
 
@@ -868,3 +878,121 @@ class TestCacheKey:
         ws = datetime(2026, 3, 12, 13, 0, 0, tzinfo=timezone.utc)
         we = datetime(2026, 3, 12, 14, 0, 0, tzinfo=timezone.utc)
         assert _cache_key(ws, we, None, None, None) != _cache_key(ws, we, None, None, "")
+
+
+# ── /v1 aliases and deprecation headers ───────────────────────────────────────
+
+class TestAPIVersioning:
+    def test_v1_explain_matches_unversioned_body(self):
+        mock_result = MagicMock()
+        mock_result.window_start = datetime(2026, 3, 12, 13, 0, 0, tzinfo=timezone.utc)
+        mock_result.window_end = datetime(2026, 3, 12, 14, 0, 0, tzinfo=timezone.utc)
+        mock_result.summary_text = "Incident summary"
+        mock_result.confidence = "high"
+        mock_result.mode = "rules"
+        mock_result.total_logs = 10
+        mock_result.services_affected = ["api"]
+        mock_result.primary_cluster = None
+        mock_result.secondary_clusters = []
+        mock_result.trigger_candidates = []
+        mock_result.evidence_items = []
+
+        mock_db = _ctx_db()
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db), \
+             patch("src.core.explain.summarizer.explain_window", return_value=mock_result), \
+             patch("src.api.routes.explain._load_from_cache", return_value=None), \
+             patch("src.api.routes.explain._save_to_cache"):
+            unversioned = client.post("/query/explain", json={"since": "1h"})
+            versioned = client.post("/v1/query/explain", json={"since": "1h"})
+
+        assert unversioned.status_code == 200
+        assert versioned.status_code == 200
+        assert unversioned.json() == versioned.json()
+
+    def test_unversioned_explain_sends_deprecation_header(self):
+        mock_db = _ctx_db()
+        result = MagicMock()
+        result.window_start = datetime(2026, 3, 12, 13, 0, 0, tzinfo=timezone.utc)
+        result.window_end = datetime(2026, 3, 12, 14, 0, 0, tzinfo=timezone.utc)
+        result.summary_text = "x"
+        result.confidence = "low"
+        result.mode = "rules"
+        result.total_logs = 0
+        result.services_affected = []
+        result.primary_cluster = None
+        result.secondary_clusters = []
+        result.trigger_candidates = []
+        result.evidence_items = []
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db), \
+             patch("src.core.explain.summarizer.explain_window", return_value=result), \
+             patch("src.api.routes.explain._load_from_cache", return_value=None), \
+             patch("src.api.routes.explain._save_to_cache"):
+            resp = client.post("/query/explain", json={"since": "1h"})
+
+        assert resp.status_code == 200
+        assert resp.headers.get("deprecation") == "true"
+        assert "/v1/query/explain" in resp.headers.get("link", "")
+        assert "successor-version" in resp.headers.get("link", "")
+
+    def test_v1_explain_has_no_deprecation_header(self):
+        mock_db = _ctx_db()
+        result = MagicMock()
+        result.window_start = datetime(2026, 3, 12, 13, 0, 0, tzinfo=timezone.utc)
+        result.window_end = datetime(2026, 3, 12, 14, 0, 0, tzinfo=timezone.utc)
+        result.summary_text = "x"
+        result.confidence = "low"
+        result.mode = "rules"
+        result.total_logs = 0
+        result.services_affected = []
+        result.primary_cluster = None
+        result.secondary_clusters = []
+        result.trigger_candidates = []
+        result.evidence_items = []
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db), \
+             patch("src.core.explain.summarizer.explain_window", return_value=result), \
+             patch("src.api.routes.explain._load_from_cache", return_value=None), \
+             patch("src.api.routes.explain._save_to_cache"):
+            resp = client.post("/v1/query/explain", json={"since": "1h"})
+
+        assert resp.status_code == 200
+        assert "deprecation" not in resp.headers
+
+    def test_unversioned_config_sends_deprecation_header(self):
+        resp = client.get("/config")
+        assert resp.status_code == 200
+        assert resp.headers.get("deprecation") == "true"
+        assert resp.headers.get("link") == '</v1/config>; rel="successor-version"'
+
+    def test_v1_config_has_no_deprecation_header(self):
+        resp = client.get("/v1/config")
+        assert resp.status_code == 200
+        assert resp.json() == client.get("/config").json()
+        assert "deprecation" not in resp.headers
+
+    def test_health_and_ui_are_not_deprecated(self):
+        with patch("src.db.session.check_connection", return_value=False):
+            health = client.get("/health")
+        index = client.get("/")
+        static = client.get("/static/js/app.js")
+        assert health.status_code == 200
+        assert "deprecation" not in health.headers
+        assert "deprecation" not in index.headers
+        assert "deprecation" not in static.headers
+
+    def test_v1_ingestions_post_still_202(self):
+        wj_id = str(uuid.uuid4())
+        mock_db = _ctx_db()
+
+        def capture_add(obj):
+            obj.id = uuid.UUID(wj_id)
+
+        mock_db.add.side_effect = capture_add
+
+        with patch("src.adapters.file.adapter.discover_files", return_value=["f.log"]), \
+             patch("src.db.session.get_db", side_effect=lambda: mock_db):
+            resp = client.post("/v1/ingestions", json={"paths": ["/logs"]})
+
+        assert resp.status_code == 202
+        assert resp.json()["status"] == "pending"
+        assert "deprecation" not in resp.headers
+

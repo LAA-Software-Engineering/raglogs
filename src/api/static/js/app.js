@@ -38,7 +38,7 @@ function formatErrorDetail(detail, fallback) {
 async function loadIngestions() {
   const select = document.getElementById("ingestion-select");
   try {
-    const resp = await fetch("/ingestions");
+    const resp = await fetch("/v1/ingestions");
     const data = await resp.json();
     if (!resp.ok) {
       throw new Error(formatErrorDetail(data.detail, "Failed to load ingestions"));

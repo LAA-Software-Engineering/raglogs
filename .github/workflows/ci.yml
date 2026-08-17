@@ -7,6 +7,7 @@ on:
   workflow_dispatch:
   push:
     branches: [ "main" ]
+    tags: [ "*" ]
     paths-ignore:
       - "**/*.md"
       - "CODEOWNERS"
@@ -46,3 +47,30 @@ jobs:
     - name: Test with pytest
       run: |
         pytest
+    - name: Export OpenAPI
+      run: |
+        PYTHONPATH=. python scripts/export_openapi.py
+    - name: Upload OpenAPI artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: openapi.json
+        path: clients/openapi.json
+
+  publish-openapi-release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - name: Download OpenAPI artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: openapi.json
+        path: artifacts
+    - name: Attach openapi.json to GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: artifacts/openapi.json
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

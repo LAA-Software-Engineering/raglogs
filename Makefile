@@ -1,11 +1,13 @@
 .PHONY: help install install-dev \
         db-up db-down docker-up docker-down docker-demo docker-logs \
         init migrate demo ingest explain clusters ask \
-        api web web-serve worker test test-unit test-int test-cov lint format clean
+        api web web-serve worker test test-unit test-int test-cov lint format \
+        openapi client-go client-python clean
 
 PYTHON  := python
 PIP     := pip
 SAMPLE  := sample_data/sample_incident
+OPENAPI := clients/openapi.json
 
 help:
 	@echo "raglogs — incident explanation tool"
@@ -38,6 +40,9 @@ help:
 	@echo "  make test-cov        Unit tests with coverage"
 	@echo "  make lint            Ruff lint"
 	@echo "  make format          Ruff format"
+	@echo "  make openapi         Export OpenAPI schema to clients/openapi.json"
+	@echo "  make client-go       Generate Go client (oapi-codegen; no-op if missing)"
+	@echo "  make client-python   Optional OpenAPI Python generator, or use src/clients/v1.py"
 	@echo "  make clean           Remove build artifacts"
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
@@ -145,6 +150,37 @@ lint:
 
 format:
 	ruff format src/ tests/
+
+# ── OpenAPI / clients ─────────────────────────────────────────────────────────
+
+openapi:
+	PYTHONPATH=. $(PYTHON) scripts/export_openapi.py
+
+# Generates clients/go/client.go when oapi-codegen is installed.
+# Missing binary: print install hint and exit 0 so CI without Go still passes.
+client-go: openapi
+	@if command -v oapi-codegen >/dev/null 2>&1; then \
+		mkdir -p clients/go; \
+		oapi-codegen -generate client,types -package raglogs -o clients/go/client.go $(OPENAPI); \
+		echo "Wrote clients/go/client.go"; \
+	else \
+		echo "oapi-codegen not found. Install with:"; \
+		echo "  go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest"; \
+		echo "Then re-run: make client-go"; \
+	fi
+
+# Committed client is src/clients/v1.py. Optional generator dump is gitignored.
+client-python: openapi
+	@echo "Committed typed client: src/clients/v1.py (targets /v1)."
+	@if command -v openapi-python-client >/dev/null 2>&1; then \
+		mkdir -p clients/python/generated; \
+		openapi-python-client generate --path $(OPENAPI) --output-path clients/python/generated --overwrite; \
+		echo "Wrote clients/python/generated/"; \
+	else \
+		echo "Optional generator openapi-python-client not installed."; \
+		echo "  pip install openapi-python-client"; \
+		echo "Using the thin committed client instead (src/clients/v1.py)."; \
+	fi
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 

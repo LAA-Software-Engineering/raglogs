@@ -138,6 +138,17 @@ class TestRequiredRoles:
         assert required_roles("GET", "/") == frozenset({"query", "admin"})
         assert required_roles("GET", "/static/js/app.js") == frozenset({"query", "admin"})
 
+    def test_versioned_paths_match_unversioned_roles(self) -> None:
+        assert required_roles("POST", "/v1/ingestions") == frozenset({"ingest", "admin"})
+        assert required_roles("GET", "/v1/ingestions") == frozenset({"query", "admin"})
+        assert required_roles("GET", "/v1/ingestions/latest") == frozenset({"query", "admin"})
+        assert required_roles("POST", "/v1/query/explain") == frozenset({"query", "admin"})
+        assert required_roles("POST", "/v1/query/ask") == frozenset({"query", "admin"})
+        assert required_roles("GET", "/v1/config") == frozenset({"admin"})
+        assert required_roles("POST", "/v2/query/explain") == frozenset({"query", "admin"})
+        assert required_roles("GET", "/health") is None
+        assert required_roles("GET", "/v1/health") is None
+
 
 # ── Bind-host guard ───────────────────────────────────────────────────────────
 
@@ -294,6 +305,52 @@ class TestAuthMiddleware:
              patch("src.api.auth.keys.lookup_api_key", return_value=_key("query")):
             resp = client.get("/config", headers={"Authorization": "Bearer rlk_queryrolexx"})
         assert resp.status_code == 403
+
+    def test_v1_explain_401_without_header_when_auth_enabled(self) -> None:
+        with patch("src.config.get_settings", return_value=_auth_settings()):
+            resp = client.post("/v1/query/explain", json={"since": "1h"})
+        assert resp.status_code == 401
+        assert resp.json()["error_code"] == "AUTH_UNAUTHORIZED"
+        assert "deprecation" not in resp.headers
+
+    def test_unversioned_explain_401_still_deprecated(self) -> None:
+        with patch("src.config.get_settings", return_value=_auth_settings()):
+            resp = client.post("/query/explain", json={"since": "1h"})
+        assert resp.status_code == 401
+        assert resp.headers.get("deprecation") == "true"
+
+    def test_query_role_can_post_v1_explain(self) -> None:
+        with patch("src.config.get_settings", return_value=_auth_settings()), \
+             patch("src.api.auth.keys.lookup_api_key", return_value=_key("query")):
+            resp = client.post(
+                "/v1/query/explain",
+                json={},
+                headers={"Authorization": "Bearer rlk_queryrolexx"},
+            )
+        assert resp.status_code == 400
+        assert resp.status_code != 403
+
+    def test_query_role_cannot_post_v1_ingestions(self) -> None:
+        with patch("src.config.get_settings", return_value=_auth_settings()), \
+             patch("src.api.auth.keys.lookup_api_key", return_value=_key("query")):
+            resp = client.post(
+                "/v1/ingestions",
+                json={"paths": ["/logs"]},
+                headers={"Authorization": "Bearer rlk_queryrolexx"},
+            )
+        assert resp.status_code == 403
+        assert resp.json()["error_code"] == "AUTH_FORBIDDEN"
+
+    def test_ingest_role_can_post_v1_ingestions(self) -> None:
+        with patch("src.config.get_settings", return_value=_auth_settings()), \
+             patch("src.api.auth.keys.lookup_api_key", return_value=_key("ingest")):
+            resp = client.post(
+                "/v1/ingestions",
+                json={},
+                headers={"Authorization": "Bearer rlk_ingestrole1"},
+            )
+        assert resp.status_code == 422
+        assert resp.status_code != 403
 
     def test_docs_not_exempt(self) -> None:
         with patch("src.config.get_settings", return_value=_auth_settings()):

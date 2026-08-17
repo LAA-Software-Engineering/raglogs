@@ -301,7 +301,7 @@ raglogs ingest --adapter loki --param query='{namespace="prod"}' \
 ```
 
 ```bash
-curl -X POST http://localhost:8000/ingestions \
+curl -X POST http://localhost:8000/v1/ingestions \
   -H "Content-Type: application/json" \
   -d '{"adapter":"loki","params":{"query":"{app=\"api\"}"},"since":"1h"}'
 ```
@@ -833,7 +833,7 @@ Fingerprinting can still split one incident across multiple clusters when wordin
 - **Disabled (default).** `EMBEDDINGS_PROVIDER=disabled` skips the merge pass entirely. Clustering is fingerprint-only and deterministic — the same logs always produce the same clusters.
 - **Enabled.** With `openai` or `local`, representatives are embedded at analysis time (in memory; not written to pgvector). Pairs with cosine similarity ≥ `CLUSTER_MERGE_SIMILARITY_THRESHOLD` (default **0.92**) are merged via connected components. Merged `count` is the sum of member counts; services and levels are summed; `first_seen` is the earliest timestamp and `last_seen` the latest; importance is recomputed. The canonical fingerprint is the member with the highest importance score. `ClusterRun.algorithm` is `fingerprint+semantic` when embeddings were used, even if no pair crossed the threshold.
 - **Fail open.** If the embeddings backend is missing, raises, or returns unusable vectors, clustering continues with the fingerprint-only set.
-- **Ask vs merge.** Semantic `ask` uses the *stored* `log_embeddings` table (populated by `raglogs ingest --with-embeddings`) and `ASK_SEMANTIC_MIN_SIMILARITY` (default **0.75**). Cluster merge still uses its own in-memory pass and threshold. Similar-incident search (`POST /query/similar` / historical cluster ANN) is not in this release. Compare still applies its own heuristic collapse for webhook retries / queue growth after clustering.
+- **Ask vs merge.** Semantic `ask` uses the *stored* `log_embeddings` table (populated by `raglogs ingest --with-embeddings`) and `ASK_SEMANTIC_MIN_SIMILARITY` (default **0.75**). Cluster merge still uses its own in-memory pass and threshold. Similar-incident search (`POST /v1/query/similar` / historical cluster ANN) is not in this release. Compare still applies its own heuristic collapse for webhook retries / queue growth after clustering.
 
 Local embeddings require the optional extra: `pip install 'raglogs[local-embeddings]'` (`sentence-transformers`). If that import fails, merge is skipped.
 
@@ -915,7 +915,7 @@ export AUTH_ENABLED=true
 raglogs keys create --role admin --name "local"
 # copy the rlk_… secret from the panel — it is shown only once
 
-curl -X POST http://localhost:8000/query/explain \
+curl -X POST http://localhost:8000/v1/query/explain \
   -H "Authorization: Bearer rlk_…" \
   -H "Content-Type: application/json" \
   -d '{"since": "30m", "no_llm": true}'
@@ -923,9 +923,9 @@ curl -X POST http://localhost:8000/query/explain \
 
 | Role | Allowed |
 |---|---|
-| `ingest` | `POST /ingestions` |
-| `query` | `GET /ingestions*`, `POST /query/*`, web UI (`GET /`, `/static`), OpenAPI (`/docs`) |
-| `admin` | everything, including `GET /config` |
+| `ingest` | `POST /v1/ingestions` (and the deprecated `/ingestions` alias) |
+| `query` | `GET /v1/ingestions*`, `POST /v1/query/*`, web UI (`GET /`, `/static`), OpenAPI (`/docs`) |
+| `admin` | everything, including `GET /v1/config` |
 
 `GET /health` and `GET /metrics` (path reserved; no Prometheus body yet) are always unauthenticated. `/docs` is **not** exempt.
 
@@ -949,22 +949,28 @@ If auth is disabled and the process binds a non-loopback address (`0.0.0.0`, `::
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/health` | Service and DB health check |
-| `POST` | `/ingestions` | Enqueue an ingest job (`adapter`: `file`, `cloudwatch`, or `datadog`) |
-| `GET` | `/ingestions` | List recent completed ingestion jobs, newest first |
-| `GET` | `/ingestions/{job_id}` | Poll ingestion job status |
-| `GET` | `/ingestions/latest` | ID of the most recently completed ingestion job, if any |
-| `POST` | `/query/explain` | Explain a time window |
-| `POST` | `/query/ask` | Answer a natural language question |
-| `POST` | `/query/clusters` | List top clusters |
-| `POST` | `/query/timeline` | Reconstruct incident timeline for a window |
-| `POST` | `/query/compare` | Diff two time windows (same semantics as `raglogs compare`) |
-| `GET` | `/config` | Read effective configuration |
+| `GET` | `/health` | Service and DB health check (unversioned) |
+| `POST` | `/v1/ingestions` | Enqueue an ingest job (`adapter`: `file`, `cloudwatch`, `datadog`, `loki`, or `k8s`) |
+| `GET` | `/v1/ingestions` | List recent completed ingestion jobs, newest first |
+| `GET` | `/v1/ingestions/{job_id}` | Poll ingestion job status |
+| `GET` | `/v1/ingestions/latest` | ID of the most recently completed ingestion job, if any |
+| `POST` | `/v1/query/explain` | Explain a time window |
+| `POST` | `/v1/query/ask` | Answer a natural language question |
+| `POST` | `/v1/query/clusters` | List top clusters |
+| `POST` | `/v1/query/timeline` | Reconstruct incident timeline for a window |
+| `POST` | `/v1/query/compare` | Diff two time windows (same semantics as `raglogs compare`) |
+| `GET` | `/v1/config` | Read effective configuration |
+
+Unversioned `/ingestions`, `/query/*`, and `/config` remain as **deprecated aliases** for one release. They behave the same as the `/v1` paths and send `Deprecation: true` plus a `Link: </v1/...>; rel="successor-version"` header. `/health`, the web UI (`/`), and `/static` stay unversioned.
+
+**Compatibility policy.** Additive changes stay in `v1`. Breaking path or method removals require `v2`. JSON response bodies are unchanged in this release (a stable evidence schema is tracked separately as G7).
+
+**OpenAPI and clients.** Export the spec with `make openapi` (`clients/openapi.json`). CI uploads that file as a workflow artifact and attaches it to GitHub Releases on tags. A thin typed Python client ships as `src.clients.v1.RaglogsClient` (targets `/v1`). `make client-go` runs [oapi-codegen](https://github.com/oapi-codegen/oapi-codegen) into `clients/go/` when the binary is installed; otherwise it prints the install command and exits 0. See `clients/README.md`.
 
 **Example**
 
 ```bash
-curl -X POST http://localhost:8000/query/explain \
+curl -X POST http://localhost:8000/v1/query/explain \
   -H "Content-Type: application/json" \
   -d '{"since": "30m", "no_llm": true}'
 ```
@@ -987,20 +993,20 @@ curl -X POST http://localhost:8000/query/explain \
 }
 ```
 
-**Explain** — `POST /query/explain` accepts the same window filters as the CLI. Optional `"format": "markdown"` adds a paste-ready `markdown` incident report field alongside the JSON payload (same shape as `raglogs explain --format markdown`).
+**Explain** — `POST /v1/query/explain` accepts the same window filters as the CLI. Optional `"format": "markdown"` adds a paste-ready `markdown` incident report field alongside the JSON payload (same shape as `raglogs explain --format markdown`).
 
-**Timeline** — `POST /query/timeline` accepts the same window filters as the CLI (`since` or `from_time`/`to_time`, optional `service`, `env`, `all_ingestions`, `ingestion_job_id`). Set `"format": "text"` to include a plain-text `text` field alongside `events`.
+**Timeline** — `POST /v1/query/timeline` accepts the same window filters as the CLI (`since` or `from_time`/`to_time`, optional `service`, `env`, `all_ingestions`, `ingestion_job_id`). Set `"format": "text"` to include a plain-text `text` field alongside `events`.
 
 ```bash
-curl -X POST http://localhost:8000/query/timeline \
+curl -X POST http://localhost:8000/v1/query/timeline \
   -H "Content-Type: application/json" \
   -d '{"since": "2h", "format": "json"}'
 ```
 
-**Compare** — `POST /query/compare` matches `raglogs compare`: either `"since"` + `"baseline"` (durations, window A ends at request time) or explicit `window_a_from` / `window_a_to` / `window_b_from` / `window_b_to`. Optional `"format": "text"` adds a rendered `text` field.
+**Compare** — `POST /v1/query/compare` matches `raglogs compare`: either `"since"` + `"baseline"` (durations, window A ends at request time) or explicit `window_a_from` / `window_a_to` / `window_b_from` / `window_b_to`. Optional `"format": "text"` adds a rendered `text` field.
 
 ```bash
-curl -X POST http://localhost:8000/query/compare \
+curl -X POST http://localhost:8000/v1/query/compare \
   -H "Content-Type: application/json" \
   -d '{"since": "30m", "baseline": "24h"}'
 ```
@@ -1028,11 +1034,11 @@ just the server.
 Pick a time window (presets or a duration like `2h`), then switch between the
 **Explain**, **Timeline**, **Compare**, and **Ask** tabs. The **ingestion**
 dropdown in the top bar lists your 25 most recent completed ingestions (via
-`GET /ingestions`) and defaults to the latest one, matching the CLI; pick a
+`GET /v1/ingestions`) and defaults to the latest one, matching the CLI; pick a
 different ingestion or "All ingestions" to change what a query is scoped to.
 
 The UI is server-rendered (Jinja2 + vanilla JS/CSS, no CORS, no node/npm) and
-calls the same `/query/*` JSON endpoints listed above.
+calls the same `/v1/query/*` JSON endpoints listed above.
 
 With default `AUTH_ENABLED=false` the UI is open — fine for local dev. When
 auth is on, load the UI with a `query` or `admin` bearer token (the browser
@@ -1060,6 +1066,13 @@ make api
 make lint
 make format
 
+# Export OpenAPI spec (clients/openapi.json)
+make openapi
+
+# Optional generated clients (see clients/README.md)
+make client-go
+make client-python
+
 # Full clean
 make clean
 ```
@@ -1073,6 +1086,7 @@ raglogs/
 │   ├── api/routes/          FastAPI route handlers
 │   ├── api/auth/            API keys, roles, OIDC, bind-host guard
 │   ├── cli/commands/        Typer CLI commands
+│   ├── clients/             Thin typed HTTP client targeting /v1
 │   ├── config/              Pydantic settings
 │   ├── core/
 │   │   ├── clustering/      Fingerprint grouping, semantic merge, importance scoring
@@ -1088,6 +1102,7 @@ raglogs/
 │   ├── db/                  SQLAlchemy models, session management
 │   └── utils/               Time window parsing, hashing helpers
 ├── migrations/              Alembic migration scripts
+├── clients/                 OpenAPI spec + client codegen docs
 ├── sample_data/             Demo incident logs (deploy, billing, api)
 └── tests/
     ├── unit/                Tests — parsers, normalization, clustering, time

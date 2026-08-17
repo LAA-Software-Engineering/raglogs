@@ -1,16 +1,30 @@
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
+import re
 
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.responses import ORJSONResponse
+from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 
 from src.api.auth.middleware import AuthMiddleware
+from src.api.deprecation import DeprecationHeaderMiddleware
 from src.api.routes import ask, clusters, compare_windows, config, explain, health, ingestions, timeline, ui
+
+_OPENAPI_DESCRIPTION = """Incident explanation API — ask your logs what happened.
+
+Canonical query, ingest, and config routes live under `/v1/`. Unversioned
+`/ingestions`, `/query`, and `/config` paths are deprecated aliases for one
+release and include a `Deprecation: true` header.
+
+Compatibility: additive changes stay in `v1`; breaking changes require `v2`.
+JSON response bodies are unchanged in this release.
+"""
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from src.api.auth.bind_guard import warn_if_insecure_bind
     from src.config import get_settings
     from src.db.session import check_connection
@@ -25,25 +39,57 @@ async def lifespan(app: FastAPI):
     yield
 
 
+def _unique_id(mount_prefix: str) -> Callable[[APIRoute], str]:
+    """Build OpenAPI operationIds that include the mount prefix (v1 vs alias)."""
+    slug = mount_prefix.strip("/").replace("/", "_") or "root"
+
+    def generate(route: APIRoute) -> str:
+        raw = f"{slug}_{route.name}_{route.path_format}"
+        return re.sub(r"\W", "_", raw).strip("_")
+
+    return generate
+
+
 app = FastAPI(
     title="raglogs",
-    description="Incident explanation API — ask your logs what happened.",
+    description=_OPENAPI_DESCRIPTION,
     version="0.1.0",
     default_response_class=ORJSONResponse,
     lifespan=lifespan,
 )
 
+# Last added middleware is outermost: deprecation headers apply even to auth errors.
 app.add_middleware(AuthMiddleware)
+app.add_middleware(DeprecationHeaderMiddleware)
 
 app.include_router(health.router, tags=["health"])
-app.include_router(ingestions.router, prefix="/ingestions", tags=["ingestions"])
-app.include_router(explain.router, prefix="/query", tags=["query"])
-app.include_router(ask.router, prefix="/query", tags=["query"])
-app.include_router(clusters.router, prefix="/query", tags=["query"])
-app.include_router(timeline.router, prefix="/query", tags=["query"])
-app.include_router(compare_windows.router, prefix="/query", tags=["query"])
-app.include_router(config.router, prefix="/config", tags=["config"])
 app.include_router(ui.router, tags=["ui"])
+
+
+def _include_v1_and_alias(router: APIRouter, *, suffix: str, tags: list[str]) -> None:
+    """Mount a router at ``/v1{suffix}`` (canonical) and ``{suffix}`` (deprecated)."""
+    app.include_router(
+        router,
+        prefix=f"/v1{suffix}",
+        tags=tags,
+        generate_unique_id_function=_unique_id(f"v1{suffix}"),
+    )
+    app.include_router(
+        router,
+        prefix=suffix,
+        tags=tags,
+        deprecated=True,
+        generate_unique_id_function=_unique_id(f"legacy{suffix}"),
+    )
+
+
+_include_v1_and_alias(ingestions.router, suffix="/ingestions", tags=["ingestions"])
+_include_v1_and_alias(explain.router, suffix="/query", tags=["query"])
+_include_v1_and_alias(ask.router, suffix="/query", tags=["query"])
+_include_v1_and_alias(clusters.router, suffix="/query", tags=["query"])
+_include_v1_and_alias(timeline.router, suffix="/query", tags=["query"])
+_include_v1_and_alias(compare_windows.router, suffix="/query", tags=["query"])
+_include_v1_and_alias(config.router, suffix="/config", tags=["config"])
 
 app.mount(
     "/static",

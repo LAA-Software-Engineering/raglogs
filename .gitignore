@@ -67,3 +67,7 @@ logs/
 
 # Local data
 data/
+
+# Generated API clients (keep README + thin Python wrapper)
+clients/go/*.go
+clients/python/generated/
