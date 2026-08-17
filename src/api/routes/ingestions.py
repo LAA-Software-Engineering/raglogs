@@ -36,6 +36,7 @@ class IngestRequest(BaseModel):
     from_time: Optional[datetime] = None
     to_time: Optional[datetime] = None
     resume_ingestion_job_id: Optional[str] = None
+    with_embeddings: bool = False
 
     @model_validator(mode="after")
     def _require_paths_for_file_adapter(self):
@@ -165,6 +166,7 @@ def create_ingestion(request: IngestRequest):
         "from_time": request.from_time.isoformat() if request.from_time else None,
         "to_time": request.to_time.isoformat() if request.to_time else None,
         "resume_ingestion_job_id": request.resume_ingestion_job_id,
+        "with_embeddings": request.with_embeddings,
     }
 
     with get_db() as db:

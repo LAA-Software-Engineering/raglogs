@@ -385,6 +385,48 @@ class TestIngestFiles:
         assert job.source_ref == str(log_file)
         assert stats.parsed_count == 1
 
+    def test_with_embeddings_persists_after_flush(self, tmp_path, monkeypatch):
+        log_file = tmp_path / "billing-worker.log"
+        log_file.write_text(
+            '{"message": "ok", "level": "info", "service": "billing"}\n'
+        )
+
+        persisted = []
+
+        def fake_persist(db, entries, provider=None, settings=None):
+            persisted.append(list(entries))
+            return len(entries)
+
+        monkeypatch.setattr(
+            "src.core.ingestion.service.ingest_embeddings_provider",
+            lambda with_embeddings, settings=None: object() if with_embeddings else None,
+        )
+        monkeypatch.setattr(
+            "src.core.ingestion.service.persist_log_embeddings", fake_persist
+        )
+
+        db = _mock_db()
+        job, stats = ingest_files(db=db, paths=[str(tmp_path)], with_embeddings=True)
+
+        assert job.status == "completed"
+        assert stats.parsed_count == 1
+        assert len(persisted) == 1
+        assert persisted[0][0].normalized_message
+
+    def test_with_embeddings_false_does_not_persist(self, tmp_path, monkeypatch):
+        log_file = tmp_path / "app.log"
+        log_file.write_text('{"message": "hello", "level": "info"}\n')
+
+        called = []
+        monkeypatch.setattr(
+            "src.core.ingestion.service.persist_log_embeddings",
+            lambda *a, **k: called.append(True) or 0,
+        )
+
+        db = _mock_db()
+        ingest_files(db=db, paths=[str(tmp_path)], with_embeddings=False)
+        assert called == []
+
     def test_exception_mid_ingest_marks_job_failed(self, tmp_path):
         """
         Regression test: previously an exception mid-loop left job.status stuck at

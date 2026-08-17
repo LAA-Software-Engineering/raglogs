@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     cluster_merge_similarity_threshold: float = 0.92
     cluster_merge_min_count: int = 1
 
+    # Semantic ask (pgvector over stored log_embeddings; keyword fallback otherwise)
+    ask_semantic_top_k: int = 100
+    ask_semantic_min_similarity: float = 0.75
+
     llm_provider: Literal["disabled", "openai", "ollama"] = "disabled"
     llm_model: str = "gpt-4.1-mini"
 

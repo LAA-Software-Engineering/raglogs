@@ -274,7 +274,7 @@ raglogs ingest --adapter k8s ./node-logs.tar.gz
 | `--service` | Default service name when not in logs |
 | `--env` | Default environment |
 | `--format` | `json`, `text`, or `auto` (default) |
-| `--with-embeddings` | Generate vector embeddings (requires embeddings provider) |
+| `--with-embeddings` | Persist pgvector embeddings on `log_embeddings` for semantic `ask` (requires `EMBEDDINGS_PROVIDER`) |
 | `--adapter` | `file` (default), `cloudwatch`, `datadog`, `loki`, or `k8s` |
 | `--param` | Adapter param as `key=value` (repeatable) |
 | `--since` | Window for pull adapters, e.g. `30m`, `1h`, `24h` (default last 1h) |
@@ -556,7 +556,7 @@ Top clusters — 2026-03-12 22:00:00 UTC → 2026-03-12 23:00:00 UTC
 
 ### `raglogs ask`
 
-Answer a natural language question about your logs using structured keyword retrieval.
+Answer a natural language question about your logs. Retrieval is **semantic-first** when embeddings exist and a provider is enabled, then keyword search, then a window-level error/warn fallback.
 
 ```bash
 raglogs ask "why did login fail?"
@@ -564,6 +564,22 @@ raglogs ask "what changed before latency increased?" --since 2h
 raglogs ask "what happened in billing?" --since 1h
 raglogs ask "why are checkouts failing?" --format json
 ```
+
+**How retrieval works**
+
+1. **Semantic** — if `EMBEDDINGS_PROVIDER` is `openai` or `local` *and* log lines were ingested with `--with-embeddings`, the question is embedded and nearest neighbors are fetched from pgvector (`ASK_SEMANTIC_TOP_K`, `ASK_SEMANTIC_MIN_SIMILARITY`). Paraphrases that keyword search would miss (e.g. "why are payments being declined?" vs "Stripe signature verification failed") can still match.
+2. **Keyword** — if embeddings are disabled, the provider errors, or semantic search returns nothing above the similarity threshold, `ask` matches tokens against `normalized_message` as before.
+3. **Fallback** — if keyword search is also empty, the top error/warn lines in the window are used.
+
+Hits are still grouped with `cluster_logs` so answers stay grounded in counts, `first_seen`, and `last_seen`. JSON output includes `retrieval_mode` (`semantic` | `keyword` | `fallback`). Default `EMBEDDINGS_PROVIDER=disabled` keeps `ask` fully keyword-based — no API key required.
+
+Populate vectors at ingest time:
+
+```bash
+raglogs ingest ./logs --with-embeddings
+```
+
+Vectors are stored in `log_embeddings` (1536-d). If `EMBEDDINGS_DIMENSIONS` is not 1536, persist is skipped so the schema stays valid. Provider failures during ingest are skipped; the log lines still land.
 
 **Example output**
 
@@ -579,8 +595,6 @@ Evidence:
 
 Total matching log events: 184
 ```
-
-Note: `ask` uses structured keyword retrieval, not semantic search. It works without an embeddings provider. Semantic retrieval via pgvector is planned for a future release.
 
 ---
 
@@ -628,11 +642,13 @@ All settings are read from `.env`, environment variables, or CLI flags. Priority
 | `OPENAI_API_KEY` | _(empty)_ | API key for OpenAI or compatible endpoint |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Base URL for OpenAI-compatible API |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
-| `EMBEDDINGS_PROVIDER` | `disabled` | `disabled`, `openai`, `local`. Semantic cluster merge is skipped when `disabled` |
+| `EMBEDDINGS_PROVIDER` | `disabled` | `disabled`, `openai`, `local`. Cluster merge and semantic `ask` are skipped when `disabled` |
 | `EMBEDDINGS_MODEL` | `text-embedding-3-small` | Embeddings model name |
-| `EMBEDDINGS_DIMENSIONS` | `1536` | Vector size passed to the OpenAI embeddings API |
+| `EMBEDDINGS_DIMENSIONS` | `1536` | Vector size passed to the OpenAI embeddings API. Persist/ask skip unless this is 1536 (stored column width) |
 | `CLUSTER_MERGE_SIMILARITY_THRESHOLD` | `0.92` | Cosine similarity at or above which fingerprint clusters merge. High on purpose so distinct errors stay separate |
 | `CLUSTER_MERGE_MIN_COUNT` | `1` | Minimum `count` for a cluster to participate in a merge |
+| `ASK_SEMANTIC_TOP_K` | `100` | Max log lines returned by semantic `ask` |
+| `ASK_SEMANTIC_MIN_SIMILARITY` | `0.75` | Minimum cosine similarity for a semantic `ask` hit. Looser than cluster-merge because questions paraphrase |
 | `DEFAULT_BASELINE_WINDOW` | `24h` | How far back to compare for baseline |
 | `MAX_CLUSTERS_FOR_EXPLAIN` | `10` | Max clusters sent to the explain pipeline |
 | `MAX_EVIDENCE_ITEMS` | `8` | Max evidence lines in output |
@@ -790,7 +806,7 @@ Fingerprinting can still split one incident across multiple clusters when wordin
 - **Disabled (default).** `EMBEDDINGS_PROVIDER=disabled` skips the merge pass entirely. Clustering is fingerprint-only and deterministic — the same logs always produce the same clusters.
 - **Enabled.** With `openai` or `local`, representatives are embedded at analysis time (in memory; not written to pgvector). Pairs with cosine similarity ≥ `CLUSTER_MERGE_SIMILARITY_THRESHOLD` (default **0.92**) are merged via connected components. Merged `count` is the sum of member counts; services and levels are summed; `first_seen` is the earliest timestamp and `last_seen` the latest; importance is recomputed. The canonical fingerprint is the member with the highest importance score. `ClusterRun.algorithm` is `fingerprint+semantic` when embeddings were used, even if no pair crossed the threshold.
 - **Fail open.** If the embeddings backend is missing, raises, or returns unusable vectors, clustering continues with the fingerprint-only set.
-- **Not in this release.** Semantic `ask` and similar-incident search over historical clusters remain separate work. Compare still applies its own heuristic collapse for webhook retries / queue growth after clustering.
+- **Ask vs merge.** Semantic `ask` uses the *stored* `log_embeddings` table (populated by `raglogs ingest --with-embeddings`) and `ASK_SEMANTIC_MIN_SIMILARITY` (default **0.75**). Cluster merge still uses its own in-memory pass and threshold. Similar-incident search (`POST /query/similar` / historical cluster ANN) is not in this release. Compare still applies its own heuristic collapse for webhook retries / queue growth after clustering.
 
 Local embeddings require the optional extra: `pip install 'raglogs[local-embeddings]'` (`sentence-transformers`). If that import fails, merge is skipped.
 
@@ -989,13 +1005,13 @@ raglogs/
 │   ├── core/
 │   │   ├── clustering/      Fingerprint grouping, semantic merge, importance scoring
 │   │   ├── compare/         Window diffing — new, disappeared, increased, decreased
-│   │   ├── embeddings/      Provider abstraction (OpenAI, local, disabled)
+│   │   ├── embeddings/      Provider abstraction + ingest persist helper
 │   │   ├── explain/         Evidence assembly, templates, confidence, summarizer
 │   │   ├── ingestion/       Ingestion orchestration and batch persistence
 │   │   ├── llm/             Provider abstraction (OpenAI, Ollama, noop)
 │   │   ├── normalization/   Message normalization, fingerprinting, trigger patterns
 │   │   ├── parsing/         JSON and text parsers, field extractors, timestamps
-│   │   ├── retrieval/       Keyword-based question answering
+│   │   ├── retrieval/       Semantic + keyword question answering
 │   │   └── timeline/        Causal timeline reconstruction
 │   ├── db/                  SQLAlchemy models, session management
 │   └── utils/               Time window parsing, hashing helpers

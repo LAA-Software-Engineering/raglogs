@@ -107,3 +107,5 @@ def test_settings_merge_defaults() -> None:
     assert settings.cluster_merge_similarity_threshold == 0.92
     assert settings.cluster_merge_min_count == 1
     assert settings.embeddings_provider == "disabled"
+    assert settings.ask_semantic_top_k == 100
+    assert settings.ask_semantic_min_similarity == 0.75

@@ -2,7 +2,7 @@ from typing import List, Optional
 
 import typer
 from rich.console import Console
-from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
 console = Console()
@@ -23,7 +23,11 @@ def ingest_cmd(
     service: Optional[str] = typer.Option(None, "--service", help="Default service name"),
     env: Optional[str] = typer.Option(None, "--env", help="Default environment"),
     fmt: str = typer.Option("auto", "--format", help="Log format: json|text|auto"),
-    with_embeddings: bool = typer.Option(False, "--with-embeddings/--no-embeddings", help="Generate embeddings"),
+    with_embeddings: bool = typer.Option(
+        False,
+        "--with-embeddings/--no-embeddings",
+        help="Persist pgvector embeddings for semantic ask (requires EMBEDDINGS_PROVIDER)",
+    ),
     adapter: str = typer.Option(
         "file", "--adapter", help="Source adapter: file|cloudwatch|datadog|loki|k8s"
     ),
@@ -43,6 +47,15 @@ def ingest_cmd(
         console.print(f"  Adapter: {adapter}")
         if adapter in ("k8s", "kubernetes") and paths:
             console.print(f"  Paths: {', '.join(paths[:3])}{'...' if len(paths) > 3 else ''}")
+
+    if with_embeddings:
+        from src.config import get_settings
+
+        if get_settings().embeddings_provider == "disabled":
+            console.print(
+                "[yellow]Warning:[/yellow] --with-embeddings requested but "
+                "EMBEDDINGS_PROVIDER=disabled; ingesting without embeddings."
+            )
 
     with Progress(
         SpinnerColumn(),
@@ -70,6 +83,7 @@ def ingest_cmd(
                         default_env=env,
                         fmt=fmt,
                         progress_callback=on_progress,
+                        with_embeddings=with_embeddings,
                     )
                 else:
                     import uuid
@@ -117,6 +131,7 @@ def ingest_cmd(
                         resume_cursors=resume_cursors,
                         resume_completed_streams=resume_completed_streams,
                         progress_callback=on_progress,
+                        with_embeddings=with_embeddings,
                     )
                 job_id = str(job.id)  # read inside session before it closes
         except ValueError as e:

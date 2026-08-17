@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 
 from src.adapters.base import SourceSpec, TimeWindow
 from src.adapters.file.adapter import detect_format, discover_files, read_lines
+from src.core.embeddings.provider import EmbeddingsProvider
+from src.core.embeddings.store import ingest_embeddings_provider, persist_log_embeddings
 from src.core.errors import AdapterUnavailableError
 from src.core.normalization.fingerprint import fingerprint_message
 from src.core.parsing.json_parser import ParsedLogLine, parse_json_line
@@ -125,6 +127,21 @@ def _process_line(
     return entry
 
 
+def _flush_log_batch(
+    db: Session,
+    batch: list[LogEntry],
+    embedder: Optional[EmbeddingsProvider],
+) -> None:
+    """Persist a batch of log entries, then optionally their embeddings."""
+    if not batch:
+        return
+    db.bulk_save_objects(batch)
+    db.flush()
+    if embedder is not None:
+        persist_log_embeddings(db, batch, provider=embedder)
+    batch.clear()
+
+
 def ingest_files(
     db: Session,
     paths: list[str],
@@ -134,15 +151,21 @@ def ingest_files(
     default_env: Optional[str] = None,
     fmt: str = "auto",
     progress_callback: Optional[Callable[[int, int], None]] = None,
+    with_embeddings: bool = False,
 ) -> tuple[IngestionJob, IngestionStats]:
     """
     Main ingestion entry point for local files. Discovers, parses, and persists log files.
     Returns the completed IngestionJob and stats.
+
+    When ``with_embeddings`` is True and an embeddings provider is available,
+    each flushed batch is also written to ``log_embeddings``. Provider errors
+    are skipped so ingest still succeeds.
     """
     import time
 
     start_time = time.time()
     stats = IngestionStats()
+    embedder = ingest_embeddings_provider(with_embeddings)
 
     # Discover files
     files = discover_files(paths, recursive=recursive)
@@ -194,16 +217,13 @@ def ingest_files(
                 batch.append(entry)
 
                 if len(batch) >= BATCH_SIZE:
-                    db.bulk_save_objects(batch)
-                    db.flush()
-                    batch.clear()
+                    _flush_log_batch(db, batch, embedder)
 
                     if progress_callback:
                         progress_callback(stats.lines_read, stats.parsed_count)
 
         if batch:
-            db.bulk_save_objects(batch)
-            db.flush()
+            _flush_log_batch(db, batch, embedder)
 
         stats.duration_seconds = time.time() - start_time
 
@@ -235,11 +255,14 @@ def ingest_from_source(
     resume_cursors: Optional[dict[str, Optional[str]]] = None,
     resume_completed_streams: Optional[Iterable[str]] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
+    with_embeddings: bool = False,
 ) -> tuple[IngestionJob, IngestionStats]:
     """
     Adapter-driven ingestion entry point (e.g. CloudWatch, Loki). Discovers streams via the
     configured SourceAdapter, reads raw lines within `window`, and persists them through
     the same parse -> fingerprint -> LogEntry pipeline as ingest_files.
+    When ``with_embeddings`` is True, flushed batches are also embedded into
+    ``log_embeddings`` (fail-open on provider errors).
 
     Streams that raise AdapterUnavailableError mid-read are skipped (their LogStreamRef
     cursor is saved on the job for a resumable retry) rather than aborting the whole run,
@@ -263,6 +286,7 @@ def ingest_from_source(
 
     start_time = time.time()
     stats = IngestionStats()
+    embedder = ingest_embeddings_provider(with_embeddings)
 
     adapter = get_adapter(spec.adapter, get_settings())
 
@@ -338,9 +362,7 @@ def ingest_from_source(
                     batch.append(entry)
 
                     if len(batch) >= BATCH_SIZE:
-                        db.bulk_save_objects(batch)
-                        db.flush()
-                        batch.clear()
+                        _flush_log_batch(db, batch, embedder)
 
                         if progress_callback:
                             progress_callback(stats.lines_read, stats.parsed_count)
@@ -357,8 +379,7 @@ def ingest_from_source(
             raise AdapterUnavailableError("; ".join(adapter_errors))
 
         if batch:
-            db.bulk_save_objects(batch)
-            db.flush()
+            _flush_log_batch(db, batch, embedder)
 
         stats.duration_seconds = time.time() - start_time
 

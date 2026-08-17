@@ -35,12 +35,13 @@ raglogs compare --since 2h --baseline 24h
 src/core/
   clustering/     Fingerprint grouping, importance scoring, baseline comparison
   compare/        Window diffing — new, disappeared, increased, decreased
+  embeddings/     Provider abstraction + ingest persist (OpenAI, local, disabled)
   explain/        Evidence assembly, confidence, templates, summarizer
   ingestion/      Ingestion orchestration and batch persistence
   llm/            Provider abstraction (OpenAI, Ollama, noop)
   normalization/  Message normalization, fingerprinting, trigger patterns
   parsing/        JSON and text parsers, field alias resolution
-  retrieval/      Keyword-based question answering
+  retrieval/      Semantic + keyword question answering
   timeline/       Causal timeline reconstruction
 src/cli/commands/ One file per CLI command
 src/api/routes/   FastAPI route handlers

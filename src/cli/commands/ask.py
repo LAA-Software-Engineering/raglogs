@@ -59,9 +59,11 @@ def ask_cmd(
             "evidence": result.evidence_items,
             "clusters": result.clusters_used,
             "total_matches": result.total_matches,
+            "retrieval_mode": result.retrieval_mode,
         }
         console.print_json(json.dumps(output))
     else:
         console.print()
-        console.print(Panel(result.answer_text, title=f"[bold cyan]raglogs ask[/bold cyan]", expand=False))
+        console.print(Panel(result.answer_text, title="[bold cyan]raglogs ask[/bold cyan]", expand=False))
+        console.print(f"[dim]retrieval: {result.retrieval_mode}[/dim]")
         console.print()

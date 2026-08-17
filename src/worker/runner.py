@@ -57,6 +57,7 @@ def run_ingest_job(db, worker_job) -> dict:
             default_service=payload.get("service"),
             default_env=payload.get("env"),
             fmt=payload.get("format", "auto"),
+            with_embeddings=payload.get("with_embeddings", False),
         )
     else:
         import uuid
@@ -111,6 +112,7 @@ def run_ingest_job(db, worker_job) -> dict:
             fmt=payload.get("format", "auto"),
             resume_cursors=resume_cursors,
             resume_completed_streams=resume_completed_streams,
+            with_embeddings=payload.get("with_embeddings", False),
         )
 
     # Link worker job → ingestion job

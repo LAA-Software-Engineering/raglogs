@@ -3,25 +3,34 @@ Natural language question answering over ingested logs.
 
 Pipeline:
   1. Extract keywords + infer level bias from the question
-  2. Search logs by keyword match on normalized_message
-  3. If keyword search yields nothing, fall back to the top clusters in the
-     window — the question may use terms not literally present in log text
+  2. If an embeddings provider is available, embed the question and retrieve
+     nearest log lines from pgvector (cosine similarity)
+  3. If semantic search is disabled, errors, or returns nothing, search logs
+     by keyword match on normalized_message
+  4. If keyword search yields nothing, fall back to the top error/warn clusters
+     in the window — the question may use terms not literally present in log text
      (e.g. "why did login fail?" when the logs say "auth token invalid")
-  4. Assemble an evidence dict from matching clusters
-  5. Call the LLM provider with that evidence (if configured)
-  6. Fall back to a deterministic text answer when LLM is disabled
+  5. Assemble an evidence dict from matching clusters
+  6. Call the LLM provider with that evidence (if configured)
+  7. Fall back to a deterministic text answer when LLM is disabled
 """
 import re
 import uuid
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import or_, select
+import structlog
+from sqlalchemy import Select, or_, select
 from sqlalchemy.orm import Session
 
-from src.db.models import LogEntry
+from src.config.settings import Settings
+from src.core.embeddings.provider import get_embeddings_provider
+from src.core.embeddings.store import STORED_EMBEDDING_DIMS
+from src.db.models import LogEmbedding, LogEntry
+
+log = structlog.get_logger()
 
 
 LEVEL_KEYWORDS = {
@@ -57,6 +66,7 @@ class AskResult:
     clusters_used: list[dict]
     total_matches: int
     mode: str = "rules"  # "rules" | "llm"
+    retrieval_mode: str = "keyword"  # "semantic" | "keyword" | "fallback"
 
 
 def extract_keywords(question: str) -> list[str]:
@@ -70,6 +80,28 @@ def infer_level_bias(question: str) -> Optional[str]:
         if any(kw in q for kw in kws):
             return level
     return None
+
+
+def _filter_log_entries(
+    q: Select,
+    window_start: Optional[datetime],
+    window_end: Optional[datetime],
+    service: Optional[str],
+    level_bias: Optional[str],
+    ingestion_job_id: Optional[uuid.UUID],
+) -> Select:
+    """Apply the shared window / service / level / job filters used by ask search."""
+    if window_start:
+        q = q.where(LogEntry.timestamp >= window_start)
+    if window_end:
+        q = q.where(LogEntry.timestamp <= window_end)
+    if service:
+        q = q.where(LogEntry.service == service)
+    if level_bias:
+        q = q.where(LogEntry.level == level_bias)
+    if ingestion_job_id:
+        q = q.where(LogEntry.ingestion_job_id == ingestion_job_id)
+    return q
 
 
 def search_logs(
@@ -88,18 +120,39 @@ def search_logs(
         conditions = [LogEntry.normalized_message.ilike(f"%{kw}%") for kw in keywords[:6]]
         q = q.where(or_(*conditions))
 
-    if window_start:
-        q = q.where(LogEntry.timestamp >= window_start)
-    if window_end:
-        q = q.where(LogEntry.timestamp <= window_end)
-    if service:
-        q = q.where(LogEntry.service == service)
-    if level_bias:
-        q = q.where(LogEntry.level == level_bias)
-    if ingestion_job_id:
-        q = q.where(LogEntry.ingestion_job_id == ingestion_job_id)
-
+    q = _filter_log_entries(q, window_start, window_end, service, level_bias, ingestion_job_id)
     q = q.order_by(LogEntry.timestamp.desc()).limit(limit)
+    return list(db.execute(q).scalars().all())
+
+
+def search_logs_semantic(
+    db: Session,
+    query_vector: list[float],
+    window_start: Optional[datetime],
+    window_end: Optional[datetime],
+    service: Optional[str],
+    level_bias: Optional[str],
+    limit: int = 100,
+    ingestion_job_id: Optional[uuid.UUID] = None,
+    min_similarity: float = 0.75,
+) -> list[LogEntry]:
+    """Nearest-neighbor log lines via pgvector cosine similarity.
+
+    ``query_vector`` is bound as a parameter (never string-interpolated).
+    Hits below ``min_similarity`` (``1 - cosine_distance``) are excluded.
+    """
+    if not query_vector or len(query_vector) != STORED_EMBEDDING_DIMS:
+        return []
+
+    distance = LogEmbedding.embedding.cosine_distance(query_vector)
+    similarity = 1 - distance
+    q = (
+        select(LogEntry)
+        .join(LogEmbedding, LogEmbedding.log_entry_id == LogEntry.id)
+        .where(similarity >= min_similarity)
+    )
+    q = _filter_log_entries(q, window_start, window_end, service, level_bias, ingestion_job_id)
+    q = q.order_by(distance.asc()).limit(limit)
     return list(db.execute(q).scalars().all())
 
 
@@ -162,15 +215,15 @@ def _rules_answer(question: str, clusters: list[dict], total: int) -> str:
     svc = ", ".join(top["services"]) if top["services"] else "unknown service"
     lines = [
         f"The most likely related issue: {top['message']}",
-        f"",
+        "",
         f"Observed {top['count']} times in {svc}.",
-        f"",
-        f"Supporting evidence:",
+        "",
+        "Supporting evidence:",
     ]
     for c in clusters:
         svc_label = ", ".join(c["services"]) if c["services"] else "unknown"
         lines.append(f"- {c['count']}x '{c['message'][:80]}' in {svc_label}")
-    lines.append(f"")
+    lines.append("")
     lines.append(f"Total matching log events: {total}")
     return "\n".join(lines)
 
@@ -195,30 +248,29 @@ def answer_question(
     keywords = extract_keywords(question)
     level_bias = infer_level_bias(question)
 
-    # 1. Keyword search
-    matching = search_logs(
-        db, keywords, window_start, window_end, service, level_bias,
+    matching, retrieval_mode = _retrieve_matching_logs(
+        db,
+        question=question,
+        keywords=keywords,
+        window_start=window_start,
+        window_end=window_end,
+        service=service,
+        level_bias=level_bias,
         ingestion_job_id=ingestion_job_id,
+        settings=settings,
     )
-
-    # 2. Fallback: if nothing matched, use all error/warn logs in the window.
-    #    The user's terminology may not match log text literally.
-    used_fallback = False
-    if not matching:
-        matching = fetch_fallback_clusters(
-            db, window_start, window_end, service, level_bias,
-            ingestion_job_id=ingestion_job_id,
-        )
-        used_fallback = True
 
     if not matching:
         return AskResult(
             question=question,
-            answer_text=f"No log activity found in the requested window. "
-                        f"Try a wider time range with --since.",
+            answer_text=(
+                "No log activity found in the requested window. "
+                "Try a wider time range with --since."
+            ),
             evidence_items=["No logs found in window"],
             clusters_used=[],
             total_matches=0,
+            retrieval_mode=retrieval_mode,
         )
 
     clusters = cluster_logs(matching)
@@ -236,8 +288,9 @@ def answer_question(
         },
         "note": (
             "Keyword search found no direct matches; showing most significant "
-            "error/warn patterns in the window." if used_fallback else None
+            "error/warn patterns in the window." if retrieval_mode == "fallback" else None
         ),
+        "retrieval_mode": retrieval_mode,
         "clusters": clusters,
         "total_matching_logs": len(matching),
     }
@@ -249,14 +302,6 @@ def answer_question(
     llm = build_llm_provider(settings)
     if not isinstance(llm, NoopLLMProvider):
         try:
-            import json
-            import httpx
-            user_msg = (
-                f"Question: {question}\n\n"
-                f"Log evidence:\n{json.dumps(evidence_packet, default=str, indent=2)}"
-            )
-            # Re-use the provider's HTTP client but with the ask-specific system prompt
-            # by calling the provider directly with a custom prompt structure
             answer_text = _call_llm_ask(llm, question, evidence_packet)
             if answer_text:
                 mode = "llm"
@@ -273,7 +318,62 @@ def answer_question(
         clusters_used=clusters,
         total_matches=len(matching),
         mode=mode,
+        retrieval_mode=retrieval_mode,
     )
+
+
+def _retrieve_matching_logs(
+    db: Session,
+    *,
+    question: str,
+    keywords: list[str],
+    window_start: Optional[datetime],
+    window_end: Optional[datetime],
+    service: Optional[str],
+    level_bias: Optional[str],
+    ingestion_job_id: Optional[uuid.UUID],
+    settings: Settings,
+) -> tuple[list[LogEntry], str]:
+    """Semantic-first retrieval, then keyword, then error/warn fallback.
+
+    Returns ``(entries, retrieval_mode)`` where mode is semantic, keyword,
+    or fallback. Provider errors and empty semantic hits fall through; they
+    never raise to the caller.
+    """
+    provider = get_embeddings_provider(settings)
+    if provider.is_available():
+        try:
+            vectors = provider.embed_texts([question])
+            query_vector = vectors[0] if vectors else []
+            if query_vector:
+                semantic_hits = search_logs_semantic(
+                    db,
+                    query_vector,
+                    window_start,
+                    window_end,
+                    service,
+                    level_bias,
+                    limit=settings.ask_semantic_top_k,
+                    ingestion_job_id=ingestion_job_id,
+                    min_similarity=settings.ask_semantic_min_similarity,
+                )
+                if semantic_hits:
+                    return semantic_hits, "semantic"
+        except Exception:
+            log.warning("ask_semantic_retrieval_failed", exc_info=True)
+
+    matching = search_logs(
+        db, keywords, window_start, window_end, service, level_bias,
+        ingestion_job_id=ingestion_job_id,
+    )
+    if matching:
+        return matching, "keyword"
+
+    matching = fetch_fallback_clusters(
+        db, window_start, window_end, service, level_bias,
+        ingestion_job_id=ingestion_job_id,
+    )
+    return matching, "fallback"
 
 
 def _call_llm_ask(llm, question: str, evidence_packet: dict) -> str:
