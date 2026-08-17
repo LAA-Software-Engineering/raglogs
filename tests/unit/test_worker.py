@@ -5,8 +5,7 @@ Uses unittest.mock to avoid requiring a real database. Tests the
 claim/dispatch/failure state machine without I/O.
 """
 import pytest
-from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 from src.worker.runner import claim_next_job, process_one
 
@@ -112,7 +111,7 @@ class TestProcessOne:
             "error_count": 2,
             "services_detected": ["billing-worker"],
             "duration_seconds": 0.5,
-        }) as mock_run:
+        }):
             result = process_one(db)
 
         assert result is True
@@ -297,6 +296,32 @@ class TestProcessOne:
         assert result is True
         assert job.status == "failed"
         assert "00000000-0000-0000-0000-000000000000" in job.error
+        mock_ingest.assert_not_called()
+
+    def test_resume_job_in_other_scope_fails_the_worker_job(self):
+        """resume_ingestion_job_id must belong to the same isolation scope."""
+        db = _mock_db()
+        job = _mock_worker_job(payload={
+            "adapter": "cloudwatch",
+            "params": {"log_group": "/aws/lambda/x"},
+            "service": None,
+            "env": None,
+            "source_name": None,
+            "format": "auto",
+            "scope": "incident:B",
+            "resume_ingestion_job_id": "11111111-1111-1111-1111-111111111111",
+        })
+        db.execute.return_value.scalar_one_or_none.return_value = job
+        prior = MagicMock()
+        prior.scope = "incident:A"
+        db.query.return_value.filter.return_value.first.return_value = prior
+
+        with patch("src.core.ingestion.service.ingest_from_source") as mock_ingest:
+            result = process_one(db)
+
+        assert result is True
+        assert job.status == "failed"
+        assert "different scope" in job.error
         mock_ingest.assert_not_called()
 
     def test_unknown_job_type_fails_gracefully(self):

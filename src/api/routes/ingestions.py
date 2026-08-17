@@ -273,14 +273,6 @@ def _scope_from_request(http_request: Request) -> str:
     return str(_callback_meta_from_request(http_request).get("scope") or "default")
 
 
-def _job_matches_scope(job: Any, scope: str) -> bool:
-    """True when ``job.scope`` is this scope, or is not a real string (unit mocks)."""
-    value = getattr(job, "scope", None)
-    if not isinstance(value, str) or not value.strip():
-        return True
-    return value.strip() == scope
-
-
 def _payload_scope(payload: Any, fallback: str = "default") -> str:
     if not isinstance(payload, dict):
         return fallback
@@ -288,6 +280,51 @@ def _payload_scope(payload: Any, fallback: str = "default") -> str:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return fallback
+
+
+def _column_scope(job: Any, fallback: str = "default") -> str:
+    value = getattr(job, "scope", None)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return fallback
+
+
+def _scope_of_idempotency_row(db: Any, row: Any) -> str:
+    """Scope of the job this Idempotency-Key is bound to (payload or column)."""
+    worker_job_id = getattr(row, "worker_job_id", None)
+    if worker_job_id is not None:
+        from src.db.models import WorkerJob
+
+        job = db.query(WorkerJob).filter(WorkerJob.id == worker_job_id).first()
+        if job is not None:
+            return _payload_scope(getattr(job, "payload_json", None))
+
+    ingestion_job_id = getattr(row, "ingestion_job_id", None)
+    if ingestion_job_id is not None:
+        from src.db.models import IngestionJob
+
+        job = db.query(IngestionJob).filter(IngestionJob.id == ingestion_job_id).first()
+        if job is not None:
+            column = _column_scope(job, fallback="")
+            if column:
+                return column
+            meta = getattr(job, "metadata_json", None)
+            if isinstance(meta, dict):
+                return _payload_scope(meta)
+    return "default"
+
+
+def _idempotency_scope_conflict() -> JSONResponse:
+    return JSONResponse(
+        status_code=409,
+        content={
+            "error_code": "IDEMPOTENCY_SCOPE_CONFLICT",
+            "message": (
+                "Idempotency-Key is already bound to a different scope; "
+                "use a distinct key or wait for the original mapping to expire."
+            ),
+        },
+    )
 
 
 def _enqueued_from_idempotency(row: Any) -> EnqueuedResponse:
@@ -309,7 +346,9 @@ def _enqueued_from_idempotency(row: Any) -> EnqueuedResponse:
     )
 
 
-def _replay_if_active(db: Any, key: Optional[str]) -> Optional[EnqueuedResponse]:
+def _replay_if_active(
+    db: Any, key: Optional[str], scope: str
+) -> Optional[EnqueuedResponse | JSONResponse]:
     if not key:
         return None
     from datetime import datetime, timezone
@@ -319,6 +358,8 @@ def _replay_if_active(db: Any, key: Optional[str]) -> Optional[EnqueuedResponse]
     row = lookup_active_key(db, key, datetime.now(tz=timezone.utc))
     if row is None:
         return None
+    if _scope_of_idempotency_row(db, row) != scope:
+        return _idempotency_scope_conflict()
     import structlog
 
     structlog.get_logger().info(
@@ -336,7 +377,8 @@ def _bind_idempotency_key(
     worker_job_id: Optional[uuid.UUID],
     ingestion_job_id: Optional[uuid.UUID],
     mode: str,
-) -> Optional[EnqueuedResponse]:
+    scope: str,
+) -> Optional[EnqueuedResponse | JSONResponse]:
     """Persist the key mapping. Returns a replay response on unique-key race."""
     if not key:
         return None
@@ -356,6 +398,8 @@ def _bind_idempotency_key(
         ttl_seconds=settings.ingest_idempotency_ttl_seconds,
     )
     if is_replay:
+        if _scope_of_idempotency_row(db, _row) != scope:
+            return _idempotency_scope_conflict()
         return _enqueued_from_idempotency(_row)
     return None
 
@@ -419,8 +463,12 @@ def _apply_tail_action(
 
     ij_uuid = _parse_ingestion_job_id(ingestion_job_id)
     with get_db() as db:
-        job = db.query(IngestionJob).filter(IngestionJob.id == ij_uuid).first()
-        if not job or not _job_matches_scope(job, scope):
+        job = (
+            db.query(IngestionJob)
+            .filter(IngestionJob.id == ij_uuid, IngestionJob.scope == scope)
+            .first()
+        )
+        if not job:
             raise HTTPException(status_code=404, detail="Ingestion job not found")
         try:
             job.status = apply_tail_lifecycle(job.mode, job.status, action)
@@ -476,7 +524,7 @@ def create_ingestion(
     from src.db.models import WorkerJob
     from src.db.session import get_db
 
-    bind_request_scope(http_request, request.scope)
+    resolved = bind_request_scope(http_request, request.scope)
 
     try:
         parsed_key = parse_idempotency_key(idempotency_key)
@@ -498,7 +546,7 @@ def create_ingestion(
     callback_meta = _callback_meta_from_request(http_request)
 
     with get_db() as db:
-        replayed = _replay_if_active(db, parsed_key)
+        replayed = _replay_if_active(db, parsed_key, resolved)
         if replayed is not None:
             return replayed
 
@@ -518,6 +566,7 @@ def create_ingestion(
                 if response.ingestion_job_id
                 else None,
                 mode="tail",
+                scope=resolved,
             )
             if race is not None:
                 from src.db.models import IngestionJob
@@ -550,6 +599,7 @@ def create_ingestion(
             worker_job_id=job.id,
             ingestion_job_id=None,
             mode="batch",
+            scope=resolved,
         )
         if race is not None:
             db.delete(job)
@@ -750,8 +800,12 @@ def get_ingestion_detail(ingestion_job_id: str, http_request: Request):
     ij_uuid = _parse_ingestion_job_id(ingestion_job_id)
 
     with get_db() as db:
-        job = db.query(IngestionJob).filter(IngestionJob.id == ij_uuid).first()
-        if not job or not _job_matches_scope(job, scope):
+        job = (
+            db.query(IngestionJob)
+            .filter(IngestionJob.id == ij_uuid, IngestionJob.scope == scope)
+            .first()
+        )
+        if not job:
             raise HTTPException(status_code=404, detail="Ingestion job not found")
 
         polled = getattr(job, "last_polled_at", None)

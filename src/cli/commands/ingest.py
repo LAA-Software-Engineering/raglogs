@@ -113,6 +113,15 @@ def ingest_cmd(
                         prior = db.query(IngestionJob).filter(IngestionJob.id == uuid.UUID(resume_job)).first()
                         if prior is None:
                             raise ValueError(f"No ingestion job found with id {resume_job}")
+                        prior_scope = getattr(prior, "scope", None)
+                        if (
+                            isinstance(prior_scope, str)
+                            and prior_scope.strip()
+                            and prior_scope.strip() != scope
+                        ):
+                            raise ValueError(
+                                f"Ingestion job {resume_job} is in a different scope"
+                            )
                         resume_cursors = (prior.metadata_json or {}).get("cursors")
                         resume_completed_streams = (prior.metadata_json or {}).get("completed_streams")
 

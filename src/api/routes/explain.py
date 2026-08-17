@@ -3,7 +3,7 @@ Explain API route with caching.
 
 POST /query/explain
   - optional ingestion_job_id scopes analysis to a specific ingest
-  - caches results in the explanations table keyed on (window, service, env, ingestion_job_id)
+  - caches results in the explanations table keyed on (window, service, env, ingestion_job_id, scope)
   - returns cached result on repeated calls for the same window+filters
 """
 from __future__ import annotations
