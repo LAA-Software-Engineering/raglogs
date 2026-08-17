@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     # Worker
     worker_poll_interval: int = 2  # seconds between idle polls
 
+    # Data retention (G13). Duration strings like 30d / 180d. 0, empty, or
+    # "off" disables that tier. Per-scope overrides live in scope_retention.
+    retention_raw: str = "30d"
+    retention_summary: str = "180d"
+    purge_interval_seconds: int = 3600
+    purge_chunk_size: int = 1000
+
     # Ingest backpressure (G9) and push/tail (G4). Tail ticks skip when the
     # pending worker queue is at ingest_queue_max.
     ingest_queue_max: int = 100

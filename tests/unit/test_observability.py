@@ -89,6 +89,7 @@ def test_metrics_returns_prometheus_text() -> None:
         "raglogs_llm_fallback_total",
         "raglogs_llm_breaker_state",
         "raglogs_cluster_count",
+        "raglogs_purge_rows_total",
     ):
         assert name in body, f"missing metric {name}"
 

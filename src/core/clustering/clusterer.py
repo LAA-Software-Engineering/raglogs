@@ -117,7 +117,13 @@ def _run_clustering(
 
     if not rows:
         cluster_run = _create_cluster_run(
-            db, window_start, window_end, service, environment, save=save_to_db
+            db,
+            window_start,
+            window_end,
+            service,
+            environment,
+            save=save_to_db,
+            scope=scope,
         )
         return cluster_run, []
 
@@ -222,6 +228,7 @@ def _run_clustering(
         environment,
         save=save_to_db,
         algorithm=algorithm,
+        scope=scope,
     )
 
     if save_to_db:
@@ -259,6 +266,7 @@ def _create_cluster_run(
     environment: Optional[str],
     save: bool = True,
     algorithm: str = "fingerprint",
+    scope: str = DEFAULT_LOG_SCOPE,
 ) -> ClusterRun:
     run = ClusterRun(
         id=uuid.uuid4(),
@@ -268,6 +276,7 @@ def _create_cluster_run(
         environment_filter=environment,
         algorithm=algorithm,
         status="completed",
+        scope=scope or DEFAULT_LOG_SCOPE,
     )
     if save:
         db.add(run)

@@ -631,6 +631,20 @@ raglogs config llm_provider
 
 ---
 
+### `raglogs purge`
+
+Expire raw log rows (and cascaded log-line embeddings / cluster membership) while keeping cluster summaries and `cluster_embeddings` so `POST /v1/query/similar` still works. After `RETENTION_SUMMARY` those summaries expire too. Per-scope TTLs override env defaults via the `scope_retention` table; missing override → `RETENTION_RAW` / `RETENTION_SUMMARY`. `0`, empty, or `off` skips that tier.
+
+The background worker (`raglogs worker`) also enqueues a purge job on idle poll about every `PURGE_INTERVAL_SECONDS` (default 3600). Purge uses `SELECT FOR UPDATE SKIP LOCKED` like ingest and deletes in `created_at`-ordered chunks (time-in-store) so ingest is not starved. Raw expiry uses `log_entries.created_at`, not the event timestamp, so historical dumps are not wiped on ingest.
+
+```bash
+raglogs purge              # every scope with data
+raglogs purge --scope default
+raglogs purge --dry-run    # count only
+```
+
+---
+
 ### `raglogs keys`
 
 Mint, list, and revoke HTTP API keys. The API bearer token is printed **once** at create time and is never stored or logged — only an argon2 hash and a short prefix are kept. A separate **webhook signing secret** (`whsec_…`) is also printed once; it is stored server-side so ingest completion callbacks can be HMAC-signed. It is not the bearer token. `raglogs keys list` shows `whsec_****` when a signing secret exists (legacy keys minted before this column fall back to `WEBHOOK_SECRET`).
@@ -707,6 +721,10 @@ All settings are read from `.env`, environment variables, or CLI flags. Priority
 | `WEBHOOK_MAX_RETRIES` | `5` | Extra webhook POST attempts after the first (6 POSTs by default) on 5xx / 429 / connect errors |
 | `WEBHOOK_TIMEOUT` | `10` | Per-attempt HTTP timeout in seconds for completion callbacks |
 | `INGEST_IDEMPOTENCY_TTL_SECONDS` | `86400` | How long `Idempotency-Key` on `POST /v1/ingestions` is remembered (batch enqueue and tail create) |
+| `RETENTION_RAW` | `30d` | How long to keep raw `log_entries` measured by `created_at` (time-in-store; cascaded `log_embeddings` / `cluster_members`). `0` / empty / `off` = never purge. Per-scope override: `scope_retention.raw_interval` |
+| `RETENTION_SUMMARY` | `180d` | How long to keep cluster summaries + `cluster_embeddings` after which similar-incident recall for that scope expires. Same `0` / `off` disable |
+| `PURGE_INTERVAL_SECONDS` | `3600` | Idle worker poll interval between automatic purge jobs. `0` disables scheduled purge (`raglogs purge` still works) |
+| `PURGE_CHUNK_SIZE` | `1000` | Max rows deleted per table per scope per purge job (worker does one chunk; CLI drains) |
 | `LOG_FORMAT` | `json` | Structured log renderer: `json` or `console`. API uses this; CLI switches to console on a TTY |
 | `OTEL_SDK_DISABLED` | `false` | Skip the OpenTelemetry SDK. Request ids are still generated |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | _(empty)_ | Optional OTLP HTTP traces endpoint. Empty = no exporter (no collector required) |
@@ -1055,6 +1073,7 @@ LLM calls are separately capped by `LLM_MAX_CONCURRENCY` (default 4) so a burst 
 | `raglogs_llm_estimated_tokens_total` | counter | Estimated input tokens (UTF-8 chars/4, not USD) |
 | `raglogs_llm_breaker_state` | gauge | `0` closed, `1` half_open, `2` open |
 | `raglogs_worker_queue_depth` | gauge | Pending worker jobs (omitted until a successful scrape; left stale if DB fails) |
+| `raglogs_purge_rows_total` | counter (`kind`) | Rows reclaimed by retention purge: `raw`, `summary`, or `embedding` |
 
 OpenTelemetry spans cover ingest → cluster → explain (and the HTTP request). The default exporter is none; set `OTEL_EXPORTER_OTLP_ENDPOINT` to export, or `OTEL_SDK_DISABLED=true` to skip the SDK. Trace ids stay on response headers so `/v1/query/*` JSON (`schema_version` 1.0) is unchanged.
 
@@ -1270,6 +1289,7 @@ raglogs/
 │   │   ├── normalization/   Message normalization, fingerprinting, trigger patterns
 │   │   ├── parsing/         JSON and text parsers, field extractors, timestamps
 │   │   ├── retrieval/       Semantic + keyword question answering
+│   │   ├── retention/       Per-scope TTL, scheduled purge of raw vs summary tiers
 │   │   └── timeline/        Causal timeline reconstruction
 │   ├── db/                  SQLAlchemy models, session management
 │   └── utils/               Time window parsing, hashing helpers

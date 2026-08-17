@@ -172,6 +172,10 @@ def process_one(db) -> bool:
     try:
         if worker_job.job_type == "ingest":
             result = run_ingest_job(db, worker_job)
+        elif worker_job.job_type == "purge":
+            from src.core.retention.purge import run_purge_job
+
+            result = run_purge_job(db, worker_job)
         else:
             raise ValueError(f"Unknown job type: {worker_job.job_type!r}")
 
@@ -194,9 +198,10 @@ def process_one(db) -> bool:
     # uncommitted done/failed row (poll stays pending, a crash re-claims).
     db.commit()
 
-    from src.core.ingestion.webhooks import maybe_deliver_ingest_callback
+    if worker_job.job_type == "ingest":
+        from src.core.ingestion.webhooks import maybe_deliver_ingest_callback
 
-    maybe_deliver_ingest_callback(db, worker_job)
+        maybe_deliver_ingest_callback(db, worker_job)
     return True  # processed (even if failed) — don't sleep
 
 
@@ -219,10 +224,15 @@ def run_worker(poll_interval: int = POLL_INTERVAL):
 
     while not shutdown:
         try:
+            enqueued_purge = False
             with get_db() as db:
                 processed = process_one(db)
                 ticked = tick_tail_jobs(db)
-            if not processed and not ticked:
+                if not processed:
+                    from src.core.retention.purge import maybe_enqueue_purge
+
+                    enqueued_purge = maybe_enqueue_purge(db)
+            if not processed and not ticked and not enqueued_purge:
                 # Nothing to do — sleep before next poll
                 for _ in range(poll_interval * 10):
                     if shutdown:

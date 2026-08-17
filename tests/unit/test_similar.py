@@ -325,6 +325,24 @@ class TestFindSimilarDegradation:
         second_sql = _compiled(db.execute.call_args_list[1][0][0])
         assert "log_entries" in second_sql
 
+    def test_fingerprint_matches_cluster_embeddings_without_log_entries(self) -> None:
+        """After raw purge, similar still matches fingerprints on cluster_embeddings."""
+        db = MagicMock()
+        db.execute.return_value.all.return_value = [_row()]
+        matches = search_similar_fingerprint(
+            db,
+            [QueryCluster(fingerprint="abc123")],
+            query_scope="incident:A",
+            visibility=SimilarVisibility(cross_scope=True, visible_scope=None),
+            limit=10,
+        )
+        assert len(matches) == 1
+        assert matches[0].fingerprint == "abc123"
+        assert db.execute.call_count == 1
+        sql = _compiled(db.execute.call_args.args[0])
+        assert "cluster_embeddings" in sql
+        assert "log_entries" not in sql
+
 
 class TestHelpers:
     def test_collect_query_fingerprints_dedupes(self) -> None:

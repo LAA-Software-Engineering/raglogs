@@ -18,6 +18,7 @@ _QUERY_ENDPOINTS: tuple[str, ...] = (
     "ingestions",
 )
 _INGEST_RESULTS: tuple[str, ...] = ("inserted", "deduped", "error")
+_PURGE_KINDS: tuple[str, ...] = ("raw", "summary", "embedding")
 
 INGEST_DURATION = Histogram(
     "raglogs_ingest_duration_seconds",
@@ -71,6 +72,12 @@ LLM_BREAKER_STATE = Gauge(
     "LLM circuit breaker: 0=closed, 1=half_open, 2=open.",
     registry=REGISTRY,
 )
+PURGE_ROWS = Counter(
+    "raglogs_purge_rows_total",
+    "Rows reclaimed by the retention purge worker, by kind.",
+    ["kind"],
+    registry=REGISTRY,
+)
 _QUEUE_GAUGE_NAME = "raglogs_worker_queue_depth"
 _QUEUE_GAUGE_HELP = (
     "Pending worker jobs. Published after a successful scrape and left stale "
@@ -85,6 +92,8 @@ for _result in _INGEST_RESULTS:
     INGEST_LINES.labels(result=_result)
 for _endpoint in _QUERY_ENDPOINTS:
     QUERY_REQUEST_DURATION.labels(endpoint=_endpoint)
+for _kind in _PURGE_KINDS:
+    PURGE_ROWS.labels(kind=_kind)
 
 BREAKER_STATE_VALUES: dict[str, float] = {
     "closed": 0.0,
@@ -128,6 +137,13 @@ def record_llm_fallback() -> None:
 def record_llm_estimated_tokens(count: int) -> None:
     if count > 0:
         LLM_ESTIMATED_TOKENS.inc(count)
+
+
+def record_purge_rows(count: int, *, kind: str) -> None:
+    if count <= 0:
+        return
+    label = kind if kind in _PURGE_KINDS else "raw"
+    PURGE_ROWS.labels(kind=label).inc(count)
 
 
 def refresh_runtime_gauges() -> None:
@@ -185,11 +201,17 @@ def _refresh_queue_depth() -> None:
 
         with get_db() as db:
             try:
-                db.execute(text(f"SET LOCAL statement_timeout = '{_QUEUE_STATEMENT_TIMEOUT_MS}'"))
+                db.execute(
+                    text(
+                        f"SET LOCAL statement_timeout = '{_QUEUE_STATEMENT_TIMEOUT_MS}'"
+                    )
+                )
             except Exception:
                 pass
             depth = db.execute(
-                select(func.count()).select_from(WorkerJob).where(WorkerJob.status == "pending")
+                select(func.count())
+                .select_from(WorkerJob)
+                .where(WorkerJob.status == "pending")
             ).scalar_one()
         _set_queue_depth(int(depth or 0))
     except Exception:
