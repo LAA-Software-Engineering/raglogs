@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     embeddings_model: str = "text-embedding-3-small"
     embeddings_dimensions: int = 1536
 
+    # Semantic cluster merge (analysis-time; skipped when embeddings_provider=disabled)
+    cluster_merge_similarity_threshold: float = 0.92
+    cluster_merge_min_count: int = 1
+
     llm_provider: Literal["disabled", "openai", "ollama"] = "disabled"
     llm_model: str = "gpt-4.1-mini"
 

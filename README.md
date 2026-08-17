@@ -607,8 +607,11 @@ All settings are read from `.env`, environment variables, or CLI flags. Priority
 | `OPENAI_API_KEY` | _(empty)_ | API key for OpenAI or compatible endpoint |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Base URL for OpenAI-compatible API |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
-| `EMBEDDINGS_PROVIDER` | `disabled` | `disabled`, `openai`, `local` |
+| `EMBEDDINGS_PROVIDER` | `disabled` | `disabled`, `openai`, `local`. Semantic cluster merge is skipped when `disabled` |
 | `EMBEDDINGS_MODEL` | `text-embedding-3-small` | Embeddings model name |
+| `EMBEDDINGS_DIMENSIONS` | `1536` | Vector size passed to the OpenAI embeddings API |
+| `CLUSTER_MERGE_SIMILARITY_THRESHOLD` | `0.92` | Cosine similarity at or above which fingerprint clusters merge. High on purpose so distinct errors stay separate |
+| `CLUSTER_MERGE_MIN_COUNT` | `1` | Minimum `count` for a cluster to participate in a merge |
 | `DEFAULT_BASELINE_WINDOW` | `24h` | How far back to compare for baseline |
 | `MAX_CLUSTERS_FOR_EXPLAIN` | `10` | Max clusters sent to the explain pipeline |
 | `MAX_EVIDENCE_ITEMS` | `8` | Max evidence lines in output |
@@ -724,6 +727,10 @@ Clustering
 (group by fingerprint → count, services, levels, first/last seen)
     │
     ▼
+Semantic merge (optional)
+(embed cluster representatives; merge pairs with cosine ≥ threshold)
+    │
+    ▼
 Baseline Comparison
 (compare current window to prior window, compute change ratio)
     │
@@ -754,6 +761,17 @@ Normalization is the most important step for clustering quality. It strips dynam
 | `GET /api/users?page=2&limit=50 200 OK` | `GET /api/users?<params> 200 OK` |
 
 Things deliberately **not** normalized: endpoint paths, HTTP status codes, exception class names, service names, operation names.
+
+### Semantic cluster merging
+
+Fingerprinting can still split one incident across multiple clusters when wording differs enough that normalized templates diverge (for example two Stripe error strings that mean the same failure). After fingerprint grouping, raglogs can embed each cluster's representative message and merge near-duplicates.
+
+- **Disabled (default).** `EMBEDDINGS_PROVIDER=disabled` skips the merge pass entirely. Clustering is fingerprint-only and deterministic — the same logs always produce the same clusters.
+- **Enabled.** With `openai` or `local`, representatives are embedded at analysis time (in memory; not written to pgvector). Pairs with cosine similarity ≥ `CLUSTER_MERGE_SIMILARITY_THRESHOLD` (default **0.92**) are merged via connected components. Merged `count` is the sum of member counts; services and levels are summed; `first_seen` is the earliest timestamp and `last_seen` the latest; importance is recomputed. The canonical fingerprint is the member with the highest importance score. `ClusterRun.algorithm` is `fingerprint+semantic` when embeddings were used, even if no pair crossed the threshold.
+- **Fail open.** If the embeddings backend is missing, raises, or returns unusable vectors, clustering continues with the fingerprint-only set.
+- **Not in this release.** Semantic `ask` and similar-incident search over historical clusters remain separate work. Compare still applies its own heuristic collapse for webhook retries / queue growth after clustering.
+
+Local embeddings require the optional extra: `pip install 'raglogs[local-embeddings]'` (`sentence-transformers`). If that import fails, merge is skipped.
 
 ### Baseline comparison
 
@@ -946,8 +964,9 @@ raglogs/
 │   ├── cli/commands/        Typer CLI commands
 │   ├── config/              Pydantic settings
 │   ├── core/
-│   │   ├── clustering/      Fingerprint grouping, importance scoring, baseline
+│   │   ├── clustering/      Fingerprint grouping, semantic merge, importance scoring
 │   │   ├── compare/         Window diffing — new, disappeared, increased, decreased
+│   │   ├── embeddings/      Provider abstraction (OpenAI, local, disabled)
 │   │   ├── explain/         Evidence assembly, templates, confidence, summarizer
 │   │   ├── ingestion/       Ingestion orchestration and batch persistence
 │   │   ├── llm/             Provider abstraction (OpenAI, Ollama, noop)
@@ -982,9 +1001,6 @@ New source adapters go in `src/adapters/` and implement `SourceAdapter` (`discov
 
 ## Roadmap
 
-## Roadmap
-
-- Semantic cluster merging via pgvector
 - Markdown incident report export (`raglogs explain --format markdown > postmortem.md`)
 
 ---

@@ -2,13 +2,14 @@ import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, Union
+from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.clustering.baseline import compute_change_ratio, get_baseline_counts
 from src.core.clustering.scoring import compute_importance_score
+from src.core.embeddings.provider import EmbeddingsProvider
 from src.core.normalization.patterns import is_trigger_message
 from src.db.models import Cluster, ClusterMember, ClusterRun, LogEntry
 from src.utils.time import resolve_baseline_window
@@ -28,6 +29,7 @@ class ClusterData:
     importance_score: float
     is_trigger: bool = False
     log_entry_ids: list[uuid.UUID] = field(default_factory=list)
+    merged_fingerprints: list[str] = field(default_factory=list)
 
 
 def run_clustering(
@@ -147,19 +149,43 @@ def run_clustering(
             log_entry_ids=g["ids"],
         ))
 
-    # 5. Sort by importance
-    clusters.sort(key=lambda c: c.importance_score, reverse=True)
-
-    # Limit
-    top_clusters = clusters[:max_clusters]
+    # 5. Optional semantic merge, then rank and cap
+    top_clusters, algorithm = rank_and_merge_clusters(clusters, max_clusters)
 
     # 6. Persist
-    cluster_run = _create_cluster_run(db, window_start, window_end, service, environment, save=save_to_db)
+    cluster_run = _create_cluster_run(
+        db,
+        window_start,
+        window_end,
+        service,
+        environment,
+        save=save_to_db,
+        algorithm=algorithm,
+    )
 
     if save_to_db:
         _persist_clusters(db, cluster_run, top_clusters)
 
     return cluster_run, top_clusters
+
+
+def rank_and_merge_clusters(
+    clusters: list[ClusterData],
+    max_clusters: int,
+    *,
+    provider: Optional[EmbeddingsProvider] = None,
+) -> tuple[list[ClusterData], str]:
+    """Semantic-merge (if enabled), re-sort by importance, apply ``max_clusters``.
+
+    Returns ``(clusters, algorithm)`` where algorithm is ``fingerprint`` when
+    embeddings were not used and ``fingerprint+semantic`` when they were.
+    """
+    from src.core.clustering.semantic_merge import maybe_semantic_merge
+
+    merged, used_semantic = maybe_semantic_merge(clusters, provider=provider)
+    merged.sort(key=lambda c: c.importance_score, reverse=True)
+    algorithm = "fingerprint+semantic" if used_semantic else "fingerprint"
+    return merged[:max_clusters], algorithm
 
 
 def _create_cluster_run(
@@ -169,6 +195,7 @@ def _create_cluster_run(
     service: Optional[str],
     environment: Optional[str],
     save: bool = True,
+    algorithm: str = "fingerprint",
 ) -> ClusterRun:
     run = ClusterRun(
         id=uuid.uuid4(),
@@ -176,7 +203,7 @@ def _create_cluster_run(
         window_end=window_end,
         service_filter=service,
         environment_filter=environment,
-        algorithm="fingerprint",
+        algorithm=algorithm,
         status="completed",
     )
     if save:
