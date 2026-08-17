@@ -348,9 +348,8 @@ function timelineEventMeta(event) {
 
 function renderTimelineEvent(event) {
   const meta = timelineEventMeta(event);
-  const titleBits = [event.label, event.category, event.description].filter(Boolean);
   return `
-    <div class="timeline-event"${titleBits.length ? ` title="${escapeHtml(titleBits.join(" · "))}"` : ""}>
+    <div class="timeline-event">
       <span class="timeline-ts">${escapeHtml(fmtTime(event.timestamp))}</span>
       <span class="timeline-category">${escapeHtml(event.category)}</span>
       <div class="timeline-body">

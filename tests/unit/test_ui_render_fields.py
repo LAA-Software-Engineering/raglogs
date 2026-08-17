@@ -8,6 +8,8 @@ already returns. Python helpers below mirror the JS — keep them in lockstep.
 from __future__ import annotations
 
 import html
+import re
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -171,15 +173,9 @@ def timeline_event_meta(event: dict[str, Any]) -> str:
 def render_timeline_event(event: dict[str, Any]) -> str:
     """Mirror of ``renderTimelineEvent`` in app.js."""
     meta = timeline_event_meta(event)
-    title_bits = [
-        b
-        for b in (event.get("label"), event.get("category"), event.get("description"))
-        if b
-    ]
-    title_attr = f' title="{_escape(" · ".join(title_bits))}"' if title_bits else ""
     meta_html = f'<div class="timeline-meta">{meta}</div>' if meta else ""
     return (
-        f'<div class="timeline-event"{title_attr}>'
+        f'<div class="timeline-event">'
         f'<span class="timeline-ts">{_escape(_fmt_time(event.get("timestamp")))}</span>'
         f'<span class="timeline-category">{_escape(event.get("category"))}</span>'
         f'<div class="timeline-body">'
@@ -187,6 +183,25 @@ def render_timeline_event(event: dict[str, Any]) -> str:
         f"{meta_html}"
         f"</div></div>"
     )
+
+
+def _js_function_body(name: str) -> str:
+    js = _js()
+    match = re.search(rf"function {re.escape(name)}\([^)]*\) \{{", js)
+    assert match is not None, f"missing function {name}"
+    start = match.start()
+    nxt = re.search(r"\nfunction ", js[match.end() :])
+    end = match.end() + nxt.start() if nxt else len(js)
+    return js[start:end]
+
+
+class _AttrCollector(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.attrs: list[tuple[str, str | None]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.attrs.extend(attrs)
 
 
 # ── JS / CSS contract ─────────────────────────────────────────────────────────
@@ -235,6 +250,9 @@ def test_js_defines_timeline_event_helpers() -> None:
     assert "timeline-meta" in js
     assert "min span" in js
     assert "events.map(renderTimelineEvent)" in js
+    body = _js_function_body("renderTimelineEvent")
+    assert "title=" not in body
+    assert "titleBits" not in body
 
 
 def test_css_styles_new_render_classes() -> None:
@@ -410,6 +428,38 @@ def test_timeline_meta_singular_count_and_skips_duplicate_label() -> None:
     assert "events" not in meta
     assert "deployment-controller" in meta
     assert "deploy" not in [part.strip() for part in meta.split("·")]
+
+
+def test_timeline_quoted_description_does_not_break_attributes() -> None:
+    """Quoted payload text must stay in the description, not become an attribute.
+
+    escapeHtml (textContent → innerHTML) does not encode ``"``. Putting that
+    output into ``title="..."`` would turn ``foo" onmouseover="alert(1)`` into
+    a DOM XSS attribute. renderTimelineEvent must not emit a title attribute.
+    """
+    body = _js_function_body("renderTimelineEvent")
+    assert "title=" not in body
+
+    quoted = 'foo" onmouseover="alert(1)'
+    html_out = render_timeline_event(
+        {
+            "timestamp": "2026-03-12T22:00:00+00:00",
+            "category": "error",
+            "label": "error",
+            "description": quoted,
+            "count": None,
+            "services": [],
+            "duration_minutes": None,
+        }
+    )
+    assert quoted in html_out
+    parser = _AttrCollector()
+    parser.feed(html_out)
+    names = {name for name, _ in parser.attrs}
+    assert "onmouseover" not in names
+    assert "title" not in names
+    for name, value in parser.attrs:
+        assert '"' not in (value or ""), f'raw " in {name}={value!r}'
 
 
 def test_timeline_event_html_shows_description_and_meta() -> None:
