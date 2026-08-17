@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
+import structlog
 from sqlalchemy import Select, delete, func, select, union
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.dml import Delete
@@ -24,11 +25,13 @@ from src.core.retention.policy import (
     RetentionPolicy,
     compute_cutoff,
     resolve_scope_policy,
+    validate_policy_intervals,
 )
 from src.db.models import (
     AppConfig,
     Cluster,
     ClusterEmbedding,
+    ClusterMember,
     ClusterRun,
     Explanation,
     LogEmbedding,
@@ -37,10 +40,12 @@ from src.db.models import (
     WorkerJob,
 )
 
+log = structlog.get_logger()
+
 PURGE_JOB_TYPE = "purge"
 LAST_PURGE_AT_KEY = "last_purge_at"
 
-_RAW_EXPIRY = func.coalesce(LogEntry.timestamp, LogEntry.created_at)
+_RAW_EXPIRY = LogEntry.created_at
 _SUMMARY_EMBEDDING_EXPIRY = func.coalesce(
     ClusterEmbedding.last_seen,
     ClusterEmbedding.updated_at,
@@ -55,11 +60,13 @@ class PurgeCounts:
     summary: int = 0
     embedding: int = 0
     scopes: list[str] = field(default_factory=list)
+    more_remaining: bool = False
 
     def add(self, other: "PurgeCounts") -> None:
         self.raw += other.raw
         self.summary += other.summary
         self.embedding += other.embedding
+        self.more_remaining = self.more_remaining or other.more_remaining
         for scope in other.scopes:
             if scope not in self.scopes:
                 self.scopes.append(scope)
@@ -74,11 +81,12 @@ class PurgeCounts:
             "embedding": self.embedding,
             "scopes": list(self.scopes),
             "dry_run": dry_run,
+            "more_remaining": self.more_remaining,
         }
 
 
 def raw_expiry_expression() -> Any:
-    """``COALESCE(timestamp, created_at)`` used as the raw-row age."""
+    """``log_entries.created_at`` — time-in-store, not the event timestamp."""
     return _RAW_EXPIRY
 
 
@@ -103,12 +111,50 @@ def select_expired_log_entry_ids(
     )
 
 
+def count_expired_log_entries_statement(scope: str, cutoff: datetime) -> Select:
+    return (
+        select(func.count())
+        .select_from(LogEntry)
+        .where(LogEntry.scope == scope)
+        .where(_RAW_EXPIRY < cutoff)
+    )
+
+
+def count_expired_log_embeddings_statement(scope: str, cutoff: datetime) -> Select:
+    return (
+        select(func.count())
+        .select_from(LogEmbedding)
+        .join(LogEntry, LogEmbedding.log_entry_id == LogEntry.id)
+        .where(LogEntry.scope == scope)
+        .where(_RAW_EXPIRY < cutoff)
+    )
+
+
+def count_expired_cluster_members_statement(scope: str, cutoff: datetime) -> Select:
+    return (
+        select(func.count())
+        .select_from(ClusterMember)
+        .join(LogEntry, ClusterMember.log_entry_id == LogEntry.id)
+        .where(LogEntry.scope == scope)
+        .where(_RAW_EXPIRY < cutoff)
+    )
+
+
 def count_log_embeddings_statement(entry_ids: Iterable[uuid.UUID]) -> Select:
     ids = list(entry_ids)
     return (
         select(func.count())
         .select_from(LogEmbedding)
         .where(LogEmbedding.log_entry_id.in_(ids))
+    )
+
+
+def count_cluster_members_statement(entry_ids: Iterable[uuid.UUID]) -> Select:
+    ids = list(entry_ids)
+    return (
+        select(func.count())
+        .select_from(ClusterMember)
+        .where(ClusterMember.log_entry_id.in_(ids))
     )
 
 
@@ -128,6 +174,15 @@ def select_expired_cluster_embedding_ids(
         .where(_SUMMARY_EMBEDDING_EXPIRY < cutoff)
         .order_by(_SUMMARY_EMBEDDING_EXPIRY.asc(), ClusterEmbedding.id.asc())
         .limit(limit)
+    )
+
+
+def count_expired_cluster_embeddings_statement(scope: str, cutoff: datetime) -> Select:
+    return (
+        select(func.count())
+        .select_from(ClusterEmbedding)
+        .where(ClusterEmbedding.scope == scope)
+        .where(_SUMMARY_EMBEDDING_EXPIRY < cutoff)
     )
 
 
@@ -154,6 +209,15 @@ def delete_explanations_statement(explanation_ids: Iterable[uuid.UUID]) -> Delet
     return delete(Explanation).where(Explanation.id.in_(list(explanation_ids)))
 
 
+def count_expired_explanations_statement(scope: str, cutoff: datetime) -> Select:
+    return (
+        select(func.count())
+        .select_from(Explanation)
+        .where(Explanation.scope == scope)
+        .where(Explanation.created_at < cutoff)
+    )
+
+
 def select_expired_cluster_run_ids(
     scope: str,
     cutoff: datetime,
@@ -178,6 +242,25 @@ def count_clusters_for_runs_statement(run_ids: Iterable[uuid.UUID]) -> Select:
 
 def delete_cluster_runs_statement(run_ids: Iterable[uuid.UUID]) -> Delete:
     return delete(ClusterRun).where(ClusterRun.id.in_(list(run_ids)))
+
+
+def count_expired_cluster_runs_statement(scope: str, cutoff: datetime) -> Select:
+    return (
+        select(func.count())
+        .select_from(ClusterRun)
+        .where(ClusterRun.scope == scope)
+        .where(_CLUSTER_RUN_EXPIRY < cutoff)
+    )
+
+
+def count_expired_clusters_statement(scope: str, cutoff: datetime) -> Select:
+    return (
+        select(func.count())
+        .select_from(Cluster)
+        .join(ClusterRun, Cluster.cluster_run_id == ClusterRun.id)
+        .where(ClusterRun.scope == scope)
+        .where(_CLUSTER_RUN_EXPIRY < cutoff)
+    )
 
 
 def scopes_to_purge_statement() -> Select:
@@ -295,11 +378,16 @@ def purge_raw_chunk(
     embedding_n = _count_result(
         db.execute(count_log_embeddings_statement(ids)).scalar_one()
     )
+    member_n = _count_result(
+        db.execute(count_cluster_members_statement(ids)).scalar_one()
+    )
     if not dry_run:
         db.execute(delete_log_entries_statement(ids))
     counts.raw = len(ids)
     counts.embedding = embedding_n
+    counts.more_remaining = len(ids) >= limit
     _record("raw", counts.raw, dry_run=dry_run)
+    _record("raw", member_n, dry_run=dry_run)
     _record("embedding", counts.embedding, dry_run=dry_run)
     return counts
 
@@ -323,6 +411,7 @@ def purge_summary_chunk(
         if not dry_run:
             db.execute(delete_cluster_embeddings_statement(embedding_ids))
         counts.embedding += len(embedding_ids)
+        counts.more_remaining = counts.more_remaining or len(embedding_ids) >= limit
         _record("embedding", len(embedding_ids), dry_run=dry_run)
 
     explanation_rows = db.execute(
@@ -333,6 +422,7 @@ def purge_summary_chunk(
         if not dry_run:
             db.execute(delete_explanations_statement(explanation_ids))
         counts.summary += len(explanation_ids)
+        counts.more_remaining = counts.more_remaining or len(explanation_ids) >= limit
         _record("summary", len(explanation_ids), dry_run=dry_run)
 
     run_rows = db.execute(
@@ -347,6 +437,7 @@ def purge_summary_chunk(
             db.execute(delete_cluster_runs_statement(run_ids))
         summary_n = len(run_ids) + cluster_n
         counts.summary += summary_n
+        counts.more_remaining = counts.more_remaining or len(run_ids) >= limit
         _record("summary", summary_n, dry_run=dry_run)
 
     return counts
@@ -377,6 +468,61 @@ def purge_scope_batch(
     return counts
 
 
+def count_scope_expired(
+    db: Session,
+    policy: RetentionPolicy,
+    *,
+    now: datetime,
+) -> PurgeCounts:
+    """COUNT expired rows for a scope — used by ``--dry-run`` (no chunk loop)."""
+    counts = PurgeCounts(scopes=[policy.scope])
+    raw_cutoff = compute_cutoff(policy.raw_interval, now=now)
+    if raw_cutoff is not None:
+        counts.raw = _count_result(
+            db.execute(
+                count_expired_log_entries_statement(policy.scope, raw_cutoff)
+            ).scalar_one()
+        )
+        counts.embedding += _count_result(
+            db.execute(
+                count_expired_log_embeddings_statement(policy.scope, raw_cutoff)
+            ).scalar_one()
+        )
+        member_n = _count_result(
+            db.execute(
+                count_expired_cluster_members_statement(policy.scope, raw_cutoff)
+            ).scalar_one()
+        )
+        _record("raw", counts.raw, dry_run=True)
+        _record("raw", member_n, dry_run=True)
+        _record("embedding", counts.embedding, dry_run=True)
+    summary_cutoff = compute_cutoff(policy.summary_interval, now=now)
+    if summary_cutoff is not None:
+        cluster_emb = _count_result(
+            db.execute(
+                count_expired_cluster_embeddings_statement(policy.scope, summary_cutoff)
+            ).scalar_one()
+        )
+        explanations = _count_result(
+            db.execute(
+                count_expired_explanations_statement(policy.scope, summary_cutoff)
+            ).scalar_one()
+        )
+        runs = _count_result(
+            db.execute(
+                count_expired_cluster_runs_statement(policy.scope, summary_cutoff)
+            ).scalar_one()
+        )
+        clusters = _count_result(
+            db.execute(
+                count_expired_clusters_statement(policy.scope, summary_cutoff)
+            ).scalar_one()
+        )
+        counts.embedding += cluster_emb
+        counts.summary += explanations + runs + clusters
+    return counts
+
+
 def list_scopes_to_purge(db: Session) -> list[str]:
     rows = db.execute(scopes_to_purge_statement()).all()
     scopes: list[str] = []
@@ -403,7 +549,12 @@ def run_purge(
     now: Optional[datetime] = None,
     settings: Optional[Settings] = None,
 ) -> PurgeCounts:
-    """Purge expired rows. Worker uses ``max_chunks=1``; CLI drains all chunks."""
+    """Purge expired rows. Worker uses ``max_chunks=1``; CLI drains all chunks.
+
+    ``--dry-run`` COUNTs expired rows once per scope (never loops). Invalid
+    interval strings skip that scope. A full chunk skips ``last_purge_at`` and
+    enqueues a follow-up job so idle workers keep draining.
+    """
     from src.config import get_settings
 
     cfg = settings or get_settings()
@@ -411,24 +562,58 @@ def run_purge(
     limit = max(1, int(cfg.purge_chunk_size))
     scopes = [scope] if scope else list_scopes_to_purge(db)
     totals = PurgeCounts()
+    more_remaining = False
     for item in scopes:
-        policy = resolve_scope_policy(db, item, settings=cfg)
+        try:
+            policy = resolve_scope_policy(db, item, settings=cfg)
+            validate_policy_intervals(policy)
+        except ValueError as exc:
+            log.warning(
+                "retention_policy_invalid",
+                scope=item,
+                error=str(exc),
+            )
+            if item not in totals.scopes:
+                totals.scopes.append(item)
+            continue
+        if dry_run:
+            totals.add(count_scope_expired(db, policy, now=clock))
+            continue
         chunks = 0
         while True:
             batch = purge_scope_batch(
-                db, policy, now=clock, limit=limit, dry_run=dry_run
+                db, policy, now=clock, limit=limit, dry_run=False
             )
             totals.add(batch)
             chunks += 1
+            db.commit()
             if batch.raw == 0 and batch.summary == 0 and batch.embedding == 0:
                 if item not in totals.scopes:
                     totals.scopes.append(item)
                 break
             if max_chunks is not None and chunks >= max_chunks:
+                if batch.more_remaining:
+                    more_remaining = True
                 break
+    totals.more_remaining = more_remaining
     if not dry_run:
-        write_last_purge_at(db, clock)
+        if totals.more_remaining:
+            enqueue_followup_purge(db)
+        else:
+            write_last_purge_at(db, clock)
+        db.commit()
     return totals
+
+
+def enqueue_followup_purge(db: Session) -> None:
+    """Queue another purge so remaining chunks drain without waiting the interval."""
+    job = WorkerJob(
+        job_type=PURGE_JOB_TYPE,
+        status="pending",
+        payload_json={},
+    )
+    db.add(job)
+    db.flush()
 
 
 def run_purge_job(db: Session, worker_job: Any) -> dict[str, Any]:

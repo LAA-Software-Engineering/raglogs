@@ -7,6 +7,7 @@ from src.core.retention.policy import (
     is_retention_disabled,
     parse_retention_interval,
     resolve_scope_policy,
+    validate_policy_intervals,
 )
 from src.core.retention.purge import (
     LAST_PURGE_AT_KEY,
@@ -29,6 +30,7 @@ __all__ = [
     "maybe_enqueue_purge",
     "parse_retention_interval",
     "resolve_scope_policy",
+    "validate_policy_intervals",
     "run_purge",
     "run_purge_job",
     "should_enqueue_purge",

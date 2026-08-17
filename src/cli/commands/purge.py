@@ -26,9 +26,10 @@ def purge_cmd(
     """Delete expired raw logs, then expired cluster summaries / embeddings.
 
     Raw rows older than RETENTION_RAW (per-scope override in scope_retention)
-    are removed; cluster_embeddings stay so similar-incident search still
-    works. After RETENTION_SUMMARY those summaries go too. 0 / empty / off
-    skips that tier. The worker also runs this on an idle poll.
+    are removed based on created_at (time-in-store); cluster_embeddings stay so
+    similar-incident search still works. After RETENTION_SUMMARY those summaries
+    go too. 0 / empty / off skips that tier. The worker also runs this on an
+    idle poll. --dry-run counts expired rows without deleting.
     """
     from src.core.retention.purge import run_purge
     from src.db.session import get_db

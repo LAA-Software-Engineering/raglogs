@@ -73,6 +73,61 @@ def upgrade() -> None:
     )
     op.create_index("ix_explanations_scope", "explanations", ["scope"])
 
+    # Majority scope from remaining cluster membership (G8). Rows with no
+    # members stay at the server default ``default``.
+    op.execute(
+        sa.text(
+            """
+            UPDATE cluster_runs AS cr
+            SET scope = src.scope
+            FROM (
+                SELECT DISTINCT ON (counted.cluster_run_id)
+                    counted.cluster_run_id,
+                    counted.scope
+                FROM (
+                    SELECT c.cluster_run_id, le.scope, COUNT(*) AS n
+                    FROM clusters c
+                    JOIN cluster_members cm ON cm.cluster_id = c.id
+                    JOIN log_entries le ON le.id = cm.log_entry_id
+                    GROUP BY c.cluster_run_id, le.scope
+                ) AS counted
+                ORDER BY counted.cluster_run_id, counted.n DESC, counted.scope
+            ) AS src
+            WHERE cr.id = src.cluster_run_id
+            """
+        )
+    )
+    # Best-effort: explanations inherit the majority log_entries.scope in the
+    # cached window (service/env filters when present).
+    op.execute(
+        sa.text(
+            """
+            UPDATE explanations AS e
+            SET scope = src.scope
+            FROM (
+                SELECT DISTINCT ON (counted.explanation_id)
+                    counted.explanation_id,
+                    counted.scope
+                FROM (
+                    SELECT e2.id AS explanation_id, le.scope, COUNT(*) AS n
+                    FROM explanations e2
+                    JOIN log_entries le
+                      ON le.timestamp >= e2.window_start
+                     AND le.timestamp <= e2.window_end
+                     AND (e2.service_filter IS NULL OR le.service = e2.service_filter)
+                     AND (
+                        e2.environment_filter IS NULL
+                        OR le.environment = e2.environment_filter
+                     )
+                    GROUP BY e2.id, le.scope
+                ) AS counted
+                ORDER BY counted.explanation_id, counted.n DESC, counted.scope
+            ) AS src
+            WHERE e.id = src.explanation_id
+            """
+        )
+    )
+
     op.create_table(
         "scope_retention",
         sa.Column("scope", sa.String(255), primary_key=True),

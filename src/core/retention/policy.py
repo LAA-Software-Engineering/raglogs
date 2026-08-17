@@ -44,6 +44,8 @@ def parse_retention_interval(value: Optional[str]) -> Optional[timedelta]:
     stripped = value.strip()
     if stripped.lower() in NEVER_TOKENS:
         return None
+    if any(ch.isspace() for ch in stripped):
+        raise ValueError(f"Cannot parse retention interval: {value!r}")
     delta = parse_duration(stripped)
     if delta.total_seconds() <= 0:
         return None
@@ -63,6 +65,12 @@ def compute_cutoff(
     if clock.tzinfo is None:
         clock = clock.replace(tzinfo=timezone.utc)
     return clock - delta
+
+
+def validate_policy_intervals(policy: RetentionPolicy) -> None:
+    """Raise ``ValueError`` if either interval string cannot be parsed."""
+    parse_retention_interval(policy.raw_interval)
+    parse_retention_interval(policy.summary_interval)
 
 
 def apply_scope_override(

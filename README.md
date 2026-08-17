@@ -635,7 +635,7 @@ raglogs config llm_provider
 
 Expire raw log rows (and cascaded log-line embeddings / cluster membership) while keeping cluster summaries and `cluster_embeddings` so `POST /v1/query/similar` still works. After `RETENTION_SUMMARY` those summaries expire too. Per-scope TTLs override env defaults via the `scope_retention` table; missing override → `RETENTION_RAW` / `RETENTION_SUMMARY`. `0`, empty, or `off` skips that tier.
 
-The background worker (`raglogs worker`) also enqueues a purge job on idle poll about every `PURGE_INTERVAL_SECONDS` (default 3600). Purge uses `SELECT FOR UPDATE SKIP LOCKED` like ingest and deletes in timestamp-ordered chunks so ingest is not starved.
+The background worker (`raglogs worker`) also enqueues a purge job on idle poll about every `PURGE_INTERVAL_SECONDS` (default 3600). Purge uses `SELECT FOR UPDATE SKIP LOCKED` like ingest and deletes in `created_at`-ordered chunks (time-in-store) so ingest is not starved. Raw expiry uses `log_entries.created_at`, not the event timestamp, so historical dumps are not wiped on ingest.
 
 ```bash
 raglogs purge              # every scope with data
@@ -721,7 +721,7 @@ All settings are read from `.env`, environment variables, or CLI flags. Priority
 | `WEBHOOK_MAX_RETRIES` | `5` | Extra webhook POST attempts after the first (6 POSTs by default) on 5xx / 429 / connect errors |
 | `WEBHOOK_TIMEOUT` | `10` | Per-attempt HTTP timeout in seconds for completion callbacks |
 | `INGEST_IDEMPOTENCY_TTL_SECONDS` | `86400` | How long `Idempotency-Key` on `POST /v1/ingestions` is remembered (batch enqueue and tail create) |
-| `RETENTION_RAW` | `30d` | How long to keep raw `log_entries` (and cascaded `log_embeddings` / `cluster_members`). `0` / empty / `off` = never purge. Per-scope override: `scope_retention.raw_interval` |
+| `RETENTION_RAW` | `30d` | How long to keep raw `log_entries` measured by `created_at` (time-in-store; cascaded `log_embeddings` / `cluster_members`). `0` / empty / `off` = never purge. Per-scope override: `scope_retention.raw_interval` |
 | `RETENTION_SUMMARY` | `180d` | How long to keep cluster summaries + `cluster_embeddings` after which similar-incident recall for that scope expires. Same `0` / `off` disable |
 | `PURGE_INTERVAL_SECONDS` | `3600` | Idle worker poll interval between automatic purge jobs. `0` disables scheduled purge (`raglogs purge` still works) |
 | `PURGE_CHUNK_SIZE` | `1000` | Max rows deleted per table per scope per purge job (worker does one chunk; CLI drains) |

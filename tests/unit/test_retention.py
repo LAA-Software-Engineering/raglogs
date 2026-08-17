@@ -15,6 +15,7 @@ from src.core.retention.policy import (
     is_retention_disabled,
     parse_retention_interval,
     resolve_scope_policy,
+    validate_policy_intervals,
 )
 from src.core.retention.purge import (
     PURGE_JOB_TYPE,
@@ -56,6 +57,7 @@ class ScriptedSession:
         self.executed: list[object] = []
         self.added: list[object] = []
         self._get_row: object | None = None
+        self._get_rows: dict[object, object] = {}
 
     def execute(self, stmt: object) -> MagicMock:
         self.executed.append(stmt)
@@ -76,12 +78,17 @@ class ScriptedSession:
         return result
 
     def get(self, model: object, key: object) -> object | None:
+        if isinstance(getattr(self, "_get_rows", None), dict) and key in self._get_rows:
+            return self._get_rows[key]
         return self._get_row
 
     def add(self, obj: object) -> None:
         self.added.append(obj)
 
     def flush(self) -> None:
+        return None
+
+    def commit(self) -> None:
         return None
 
 
@@ -102,6 +109,18 @@ class TestParseRetentionInterval:
     def test_invalid_raises(self) -> None:
         with pytest.raises(ValueError):
             parse_retention_interval("not-a-duration")
+        with pytest.raises(ValueError):
+            parse_retention_interval("7 days")
+        with pytest.raises(ValueError):
+            parse_retention_interval("30")
+        with pytest.raises(ValueError):
+            validate_policy_intervals(
+                apply_scope_override(
+                    scope="x",
+                    default_raw="7 days",
+                    default_summary="180d",
+                )
+            )
 
 
 class TestComputeCutoff:
@@ -174,15 +193,23 @@ class TestPerScopeOverride:
 
 
 class TestPurgeSql:
-    def test_raw_select_filters_scope_and_coalesce(self) -> None:
+    def test_raw_select_filters_scope_and_created_at(self) -> None:
         cutoff = NOW - timedelta(days=30)
         stmt = select_expired_log_entry_ids("incident:A", cutoff, limit=100)
         sql = _compiled(stmt)
         assert "log_entries" in sql
-        assert "coalesce" in sql
+        assert "created_at" in sql
         assert "incident:a" in sql
         assert "cluster_embeddings" not in sql
         assert "limit" in sql
+        assert "coalesce" not in sql
+        assert "timestamp" not in sql or "created_at" in sql
+
+    def test_raw_select_uses_created_at_not_event_timestamp(self) -> None:
+        stmt = select_expired_log_entry_ids("default", NOW, limit=10)
+        sql = _compiled(stmt)
+        assert "log_entries.created_at" in sql
+        assert "log_entries.timestamp" not in sql
 
     def test_raw_select_does_not_target_cluster_embeddings(self) -> None:
         stmt = select_expired_log_entry_ids("default", NOW, limit=10)
@@ -201,7 +228,7 @@ class TestPurgeSql:
 class TestPurgeExecution:
     def test_raw_chunk_deletes_log_entries_counts_embeddings(self) -> None:
         entry_id = uuid.uuid4()
-        db = ScriptedSession([[(entry_id,)], 2, None])
+        db = ScriptedSession([[(entry_id,)], 2, 0, None])
         counts = purge_raw_chunk(db, "incident:A", NOW, limit=100, dry_run=False)
         assert counts.raw == 1
         assert counts.embedding == 2
@@ -212,7 +239,7 @@ class TestPurgeExecution:
 
     def test_raw_chunk_dry_run_skips_delete(self) -> None:
         entry_id = uuid.uuid4()
-        db = ScriptedSession([[(entry_id,)], 1])
+        db = ScriptedSession([[(entry_id,)], 1, 0])
         counts = purge_raw_chunk(db, "default", NOW, limit=10, dry_run=True)
         assert counts.raw == 1
         assert counts.embedding == 1
@@ -269,6 +296,8 @@ class TestPurgeExecution:
                 [("incident:A",), ("default",)],
                 [(entry_id,)],
                 0,
+                0,
+                None,
             ]
         )
         with patch("src.core.retention.purge.write_last_purge_at") as written:
@@ -282,6 +311,108 @@ class TestPurgeExecution:
         written.assert_called_once()
         assert counts.raw >= 1
         assert "incident:A" in counts.scopes or "default" in counts.scopes
+
+    def test_dry_run_max_chunks_none_returns_when_expired_exist(self) -> None:
+        """CLI ``--dry-run`` must COUNT once, not loop the same LIMIT ids."""
+        settings = Settings(
+            _env_file=None,
+            retention_raw="30d",
+            retention_summary="0",
+            purge_chunk_size=1,
+        )
+        db = ScriptedSession(
+            [
+                [("default",)],
+                5,
+                2,
+                1,
+            ]
+        )
+
+        def _fail_loop(*_a: object, **_k: object) -> None:
+            raise AssertionError("dry-run must not call write_last_purge_at")
+
+        with patch(
+            "src.core.retention.purge.write_last_purge_at", side_effect=_fail_loop
+        ):
+            counts = run_purge(
+                db,
+                dry_run=True,
+                max_chunks=None,
+                now=NOW,
+                settings=settings,
+            )
+        assert counts.raw == 5
+        assert counts.embedding == 2
+        assert db.script == []
+        assert len(db.executed) <= 8
+
+    def test_invalid_policy_skips_scope_and_continues(self) -> None:
+        settings = Settings(
+            _env_file=None,
+            retention_raw="30d",
+            retention_summary="0",
+            purge_chunk_size=100,
+        )
+        entry_id = uuid.uuid4()
+        db = ScriptedSession(
+            [
+                [("incident:bad",), ("default",)],
+                [(entry_id,)],
+                0,
+                0,
+                None,
+            ]
+        )
+        bad = MagicMock()
+        bad.raw_interval = "7 days"
+        bad.summary_interval = None
+        db._get_rows["incident:bad"] = bad
+        with patch("src.core.retention.purge.write_last_purge_at") as written:
+            counts = run_purge(
+                db,
+                dry_run=False,
+                max_chunks=1,
+                now=NOW,
+                settings=settings,
+            )
+        written.assert_called_once()
+        assert counts.raw == 1
+        assert "incident:bad" in counts.scopes
+        assert "default" in counts.scopes
+
+    def test_skips_last_purge_at_when_more_chunks_remain(self) -> None:
+        settings = Settings(
+            _env_file=None,
+            retention_raw="30d",
+            retention_summary="0",
+            purge_chunk_size=1,
+        )
+        entry_id = uuid.uuid4()
+        db = ScriptedSession(
+            [
+                [("default",)],
+                [(entry_id,)],
+                0,
+                0,
+                None,
+            ]
+        )
+        with (
+            patch("src.core.retention.purge.write_last_purge_at") as written,
+            patch("src.core.retention.purge.enqueue_followup_purge") as followup,
+        ):
+            counts = run_purge(
+                db,
+                dry_run=False,
+                max_chunks=1,
+                now=NOW,
+                settings=settings,
+            )
+        written.assert_not_called()
+        followup.assert_called_once()
+        assert counts.more_remaining is True
+        assert counts.raw == 1
 
 
 class TestPurgeMetrics:
@@ -297,15 +428,15 @@ class TestPurgeMetrics:
         before_raw = _counter("raw")
         before_emb = _counter("embedding")
         entry_id = uuid.uuid4()
-        db = ScriptedSession([[(entry_id,)], 5, None])
+        db = ScriptedSession([[(entry_id,)], 5, 3, None])
         purge_raw_chunk(db, "default", NOW, limit=10, dry_run=False)
-        assert _counter("raw") == before_raw + 1
+        assert _counter("raw") == before_raw + 1 + 3
         assert _counter("embedding") == before_emb + 5
 
     def test_dry_run_does_not_increment_metrics(self) -> None:
         before_raw = _counter("raw")
         entry_id = uuid.uuid4()
-        db = ScriptedSession([[(entry_id,)], 1])
+        db = ScriptedSession([[(entry_id,)], 1, 0])
         purge_raw_chunk(db, "default", NOW, limit=10, dry_run=True)
         assert _counter("raw") == before_raw
 
