@@ -74,6 +74,7 @@ def clusters_cmd(
                     "change_ratio": round(c.change_ratio, 2),
                     "importance_score": round(c.importance_score, 2),
                     "is_trigger": c.is_trigger,
+                    "merged_fingerprints": c.merged_fingerprints,
                 }
                 for c in clusters
             ],
@@ -129,4 +130,4 @@ def clusters_cmd(
         )
 
     console.print(table)
-    console.print(f"\n[dim]⚡ = likely trigger event  Chg = change vs baseline[/dim]")
+    console.print("\n[dim]⚡ = likely trigger event  Chg = change vs baseline[/dim]")
