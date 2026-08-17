@@ -165,6 +165,7 @@ def process_one(db) -> bool:
 
 def run_worker(poll_interval: int = POLL_INTERVAL):
     """Main worker loop. Runs until SIGINT/SIGTERM."""
+    from src.core.ingestion.tail import tick_tail_jobs
     from src.db.session import get_db
 
     shutdown = False
@@ -183,7 +184,8 @@ def run_worker(poll_interval: int = POLL_INTERVAL):
         try:
             with get_db() as db:
                 processed = process_one(db)
-            if not processed:
+                ticked = tick_tail_jobs(db)
+            if not processed and not ticked:
                 # Nothing to do — sleep before next poll
                 for _ in range(poll_interval * 10):
                     if shutdown:

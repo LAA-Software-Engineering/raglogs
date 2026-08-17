@@ -923,7 +923,7 @@ curl -X POST http://localhost:8000/v1/query/explain \
 
 | Role | Allowed |
 |---|---|
-| `ingest` | `POST /v1/ingestions` (and the deprecated `/ingestions` alias) |
+| `ingest` | `POST /v1/ingestions`, `POST /v1/ingestions/lines`, tail lifecycle `pause` / `resume` / `stop` (and the deprecated `/ingestions` aliases) |
 | `query` | `GET /v1/ingestions*`, `POST /v1/query/*`, web UI (`GET /`, `/static`), OpenAPI (`/docs`) |
 | `admin` | everything, including `GET /v1/config` |
 
@@ -949,10 +949,14 @@ If auth is disabled and the process binds a non-loopback address (`0.0.0.0`, `::
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/health` | Service and DB health check (unversioned) |
-| `POST` | `/v1/ingestions` | Enqueue an ingest job (`adapter`: `file`, `cloudwatch`, `datadog`, `loki`, or `k8s`) |
+| `GET` | `/health` | Service and DB health check (unversioned). Includes `tail_jobs: {running, paused}`. |
+| `POST` | `/v1/ingestions` | Enqueue a batch ingest job (`adapter`: `file`, `cloudwatch`, `datadog`, `loki`, or `k8s`). Set `"mode": "tail"` for pull adapters to start a long-lived tail job. |
+| `POST` | `/v1/ingestions/lines` | Push NDJSON of raw or pre-parsed log lines (sync persist) |
+| `POST` | `/v1/ingestions/{id}:pause` | Pause a tail job |
+| `POST` | `/v1/ingestions/{id}:resume` | Resume a paused tail job |
+| `POST` | `/v1/ingestions/{id}:stop` | Stop a tail job (terminal; cannot resume) |
 | `GET` | `/v1/ingestions` | List recent completed ingestion jobs, newest first |
-| `GET` | `/v1/ingestions/{job_id}` | Poll ingestion job status |
+| `GET` | `/v1/ingestions/{job_id}` | Fetch ingestion job detail |
 | `GET` | `/v1/ingestions/latest` | ID of the most recently completed ingestion job, if any |
 | `POST` | `/v1/query/explain` | Explain a time window |
 | `POST` | `/v1/query/ask` | Answer a natural language question |
@@ -960,6 +964,33 @@ If auth is disabled and the process binds a non-loopback address (`0.0.0.0`, `::
 | `POST` | `/v1/query/timeline` | Reconstruct incident timeline for a window |
 | `POST` | `/v1/query/compare` | Diff two time windows (same semantics as `raglogs compare`) |
 | `GET` | `/v1/config` | Read effective configuration |
+
+**Push NDJSON.** `POST /v1/ingestions/lines` accepts newline-delimited lines (`Content-Type: application/x-ndjson`, `application/jsonl`, or `text/plain`). Each line is a raw log string or a JSON object with at least `message` / `raw` / `text` (optional `timestamp`, `service`, `level`, `host`, `env`). Cap is `INGEST_PUSH_MAX_LINES` (default 5000); over the cap returns 400.
+
+```bash
+curl -X POST http://localhost:8000/v1/ingestions/lines \
+  -H "Content-Type: application/x-ndjson" \
+  --data-binary $'{"message":"timeout talking to payments","level":"error","service":"api"}\nplain syslog line\n'
+```
+
+**Tail jobs.** `POST /v1/ingestions` with `"mode": "tail"` (adapters `cloudwatch`, `datadog`, or `loki` only) creates a long-lived job. The worker re-runs the adapter from the saved cursor about every `TAIL_POLL_INTERVAL` seconds (default 30). Pause, resume, or stop with:
+
+```bash
+curl -X POST http://localhost:8000/v1/ingestions \
+  -H "Content-Type: application/json" \
+  -d '{"adapter":"loki","params":{"query":"{app=\\"api\\"}"},"mode":"tail"}'
+# → { "ingestion_job_id": "...", "mode": "tail", "status": "running" }
+
+curl -X POST http://localhost:8000/v1/ingestions/$ID:pause
+curl -X POST http://localhost:8000/v1/ingestions/$ID:resume
+curl -X POST http://localhost:8000/v1/ingestions/$ID:stop
+```
+
+`stop` is terminal. After `TAIL_ERROR_THRESHOLD` consecutive poll failures (default 5) a tail job auto-pauses; `/health` reports `tail_jobs.running` and `tail_jobs.paused`.
+
+**Backpressure.** When pending worker jobs ≥ `INGEST_QUEUE_MAX` (default 100), `POST /v1/ingestions` and `POST /v1/ingestions/lines` return **429** with `Retry-After` (`INGEST_RETRY_AFTER_SECONDS`, default 5) and body `{"error_code":"INGEST_QUEUE_FULL","message":"..."}`. This is a queue-depth stand-in, not full API/LLM rate limiting.
+
+Overlapping tail poll windows can **double-count** the same physical lines until content dedup (G6) lands. Prefer a single tail job per source and avoid also batch-ingesting the same window.
 
 Unversioned `/ingestions`, `/query/*`, and `/config` remain as **deprecated aliases** for one release. They behave the same as the `/v1` paths and send `Deprecation: true` plus a `Link: </v1/...>; rel="successor-version"` header. `/health`, the web UI (`/`), and `/static` stay unversioned.
 

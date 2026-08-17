@@ -53,7 +53,7 @@
           "ingestions"
         ],
         "summary": "Create Ingestion",
-        "description": "Enqueue an ingest job. Returns immediately with worker_job_id.\nPoll GET /ingestions/jobs/{worker_job_id} for progress.\nWhen done, use ingestion_job_id from the result to scope /query/explain.",
+        "description": "Enqueue an ingest job. Returns immediately with worker_job_id.\nPoll GET /ingestions/jobs/{worker_job_id} for progress.\nWhen done, use ingestion_job_id from the result to scope /query/explain.\n\n``mode=tail`` creates a long-lived job that the worker polls; the response\nincludes ``ingestion_job_id`` and no worker_job_id.",
         "operationId": "v1_ingestions_create_ingestion__v1_ingestions",
         "requestBody": {
           "content": {
@@ -154,6 +154,174 @@
         }
       }
     },
+    "/v1/ingestions/lines": {
+      "post": {
+        "tags": [
+          "ingestions"
+        ],
+        "summary": "Push Ingestion Lines",
+        "description": "Push NDJSON of raw or pre-parsed log lines. Persisted synchronously.",
+        "operationId": "v1_ingestions_push_ingestion_lines__v1_ingestions_lines",
+        "requestBody": {
+          "content": {
+            "application/x-ndjson": {
+              "schema": {
+                "type": "string"
+              }
+            },
+            "application/jsonl": {
+              "schema": {
+                "type": "string"
+              }
+            },
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushLinesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ingestions/{ingestion_job_id}:pause": {
+      "post": {
+        "tags": [
+          "ingestions"
+        ],
+        "summary": "Pause Tail Job",
+        "operationId": "v1_ingestions_pause_tail_job__v1_ingestions__ingestion_job_id__pause",
+        "parameters": [
+          {
+            "name": "ingestion_job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ingestion Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TailLifecycleResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ingestions/{ingestion_job_id}:resume": {
+      "post": {
+        "tags": [
+          "ingestions"
+        ],
+        "summary": "Resume Tail Job",
+        "operationId": "v1_ingestions_resume_tail_job__v1_ingestions__ingestion_job_id__resume",
+        "parameters": [
+          {
+            "name": "ingestion_job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ingestion Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TailLifecycleResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ingestions/{ingestion_job_id}:stop": {
+      "post": {
+        "tags": [
+          "ingestions"
+        ],
+        "summary": "Stop Tail Job",
+        "operationId": "v1_ingestions_stop_tail_job__v1_ingestions__ingestion_job_id__stop",
+        "parameters": [
+          {
+            "name": "ingestion_job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ingestion Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TailLifecycleResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/ingestions/{ingestion_job_id}": {
       "get": {
         "tags": [
@@ -224,7 +392,7 @@
           "ingestions"
         ],
         "summary": "Create Ingestion",
-        "description": "Enqueue an ingest job. Returns immediately with worker_job_id.\nPoll GET /ingestions/jobs/{worker_job_id} for progress.\nWhen done, use ingestion_job_id from the result to scope /query/explain.",
+        "description": "Enqueue an ingest job. Returns immediately with worker_job_id.\nPoll GET /ingestions/jobs/{worker_job_id} for progress.\nWhen done, use ingestion_job_id from the result to scope /query/explain.\n\n``mode=tail`` creates a long-lived job that the worker polls; the response\nincludes ``ingestion_job_id`` and no worker_job_id.",
         "operationId": "legacy_ingestions_create_ingestion__ingestions",
         "requestBody": {
           "content": {
@@ -326,6 +494,178 @@
           }
         },
         "deprecated": true
+      }
+    },
+    "/ingestions/lines": {
+      "post": {
+        "tags": [
+          "ingestions"
+        ],
+        "summary": "Push Ingestion Lines",
+        "description": "Push NDJSON of raw or pre-parsed log lines. Persisted synchronously.",
+        "operationId": "legacy_ingestions_push_ingestion_lines__ingestions_lines",
+        "requestBody": {
+          "content": {
+            "application/x-ndjson": {
+              "schema": {
+                "type": "string"
+              }
+            },
+            "application/jsonl": {
+              "schema": {
+                "type": "string"
+              }
+            },
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushLinesResponse"
+                }
+              }
+            }
+          }
+        },
+        "deprecated": true
+      }
+    },
+    "/ingestions/{ingestion_job_id}:pause": {
+      "post": {
+        "tags": [
+          "ingestions"
+        ],
+        "summary": "Pause Tail Job",
+        "operationId": "legacy_ingestions_pause_tail_job__ingestions__ingestion_job_id__pause",
+        "deprecated": true,
+        "parameters": [
+          {
+            "name": "ingestion_job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ingestion Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TailLifecycleResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ingestions/{ingestion_job_id}:resume": {
+      "post": {
+        "tags": [
+          "ingestions"
+        ],
+        "summary": "Resume Tail Job",
+        "operationId": "legacy_ingestions_resume_tail_job__ingestions__ingestion_job_id__resume",
+        "deprecated": true,
+        "parameters": [
+          {
+            "name": "ingestion_job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ingestion Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TailLifecycleResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ingestions/{ingestion_job_id}:stop": {
+      "post": {
+        "tags": [
+          "ingestions"
+        ],
+        "summary": "Stop Tail Job",
+        "operationId": "legacy_ingestions_stop_tail_job__ingestions__ingestion_job_id__stop",
+        "deprecated": true,
+        "parameters": [
+          {
+            "name": "ingestion_job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ingestion Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TailLifecycleResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/ingestions/{ingestion_job_id}": {
@@ -1084,17 +1424,39 @@
       "EnqueuedResponse": {
         "properties": {
           "worker_job_id": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Worker Job Id"
           },
           "status": {
             "type": "string",
             "title": "Status"
+          },
+          "ingestion_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ingestion Job Id"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode",
+            "default": "batch"
           }
         },
         "type": "object",
         "required": [
-          "worker_job_id",
           "status"
         ],
         "title": "EnqueuedResponse"
@@ -1248,6 +1610,20 @@
             },
             "type": "object",
             "title": "Adapters"
+          },
+          "tail_jobs": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tail Jobs"
           }
         },
         "type": "object",
@@ -1373,6 +1749,15 @@
             "type": "boolean",
             "title": "With Embeddings",
             "default": false
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "batch",
+              "tail"
+            ],
+            "title": "Mode",
+            "default": "batch"
           }
         },
         "type": "object",
@@ -1455,6 +1840,27 @@
               }
             ],
             "title": "Finished At"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode",
+            "default": "batch"
+          },
+          "last_polled_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Polled At"
+          },
+          "consecutive_errors": {
+            "type": "integer",
+            "title": "Consecutive Errors",
+            "default": 0
           }
         },
         "type": "object",
@@ -1544,6 +1950,67 @@
           "ingestion_job_id"
         ],
         "title": "LatestIngestionResponse"
+      },
+      "PushLinesResponse": {
+        "properties": {
+          "ingestion_job_id": {
+            "type": "string",
+            "title": "Ingestion Job Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "line_count": {
+            "type": "integer",
+            "title": "Line Count"
+          },
+          "parsed_count": {
+            "type": "integer",
+            "title": "Parsed Count"
+          },
+          "error_count": {
+            "type": "integer",
+            "title": "Error Count"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode",
+            "default": "push"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ingestion_job_id",
+          "status",
+          "line_count",
+          "parsed_count",
+          "error_count"
+        ],
+        "title": "PushLinesResponse"
+      },
+      "TailLifecycleResponse": {
+        "properties": {
+          "ingestion_job_id": {
+            "type": "string",
+            "title": "Ingestion Job Id"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ingestion_job_id",
+          "mode",
+          "status"
+        ],
+        "title": "TailLifecycleResponse"
       },
       "TimelineRequest": {
         "properties": {

@@ -36,6 +36,10 @@ def _ctx_db(query_result=_UNSET, execute_scalar=_UNSET):
     )
     if execute_scalar is not _UNSET:
         mock_db.execute.return_value.scalar_one.return_value = execute_scalar
+    else:
+        # Default 0 pending worker jobs so ingest backpressure does not 429
+        # every mocked POST /ingestions.
+        mock_db.execute.return_value.scalar_one.return_value = 0
     return mock_db
 
 
@@ -98,6 +102,15 @@ class TestHealth:
             resp = client.get("/health")
 
         assert resp.json()["worker_queue_depth"] == 7
+
+    def test_health_includes_tail_job_counts(self):
+        with patch("src.db.session.check_connection", return_value=True), \
+             _patch_get_db(execute_scalar=2):
+            resp = client.get("/health")
+
+        tail = resp.json()["tail_jobs"]
+        assert tail["running"] == 2
+        assert tail["paused"] == 2
 
     def test_health_includes_file_adapter_ok(self):
         with patch("src.db.session.check_connection", return_value=True), \

@@ -111,6 +111,40 @@ class RaglogsClient:
         """GET /v1/ingestions/{ingestion_job_id}."""
         return self._get(f"/v1/ingestions/{ingestion_job_id}")
 
+    def push_lines(
+        self,
+        body: str,
+        content_type: str = "application/x-ndjson",
+    ) -> dict[str, Any]:
+        """POST /v1/ingestions/lines — NDJSON of raw or pre-parsed log lines."""
+        headers = self._headers()
+        headers["Content-Type"] = content_type
+        response = self._client.request(
+            "POST",
+            self._url("/v1/ingestions/lines"),
+            headers=headers,
+            content=body,
+        )
+        if response.status_code >= 400:
+            try:
+                err_body: Any = response.json()
+            except ValueError:
+                err_body = response.text
+            raise RaglogsAPIError(response.status_code, err_body)
+        return response.json()
+
+    def pause_ingestion(self, ingestion_job_id: str) -> dict[str, Any]:
+        """POST /v1/ingestions/{id}:pause — pause a tail job."""
+        return self._post(f"/v1/ingestions/{ingestion_job_id}:pause", {})
+
+    def resume_ingestion(self, ingestion_job_id: str) -> dict[str, Any]:
+        """POST /v1/ingestions/{id}:resume — resume a paused tail job."""
+        return self._post(f"/v1/ingestions/{ingestion_job_id}:resume", {})
+
+    def stop_ingestion(self, ingestion_job_id: str) -> dict[str, Any]:
+        """POST /v1/ingestions/{id}:stop — stop a tail job (terminal)."""
+        return self._post(f"/v1/ingestions/{ingestion_job_id}:stop", {})
+
     def explain(
         self,
         *,

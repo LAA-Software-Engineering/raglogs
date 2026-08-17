@@ -9,6 +9,7 @@ of mocking the I/O boundary rather than internals.
 
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
+import uuid
 
 import pytest
 
@@ -246,6 +247,7 @@ class TestIngestFromSource:
     def test_raw_line_defaults_fill_service_env_host(self, monkeypatch):
         """Adapters (Loki labels, k8s fields) may set RawLogLine defaults; ingestion
         should persist them when the parsed line has no service/env/host."""
+
         class LabelAdapter:
             name = "labels"
 
@@ -267,7 +269,9 @@ class TestIngestFromSource:
         _patch_get_adapter(monkeypatch, LabelAdapter())
 
         job, stats = ingest_from_source(
-            db=db, spec=SourceSpec(adapter="labels", params={}), window=_WINDOW,
+            db=db,
+            spec=SourceSpec(adapter="labels", params={}),
+            window=_WINDOW,
         )
 
         assert job.status == "completed"
@@ -369,6 +373,58 @@ class TestIngestFromSource:
         assert stats.lines_read == 1
         assert stats.parsed_count == 1
 
+    def test_existing_job_stays_running_and_counts_add(self, monkeypatch):
+        db = _mock_db(existing_source=MagicMock())
+        existing = IngestionJob(
+            id=uuid.uuid4(),
+            source_id=uuid.uuid4(),
+            status="running",
+            mode="tail",
+            line_count=4,
+            parsed_count=4,
+            error_count=0,
+            file_count=1,
+            metadata_json={"adapter": "fake", "params": {}},
+            source_adapter="fake",
+            source_ref="stream-0",
+        )
+        _patch_get_adapter(monkeypatch, FakeAdapter(["plain extra line"]))
+
+        job, stats = ingest_from_source(
+            db=db,
+            spec=SourceSpec(adapter="fake", params={}),
+            window=_WINDOW,
+            existing_job=existing,
+            finalize=False,
+        )
+
+        assert job is existing
+        assert job.status == "running"
+        assert job.finished_at is None
+        assert stats.parsed_count == 1
+        assert job.parsed_count == 5
+        assert job.line_count == 5
+        assert not any(isinstance(o, IngestionJob) for o in db.added)
+
+
+class TestIngestPushLines:
+    def test_persists_raw_lines(self):
+        from src.core.ingestion.service import ingest_push_lines
+
+        db = _mock_db()
+        job, stats = ingest_push_lines(
+            db,
+            raw_lines=[
+                '{"message": "pushed", "level": "error", "service": "api"}',
+                "text line",
+            ],
+        )
+        assert job.mode == "push"
+        assert job.status == "completed"
+        assert stats.parsed_count == 2
+        assert stats.lines_read == 2
+        assert "api" in stats.services_detected
+
 
 class TestIngestFiles:
     def test_happy_path_sets_source_adapter(self, tmp_path):
@@ -399,7 +455,9 @@ class TestIngestFiles:
 
         monkeypatch.setattr(
             "src.core.ingestion.service.ingest_embeddings_provider",
-            lambda with_embeddings, settings=None: object() if with_embeddings else None,
+            lambda with_embeddings, settings=None: (
+                object() if with_embeddings else None
+            ),
         )
         monkeypatch.setattr(
             "src.core.ingestion.service.persist_log_embeddings", fake_persist

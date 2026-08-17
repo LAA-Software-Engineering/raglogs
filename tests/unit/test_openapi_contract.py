@@ -7,7 +7,11 @@ shapes are not asserted here; that is G7.
 from __future__ import annotations
 
 from src.api.app import app
-from src.api.deprecation import is_deprecated_alias, is_versioned_api_path, successor_path
+from src.api.deprecation import (
+    is_deprecated_alias,
+    is_versioned_api_path,
+    successor_path,
+)
 
 REQUIRED_GET: tuple[str, ...] = (
     "/health",
@@ -22,6 +26,10 @@ REQUIRED_POST: tuple[str, ...] = (
     "/v1/query/compare",
     "/v1/query/clusters",
     "/v1/ingestions",
+    "/v1/ingestions/lines",
+    "/v1/ingestions/{ingestion_job_id}:pause",
+    "/v1/ingestions/{ingestion_job_id}:resume",
+    "/v1/ingestions/{ingestion_job_id}:stop",
 )
 
 

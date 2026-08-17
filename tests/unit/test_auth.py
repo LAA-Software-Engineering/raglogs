@@ -131,6 +131,11 @@ class TestRequiredRoles:
         assert required_roles("POST", "/ingestions") == frozenset({"ingest", "admin"})
         assert required_roles("GET", "/ingestions") == frozenset({"query", "admin"})
         assert required_roles("GET", "/ingestions/latest") == frozenset({"query", "admin"})
+        assert required_roles("POST", "/ingestions/lines") == frozenset({"ingest", "admin"})
+        assert required_roles("POST", "/ingestions/abc:pause") == frozenset({"ingest", "admin"})
+        assert required_roles("POST", "/v1/ingestions/lines") == frozenset({"ingest", "admin"})
+        assert required_roles("POST", "/v1/ingestions/abc:resume") == frozenset({"ingest", "admin"})
+        assert required_roles("POST", "/v1/ingestions/abc:stop") == frozenset({"ingest", "admin"})
 
     def test_query_and_config_and_ui(self) -> None:
         assert required_roles("POST", "/query/explain") == frozenset({"query", "admin"})
@@ -341,16 +346,27 @@ class TestAuthMiddleware:
         assert resp.status_code == 403
         assert resp.json()["error_code"] == "AUTH_FORBIDDEN"
 
-    def test_ingest_role_can_post_v1_ingestions(self) -> None:
+    def test_ingest_role_can_post_v1_ingestions_lines(self) -> None:
         with patch("src.config.get_settings", return_value=_auth_settings()), \
              patch("src.api.auth.keys.lookup_api_key", return_value=_key("ingest")):
             resp = client.post(
-                "/v1/ingestions",
-                json={},
+                "/v1/ingestions/lines",
+                content="",
                 headers={"Authorization": "Bearer rlk_ingestrole1"},
             )
-        assert resp.status_code == 422
+        assert resp.status_code == 400
         assert resp.status_code != 403
+
+    def test_query_role_cannot_post_v1_ingestions_lines(self) -> None:
+        with patch("src.config.get_settings", return_value=_auth_settings()), \
+             patch("src.api.auth.keys.lookup_api_key", return_value=_key("query")):
+            resp = client.post(
+                "/v1/ingestions/lines",
+                content="hello\n",
+                headers={"Authorization": "Bearer rlk_queryrolexx"},
+            )
+        assert resp.status_code == 403
+        assert resp.json()["error_code"] == "AUTH_FORBIDDEN"
 
     def test_docs_not_exempt(self) -> None:
         with patch("src.config.get_settings", return_value=_auth_settings()):
