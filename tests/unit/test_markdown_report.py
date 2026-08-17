@@ -12,7 +12,6 @@ from src.core.explain.markdown_report import (
 )
 from src.core.explain.summarizer import ExplainResult
 
-
 WINDOW_START = datetime(2026, 3, 12, 22, 33, 30, tzinfo=timezone.utc)
 WINDOW_END = datetime(2026, 3, 12, 23, 33, 30, tzinfo=timezone.utc)
 
@@ -98,17 +97,17 @@ raglogs explain --since 1h --service billing-worker --format markdown
 
 
 def _result(**overrides) -> ExplainResult:
-    data = dict(
-        window_start=WINDOW_START,
-        window_end=WINDOW_END,
-        summary_text=SUMMARY_TEXT,
-        confidence="high",
-        evidence_items=[
+    data = {
+        "window_start": WINDOW_START,
+        "window_end": WINDOW_END,
+        "summary_text": SUMMARY_TEXT,
+        "confidence": "high",
+        "evidence_items": [
             "184 similar failures in billing-worker",
             "Not observed in prior 24h baseline",
         ],
-        services_affected=["billing-worker", "api"],
-        primary_cluster={
+        "services_affected": ["billing-worker", "api"],
+        "primary_cluster": {
             "message": "Stripe signature verification failed for endpoint /webhooks/stripe",
             "count": 184,
             "services": ["billing-worker"],
@@ -119,7 +118,7 @@ def _result(**overrides) -> ExplainResult:
             "baseline_count": 0,
             "change_ratio": 185.0,
         },
-        secondary_clusters=[
+        "secondary_clusters": [
             {
                 "message": "POST /api/checkout 500 Internal Server Error",
                 "count": 39,
@@ -135,16 +134,16 @@ def _result(**overrides) -> ExplainResult:
                 "importance_score": 1.2,
             },
         ],
-        trigger_candidates=[
+        "trigger_candidates": [
             {
                 "message": "Deploy completed for billing-worker version v2.4.1",
                 "timestamp": "2026-03-12T22:38:29+00:00",
                 "service": "deployment-controller",
             }
         ],
-        total_logs=461,
-        mode="rules",
-    )
+        "total_logs": 461,
+        "mode": "rules",
+    }
     data.update(overrides)
     return ExplainResult(**data)
 

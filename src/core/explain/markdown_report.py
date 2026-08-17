@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import shlex
 from datetime import datetime, timedelta
-from typing import Optional
 
 from src.core.explain.summarizer import ExplainResult
 
@@ -15,14 +14,14 @@ _MD_SPECIAL = frozenset("\\`*_{}[]<>|#")
 
 def build_explain_reproduce_cmd(
     *,
-    since: Optional[str] = None,
-    from_time: Optional[str] = None,
-    to_time: Optional[str] = None,
-    service: Optional[str] = None,
-    env: Optional[str] = None,
+    since: str | None = None,
+    from_time: str | None = None,
+    to_time: str | None = None,
+    service: str | None = None,
+    env: str | None = None,
     no_llm: bool = False,
-    baseline_window: Optional[str] = None,
-    ingestion_job: Optional[str] = None,
+    baseline_window: str | None = None,
+    ingestion_job: str | None = None,
     all_ingestions: bool = False,
     max_clusters: int = DEFAULT_MAX_CLUSTERS,
 ) -> str:
@@ -55,8 +54,8 @@ def build_explain_reproduce_cmd(
 def render_incident_report(
     result: ExplainResult,
     *,
-    reproduce_cmd: Optional[str] = None,
-    environment: Optional[str] = None,
+    reproduce_cmd: str | None = None,
+    environment: str | None = None,
 ) -> str:
     """
     Render a paste-ready markdown incident report from an ExplainResult.
@@ -133,7 +132,7 @@ def _title(result: ExplainResult) -> str:
     return "Untitled incident"
 
 
-def _metadata_lines(result: ExplainResult, *, environment: Optional[str]) -> list[str]:
+def _metadata_lines(result: ExplainResult, *, environment: str | None) -> list[str]:
     services = ", ".join(result.services_affected) if result.services_affected else "none"
     lines = [
         f"- **Window:** {_format_window_meta(result.window_start, result.window_end)}",
@@ -151,7 +150,7 @@ def _metadata_lines(result: ExplainResult, *, environment: Optional[str]) -> lis
     return lines
 
 
-def _primary_cluster_section(cluster: Optional[dict]) -> list[str]:
+def _primary_cluster_section(cluster: dict | None) -> list[str]:
     if not cluster:
         return []
     lines = ["## Primary cluster", ""]
@@ -227,9 +226,7 @@ def _format_window_meta(start: datetime, end: datetime) -> str:
 
 
 def _human_duration(delta: timedelta) -> str:
-    total = int(round(delta.total_seconds()))
-    if total < 0:
-        total = -total
+    total = abs(round(delta.total_seconds()))
     if total == 0:
         return "0s"
     days, rem = divmod(total, 86400)
