@@ -228,8 +228,9 @@ def explain_endpoint(request: ExplainRequest, http_request: Request) -> ExplainR
 
     try:
         with get_db() as db:
-            # Cache check — skip if force_refresh or LLM disabled (rules-only is fast)
-            if not request.force_refresh and overrides.llm_enabled:
+            # Cache check — skip only on force_refresh. The key includes resolved
+            # overrides so different max_clusters / llm settings do not collide.
+            if not request.force_refresh:
                 cached = _load_from_cache(db, cache_hash)
                 if cached:
                     body = explain_from_cached(
