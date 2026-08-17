@@ -10,7 +10,7 @@ from src.core.clustering.clusterer import run_clustering
 from src.core.explain.confidence import compute_confidence
 from src.core.explain.evidence import EvidencePacket, assemble_evidence
 from src.core.explain.templates import render_insufficient_evidence, render_text_summary
-from src.core.llm.provider import NoopLLMProvider, build_llm_provider
+from src.core.llm.provider import build_llm_provider
 from src.db.models import DEFAULT_LOG_SCOPE, IngestionJob
 from src.db.scope_filter import filter_ingestion_jobs_by_scope
 
@@ -116,12 +116,11 @@ def explain_window(
     if not no_llm and settings.llm_provider != "disabled":
         try:
             llm = build_llm_provider(settings)
-            if not isinstance(llm, NoopLLMProvider):
-                evidence_dict = _packet_to_dict(packet)
-                llm_text = llm.generate_summary(evidence_dict)
-                if llm_text:
-                    summary_text = llm_text
-                    mode = "llm"
+            evidence_dict = _packet_to_dict(packet)
+            llm_text = llm.generate_summary(evidence_dict)
+            if llm_text:
+                summary_text = llm_text
+                mode = "llm"
         except Exception:
             # Degrade gracefully
             pass
