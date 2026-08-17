@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator, model_validator
 
@@ -260,6 +260,80 @@ def _callback_meta_from_request(http_request: Request) -> dict[str, Any]:
     return meta
 
 
+def _scope_from_request(http_request: Request) -> str:
+    return str(_callback_meta_from_request(http_request).get("scope") or "default")
+
+
+def _enqueued_from_idempotency(row: Any) -> EnqueuedResponse:
+    mode = getattr(row, "mode", None) or "batch"
+    ingestion_job_id = getattr(row, "ingestion_job_id", None)
+    worker_job_id = getattr(row, "worker_job_id", None)
+    if mode == "tail":
+        return EnqueuedResponse(
+            worker_job_id=None,
+            status="running",
+            ingestion_job_id=str(ingestion_job_id) if ingestion_job_id else None,
+            mode="tail",
+        )
+    return EnqueuedResponse(
+        worker_job_id=str(worker_job_id) if worker_job_id else None,
+        status="pending",
+        ingestion_job_id=str(ingestion_job_id) if ingestion_job_id else None,
+        mode="batch",
+    )
+
+
+def _replay_if_active(db: Any, key: Optional[str]) -> Optional[EnqueuedResponse]:
+    if not key:
+        return None
+    from datetime import datetime, timezone
+
+    from src.core.ingestion.idempotency import key_log_prefix, lookup_active_key
+
+    row = lookup_active_key(db, key, datetime.now(tz=timezone.utc))
+    if row is None:
+        return None
+    import structlog
+
+    structlog.get_logger().info(
+        "ingest_idempotency_replay",
+        key_prefix=key_log_prefix(key),
+        mode=getattr(row, "mode", None) or "batch",
+    )
+    return _enqueued_from_idempotency(row)
+
+
+def _bind_idempotency_key(
+    db: Any,
+    key: Optional[str],
+    *,
+    worker_job_id: Optional[uuid.UUID],
+    ingestion_job_id: Optional[uuid.UUID],
+    mode: str,
+) -> Optional[EnqueuedResponse]:
+    """Persist the key mapping. Returns a replay response on unique-key race."""
+    if not key:
+        return None
+    from datetime import datetime, timezone
+
+    from src.config import get_settings
+    from src.core.ingestion.idempotency import store_idempotency_key
+
+    settings = get_settings()
+    _row, is_replay = store_idempotency_key(
+        db,
+        key,
+        worker_job_id=worker_job_id,
+        ingestion_job_id=ingestion_job_id,
+        mode=mode,
+        now=datetime.now(tz=timezone.utc),
+        ttl_seconds=settings.ingest_idempotency_ttl_seconds,
+    )
+    if is_replay:
+        return _enqueued_from_idempotency(_row)
+    return None
+
+
 def _create_tail_job(
     request: IngestRequest,
     params: dict[str, Any],
@@ -331,7 +405,19 @@ def _apply_tail_action(
 
 
 @router.post("", response_model=EnqueuedResponse, status_code=202)
-def create_ingestion(request: IngestRequest, http_request: Request):
+def create_ingestion(
+    request: IngestRequest,
+    http_request: Request,
+    idempotency_key: Optional[str] = Header(
+        default=None,
+        alias="Idempotency-Key",
+        description=(
+            "If set, a repeat POST within INGEST_IDEMPOTENCY_TTL_SECONDS "
+            "(default 86400) returns the original job instead of enqueueing a new one. "
+            "Empty values are rejected with 400. Applies to batch enqueue and tail create."
+        ),
+    ),
+):
     """
     Enqueue an ingest job. Returns immediately with worker_job_id.
     Poll GET /ingestions/jobs/{worker_job_id} for progress.
@@ -343,9 +429,21 @@ def create_ingestion(request: IngestRequest, http_request: Request):
     Optional ``callback_url`` (http/https) is stored on batch worker jobs. The
     worker POSTs an HMAC-signed completion payload on terminal state. Tail jobs
     do not fire callbacks (long-lived; poll or ``:stop`` instead).
+
+    Optional ``Idempotency-Key`` (also accepted as ``idempotency-key``): a
+    repeat within the TTL returns the original 202 job rather than a new one.
     """
+    from src.core.ingestion.idempotency import (
+        InvalidIdempotencyKey,
+        parse_idempotency_key,
+    )
     from src.db.models import WorkerJob
     from src.db.session import get_db
+
+    try:
+        parsed_key = parse_idempotency_key(idempotency_key)
+    except InvalidIdempotencyKey as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
     params = request.params
     if request.adapter == "file":
@@ -362,12 +460,41 @@ def create_ingestion(request: IngestRequest, http_request: Request):
     callback_meta = _callback_meta_from_request(http_request)
 
     with get_db() as db:
+        replayed = _replay_if_active(db, parsed_key)
+        if replayed is not None:
+            return replayed
+
         rejected = _reject_if_queue_full(db)
         if rejected is not None:
             return rejected
 
         if request.mode == "tail":
-            return _create_tail_job(request, params, db, callback_meta=callback_meta)
+            response = _create_tail_job(
+                request, params, db, callback_meta=callback_meta
+            )
+            race = _bind_idempotency_key(
+                db,
+                parsed_key,
+                worker_job_id=None,
+                ingestion_job_id=uuid.UUID(response.ingestion_job_id)
+                if response.ingestion_job_id
+                else None,
+                mode="tail",
+            )
+            if race is not None:
+                from src.db.models import IngestionJob
+
+                if response.ingestion_job_id:
+                    orphan = (
+                        db.query(IngestionJob)
+                        .filter(IngestionJob.id == uuid.UUID(response.ingestion_job_id))
+                        .first()
+                    )
+                    if orphan is not None:
+                        db.delete(orphan)
+                        db.flush()
+                return race
+            return response
 
         payload = _ingest_payload(request, params, callback_meta=callback_meta)
         job = WorkerJob(
@@ -379,6 +506,17 @@ def create_ingestion(request: IngestRequest, http_request: Request):
         db.add(job)
         db.flush()
         worker_job_id = str(job.id)
+        race = _bind_idempotency_key(
+            db,
+            parsed_key,
+            worker_job_id=job.id,
+            ingestion_job_id=None,
+            mode="batch",
+        )
+        if race is not None:
+            db.delete(job)
+            db.flush()
+            return race
 
     return EnqueuedResponse(worker_job_id=worker_job_id, status="pending", mode="batch")
 
@@ -502,7 +640,9 @@ async def push_ingestion_lines(request: Request) -> PushLinesResponse:
         rejected = _reject_if_queue_full(db)
         if rejected is not None:
             return rejected  # type: ignore[return-value]
-        job, stats = ingest_push_lines(db, raw_lines)
+        job, stats = ingest_push_lines(
+            db, raw_lines, scope=_scope_from_request(request)
+        )
 
     return PushLinesResponse(
         ingestion_job_id=str(job.id),

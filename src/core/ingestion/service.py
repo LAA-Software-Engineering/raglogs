@@ -2,9 +2,11 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.dml import Insert
 
 from src.adapters.base import SourceSpec, TimeWindow
 from src.adapters.file.adapter import detect_format, discover_files, read_lines
@@ -14,7 +16,14 @@ from src.core.errors import AdapterUnavailableError
 from src.core.normalization.fingerprint import fingerprint_message
 from src.core.parsing.json_parser import ParsedLogLine, parse_json_line
 from src.core.parsing.text_parser import parse_text_line
-from src.db.models import IngestionJob, LogEntry, Source
+from src.db.models import (
+    DEFAULT_LOG_SCOPE,
+    LOG_ENTRY_DEDUP_INDEX_WHERE,
+    IngestionJob,
+    LogEntry,
+    Source,
+)
+from src.utils.hashing import hash_raw_line
 
 
 @dataclass
@@ -23,6 +32,7 @@ class IngestionStats:
     lines_read: int = 0
     parsed_count: int = 0
     error_count: int = 0
+    deduped_count: int = 0
     services_detected: set[str] = field(default_factory=set)
     duration_seconds: float = 0.0
 
@@ -59,11 +69,12 @@ def _process_line(
     source: Source,
     job: IngestionJob,
     source_adapter: str,
-    source_ref: str,
+    source_ref: Optional[str],
     stats: IngestionStats,
     received_at: Optional[datetime] = None,
     default_host: Optional[str] = None,
     extra: Optional[dict] = None,
+    scope: str = DEFAULT_LOG_SCOPE,
 ) -> Optional[LogEntry]:
     """Parse, fingerprint, and build a LogEntry for one raw line. Returns None for
     blank/unparseable/error lines (stats are updated either way).
@@ -117,7 +128,9 @@ def _process_line(
         parser_type=parsed.parser_type,
         extra_json={**(extra or {}), **(parsed.extra or {})} or None,
         source_adapter=source_adapter,
-        source_ref=source_ref,
+        source_ref=source_ref or "",
+        original_line_hash=hash_raw_line(line),
+        scope=scope or DEFAULT_LOG_SCOPE,
     )
     stats.parsed_count += 1
 
@@ -127,19 +140,92 @@ def _process_line(
     return entry
 
 
+def _log_entry_values(entry: LogEntry) -> dict[str, Any]:
+    """Column values for a PostgreSQL INSERT of one log row."""
+    return {
+        "id": entry.id,
+        "source_id": entry.source_id,
+        "ingestion_job_id": entry.ingestion_job_id,
+        "timestamp": entry.timestamp,
+        "service": entry.service,
+        "environment": entry.environment,
+        "level": entry.level,
+        "trace_id": entry.trace_id,
+        "request_id": entry.request_id,
+        "host": entry.host,
+        "raw_message": entry.raw_message,
+        "normalized_message": entry.normalized_message,
+        "fingerprint": entry.fingerprint,
+        "parser_type": entry.parser_type,
+        "extra_json": entry.extra_json,
+        "source_adapter": entry.source_adapter,
+        "source_ref": entry.source_ref if entry.source_ref is not None else "",
+        "original_line_hash": entry.original_line_hash,
+        "scope": entry.scope or DEFAULT_LOG_SCOPE,
+    }
+
+
+def log_entry_upsert_statement(batch: list[LogEntry]) -> Insert:
+    """INSERT … ON CONFLICT DO NOTHING against ``ux_log_entries_dedup``."""
+    stmt = pg_insert(LogEntry).values([_log_entry_values(entry) for entry in batch])
+    return stmt.on_conflict_do_nothing(
+        index_elements=["scope", "source_ref", "original_line_hash", "timestamp"],
+        index_where=LOG_ENTRY_DEDUP_INDEX_WHERE,
+    ).returning(LogEntry.id)
+
+
+def _entries_inserted(batch: list[LogEntry], result: Any) -> list[LogEntry]:
+    """Rows actually inserted. Mocks without RETURNING rows assume the full batch."""
+    if result is None:
+        return list(batch)
+    fetchall = getattr(result, "fetchall", None)
+    if not callable(fetchall):
+        return list(batch)
+    try:
+        rows = fetchall()
+    except Exception:
+        return list(batch)
+    if not isinstance(rows, (list, tuple)):
+        return list(batch)
+    if not rows:
+        return []
+    try:
+        inserted_ids = {row[0] for row in rows}
+    except (TypeError, IndexError):
+        return list(batch)
+    return [entry for entry in batch if entry.id in inserted_ids]
+
+
 def _flush_log_batch(
     db: Session,
     batch: list[LogEntry],
     embedder: Optional[EmbeddingsProvider],
-) -> None:
-    """Persist a batch of log entries, then optionally their embeddings."""
+) -> tuple[int, int]:
+    """Persist a batch with content-dedup upsert.
+
+    Returns ``(inserted_count, skipped_count)``. Duplicate physical lines
+    matching ``ux_log_entries_dedup`` are skipped, not errors.
+    """
     if not batch:
-        return
-    db.bulk_save_objects(batch)
-    db.flush()
-    if embedder is not None:
-        persist_log_embeddings(db, batch, provider=embedder)
+        return 0, 0
+    stmt = log_entry_upsert_statement(batch)
+    result = db.execute(stmt)
+    inserted_entries = _entries_inserted(batch, result)
+    skipped = len(batch) - len(inserted_entries)
+    if embedder is not None and inserted_entries:
+        persist_log_embeddings(db, inserted_entries, provider=embedder)
     batch.clear()
+    return len(inserted_entries), skipped
+
+
+def _flush_and_count(
+    db: Session,
+    batch: list[LogEntry],
+    embedder: Optional[EmbeddingsProvider],
+    stats: IngestionStats,
+) -> None:
+    _inserted, skipped = _flush_log_batch(db, batch, embedder)
+    stats.deduped_count += skipped
 
 
 def ingest_files(
@@ -152,6 +238,7 @@ def ingest_files(
     fmt: str = "auto",
     progress_callback: Optional[Callable[[int, int], None]] = None,
     with_embeddings: bool = False,
+    scope: str = DEFAULT_LOG_SCOPE,
 ) -> tuple[IngestionJob, IngestionStats]:
     """
     Main ingestion entry point for local files. Discovers, parses, and persists log files.
@@ -220,6 +307,7 @@ def ingest_files(
                     "file",
                     str(file_path),
                     stats,
+                    scope=scope,
                 )
                 if entry is None:
                     continue
@@ -227,13 +315,13 @@ def ingest_files(
                 batch.append(entry)
 
                 if len(batch) >= BATCH_SIZE:
-                    _flush_log_batch(db, batch, embedder)
+                    _flush_and_count(db, batch, embedder, stats)
 
                     if progress_callback:
                         progress_callback(stats.lines_read, stats.parsed_count)
 
         if batch:
-            _flush_log_batch(db, batch, embedder)
+            _flush_and_count(db, batch, embedder, stats)
 
         stats.duration_seconds = time.time() - start_time
 
@@ -268,6 +356,7 @@ def ingest_from_source(
     with_embeddings: bool = False,
     existing_job: Optional[IngestionJob] = None,
     finalize: bool = True,
+    scope: str = DEFAULT_LOG_SCOPE,
 ) -> tuple[IngestionJob, IngestionStats]:
     """
     Adapter-driven ingestion entry point (e.g. CloudWatch, Loki). Discovers streams via the
@@ -391,6 +480,7 @@ def ingest_from_source(
                         received_at=raw.received_at,
                         default_host=raw.default_host,
                         extra=raw.extra or None,
+                        scope=scope,
                     )
                     if entry is None:
                         continue
@@ -398,7 +488,7 @@ def ingest_from_source(
                     batch.append(entry)
 
                     if len(batch) >= BATCH_SIZE:
-                        _flush_log_batch(db, batch, embedder)
+                        _flush_and_count(db, batch, embedder, stats)
 
                         if progress_callback:
                             progress_callback(stats.lines_read, stats.parsed_count)
@@ -417,7 +507,7 @@ def ingest_from_source(
             raise AdapterUnavailableError("; ".join(adapter_errors))
 
         if batch:
-            _flush_log_batch(db, batch, embedder)
+            _flush_and_count(db, batch, embedder, stats)
 
         stats.duration_seconds = time.time() - start_time
         _apply_ingest_counts(job, stats, additive=existing_job is not None)
@@ -459,6 +549,7 @@ def ingest_push_lines(
     default_env: Optional[str] = None,
     fmt: str = "auto",
     with_embeddings: bool = False,
+    scope: str = DEFAULT_LOG_SCOPE,
 ) -> tuple[IngestionJob, IngestionStats]:
     """Persist caller-pushed raw lines through parse → fingerprint → LogEntry."""
     import time
@@ -496,15 +587,16 @@ def ingest_push_lines(
                 "push",
                 "push",
                 stats,
+                scope=scope,
             )
             if entry is None:
                 continue
             batch.append(entry)
             if len(batch) >= BATCH_SIZE:
-                _flush_log_batch(db, batch, embedder)
+                _flush_and_count(db, batch, embedder, stats)
 
         if batch:
-            _flush_log_batch(db, batch, embedder)
+            _flush_and_count(db, batch, embedder, stats)
 
         stats.duration_seconds = time.time() - start_time
         job.status = "completed"

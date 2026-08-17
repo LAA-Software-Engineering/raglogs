@@ -68,6 +68,17 @@ def test_ingest_request_includes_callback_url() -> None:
     assert "callback_url" in schema["properties"]
 
 
+def test_ingest_post_documents_idempotency_key_header() -> None:
+    paths = app.openapi()["paths"]
+    for path in ("/v1/ingestions", "/ingestions"):
+        params = paths[path]["post"].get("parameters") or []
+        names = {p.get("name") for p in params}
+        assert "Idempotency-Key" in names, f"{path} POST must document Idempotency-Key"
+        header = next(p for p in params if p.get("name") == "Idempotency-Key")
+        assert header.get("in") == "header"
+        assert header.get("required") is not True
+
+
 def test_health_is_unversioned() -> None:
     paths = app.openapi()["paths"]
     assert "/health" in paths

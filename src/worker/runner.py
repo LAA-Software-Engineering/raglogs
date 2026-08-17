@@ -5,9 +5,9 @@ Polls the worker_jobs table for pending jobs and executes them.
 No external queue dependency — uses PostgreSQL as the queue.
 Safe to run multiple workers (uses SELECT FOR UPDATE SKIP LOCKED).
 """
+
 import signal
 import time
-import uuid
 from datetime import datetime, timezone
 
 import structlog
@@ -15,12 +15,12 @@ import structlog
 log = structlog.get_logger()
 
 POLL_INTERVAL = 2  # seconds between polls when idle
-BATCH_SIZE = 1     # one job at a time per worker process
+BATCH_SIZE = 1  # one job at a time per worker process
 
 
 def claim_next_job(db):
     """Atomically claim one pending worker job. Returns job or None."""
-    from sqlalchemy import select, update
+    from sqlalchemy import select
     from src.db.models import WorkerJob
 
     # SELECT FOR UPDATE SKIP LOCKED ensures multiple workers don't double-claim
@@ -58,6 +58,7 @@ def run_ingest_job(db, worker_job) -> dict:
             default_env=payload.get("env"),
             fmt=payload.get("format", "auto"),
             with_embeddings=payload.get("with_embeddings", False),
+            scope=payload.get("scope") or "default",
         )
     else:
         import uuid
@@ -70,23 +71,41 @@ def run_ingest_job(db, worker_job) -> dict:
 
         window = None
         if payload.get("since") or payload.get("from_time") or payload.get("to_time"):
-            from_dt = datetime.fromisoformat(payload["from_time"]) if payload.get("from_time") else None
-            to_dt = datetime.fromisoformat(payload["to_time"]) if payload.get("to_time") else None
+            from_dt = (
+                datetime.fromisoformat(payload["from_time"])
+                if payload.get("from_time")
+                else None
+            )
+            to_dt = (
+                datetime.fromisoformat(payload["to_time"])
+                if payload.get("to_time")
+                else None
+            )
             # resolve_window attaches UTC to naive datetimes and handles a single bound
             # (from-only -> "from X to now") — same helper /query/explain uses.
-            w_start, w_end = resolve_window(since=payload.get("since"), from_time=from_dt, to_time=to_dt)
+            w_start, w_end = resolve_window(
+                since=payload.get("since"), from_time=from_dt, to_time=to_dt
+            )
             window = TimeWindow(start=w_start, end=w_end)
 
         resume_cursors = None
         resume_completed_streams = None
         if payload.get("resume_ingestion_job_id"):
-            prior = db.query(IngestionJob).filter(
-                IngestionJob.id == uuid.UUID(payload["resume_ingestion_job_id"])
-            ).first()
+            prior = (
+                db.query(IngestionJob)
+                .filter(
+                    IngestionJob.id == uuid.UUID(payload["resume_ingestion_job_id"])
+                )
+                .first()
+            )
             if prior is None:
-                raise ValueError(f"No ingestion job found with id {payload['resume_ingestion_job_id']}")
+                raise ValueError(
+                    f"No ingestion job found with id {payload['resume_ingestion_job_id']}"
+                )
             resume_cursors = (prior.metadata_json or {}).get("cursors")
-            resume_completed_streams = (prior.metadata_json or {}).get("completed_streams")
+            resume_completed_streams = (prior.metadata_json or {}).get(
+                "completed_streams"
+            )
 
         params = payload.get("params", {})
         if adapter in ("k8s", "kubernetes"):
@@ -113,6 +132,7 @@ def run_ingest_job(db, worker_job) -> dict:
             resume_cursors=resume_cursors,
             resume_completed_streams=resume_completed_streams,
             with_embeddings=payload.get("with_embeddings", False),
+            scope=payload.get("scope") or "default",
         )
 
     # Link worker job → ingestion job
@@ -124,6 +144,7 @@ def run_ingest_job(db, worker_job) -> dict:
         "lines_read": stats.lines_read,
         "parsed_count": stats.parsed_count,
         "error_count": stats.error_count,
+        "deduped_count": stats.deduped_count,
         "services_detected": list(stats.services_detected),
         "duration_seconds": stats.duration_seconds,
     }
@@ -131,8 +152,6 @@ def run_ingest_job(db, worker_job) -> dict:
 
 def process_one(db) -> bool:
     """Claim and execute one job. Returns True if a job was processed."""
-    from src.db.models import WorkerJob
-
     worker_job = claim_next_job(db)
     if worker_job is None:
         return False

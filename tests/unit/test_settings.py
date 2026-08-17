@@ -120,3 +120,14 @@ def test_webhook_settings_from_env(monkeypatch):
     assert settings.webhook_secret == "whsec_global"
     assert settings.webhook_max_retries == 3
     assert settings.webhook_timeout == pytest.approx(7.5)
+
+
+def test_ingest_idempotency_ttl_default():
+    settings = Settings(_env_file=None)
+    assert settings.ingest_idempotency_ttl_seconds == 86400
+
+
+def test_ingest_idempotency_ttl_from_env(monkeypatch):
+    monkeypatch.setenv("INGEST_IDEMPOTENCY_TTL_SECONDS", "60")
+    settings = Settings(_env_file=None)
+    assert settings.ingest_idempotency_ttl_seconds == 60

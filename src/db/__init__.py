@@ -6,10 +6,12 @@ from .models import (
     ClusterMember,
     ClusterRun,
     Explanation,
+    IngestIdempotencyKey,
     IngestionJob,
     LogEmbedding,
     LogEntry,
     Source,
+    WorkerJob,
 )
 from .session import check_connection, get_db, get_engine
 
@@ -25,6 +27,8 @@ __all__ = [
     "Explanation",
     "ApiKey",
     "AppConfig",
+    "IngestIdempotencyKey",
+    "WorkerJob",
     "get_db",
     "get_engine",
     "check_connection",

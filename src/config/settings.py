@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     webhook_max_retries: int = 5
     webhook_timeout: float = 10.0
 
+    # Idempotency-Key TTL for POST /v1/ingestions (batch enqueue and tail create).
+    ingest_idempotency_ttl_seconds: int = 86400
+
     # Adapters
     adapter_cloudwatch_region: str = "us-east-1"
     datadog_api_key: str = ""

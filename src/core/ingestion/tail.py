@@ -238,6 +238,7 @@ def tick_one_tail_job(
             with_embeddings=with_embeddings,
             existing_job=job,
             finalize=False,
+            scope=str(meta.get("scope") or "default"),
         )
     except Exception as exc:
         new_count, should_pause = consecutive_errors_after_failure(

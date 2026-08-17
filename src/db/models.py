@@ -4,8 +4,6 @@ from typing import Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
-    BigInteger,
-    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -13,11 +11,17 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
-    UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
+
+DEFAULT_LOG_SCOPE = "default"
+LOG_ENTRY_DEDUP_INDEX = "ux_log_entries_dedup"
+LOG_ENTRY_DEDUP_INDEX_WHERE = text(
+    "original_line_hash IS NOT NULL AND timestamp IS NOT NULL AND source_ref IS NOT NULL"
+)
 
 
 class Base(DeclarativeBase):
@@ -83,6 +87,10 @@ class LogEntry(Base):
     extra_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     source_adapter: Mapped[str] = mapped_column(String(50), nullable=False, default="file")
     source_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
+    original_line_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    scope: Mapped[str] = mapped_column(
+        String(255), nullable=False, default=DEFAULT_LOG_SCOPE, server_default="default"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     source: Mapped["Source"] = relationship("Source", back_populates="log_entries")
@@ -93,6 +101,15 @@ class LogEntry(Base):
     __table_args__ = (
         Index("ix_log_entries_timestamp_service", "timestamp", "service"),
         Index("ix_log_entries_source_adapter", "source_adapter"),
+        Index(
+            LOG_ENTRY_DEDUP_INDEX,
+            "scope",
+            "source_ref",
+            "original_line_hash",
+            "timestamp",
+            unique=True,
+            postgresql_where=LOG_ENTRY_DEDUP_INDEX_WHERE,
+        ),
     )
 
 
@@ -211,3 +228,20 @@ class WorkerJob(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class IngestIdempotencyKey(Base):
+    """Maps an Idempotency-Key header to the original ingest enqueue result."""
+
+    __tablename__ = "ingest_idempotency_keys"
+
+    key: Mapped[str] = mapped_column(String(256), primary_key=True)
+    worker_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("worker_jobs.id"), nullable=True
+    )
+    ingestion_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ingestion_jobs.id"), nullable=True
+    )
+    mode: Mapped[str] = mapped_column(String(20), nullable=False, default="batch")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

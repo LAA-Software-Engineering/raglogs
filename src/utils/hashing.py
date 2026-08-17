@@ -11,3 +11,8 @@ def hash_dict(data: dict[str, Any]) -> str:
 
 def short_hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+def hash_raw_line(text: str) -> str:
+    """SHA-256 hex digest of a raw log line (content-dedup key, not fingerprint)."""
+    return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
