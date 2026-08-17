@@ -450,8 +450,8 @@ class TestTailWindowPagination:
         ):
             tick_one_tail_job(db, job, now, error_threshold=5)
 
-        assert job.last_polled_at == window_start
-        assert job.last_polled_at != now
+        assert job.last_polled_at == now
+        assert job.metadata_json["tail_window_start"] == window_start.isoformat()
         assert job.metadata_json["tail_window_end"] == window_end.isoformat()
 
         held = tick_window_for_job(job, now + timedelta(minutes=5))
@@ -471,4 +471,60 @@ class TestTailWindowPagination:
             tick_one_tail_job(db, job, later, error_threshold=5)
 
         assert job.last_polled_at == later
+        assert "tail_window_start" not in job.metadata_json
         assert "tail_window_end" not in job.metadata_json
+
+    def test_failed_continuation_keeps_held_window(self) -> None:
+        window_start = datetime(2026, 8, 17, 12, 0, tzinfo=timezone.utc)
+        window_end = datetime(2026, 8, 17, 12, 1, tzinfo=timezone.utc)
+        hold_now = datetime(2026, 8, 17, 12, 1, 30, tzinfo=timezone.utc)
+        job = MagicMock()
+        job.id = uuid.uuid4()
+        job.mode = "tail"
+        job.status = "running"
+        job.consecutive_errors = 0
+        job.metadata_json = {"adapter": "datadog", "params": {"query": "*"}}
+        job.cursor = None
+        job.last_polled_at = None
+        job.source_adapter = "datadog"
+        job.error_message = None
+
+        def ingest_with_open_cursor(
+            *, existing_job: MagicMock, **_kwargs: object
+        ) -> tuple:
+            persist_cursors(existing_job, {"stream-0": "page-2"})
+            return existing_job, MagicMock()
+
+        db = MagicMock()
+        with (
+            patch(
+                "src.core.ingestion.service.ingest_from_source",
+                side_effect=ingest_with_open_cursor,
+            ),
+            patch(
+                "src.core.ingestion.tail.tick_window_for_job",
+                return_value=TimeWindow(start=window_start, end=window_end),
+            ),
+        ):
+            tick_one_tail_job(db, job, hold_now, error_threshold=5)
+
+        fail_now = hold_now + timedelta(minutes=5)
+        with patch(
+            "src.core.ingestion.service.ingest_from_source",
+            side_effect=RuntimeError("page failed"),
+        ):
+            tick_one_tail_job(db, job, fail_now, error_threshold=5)
+
+        assert job.last_polled_at == fail_now
+        assert job.status == "running"
+        assert job.consecutive_errors == 1
+        db.execute.return_value.scalars.return_value.all.return_value = [job]
+        assert (
+            _due_tail_jobs(db, fail_now + timedelta(seconds=1), poll_interval=30) == []
+        )
+
+        later = fail_now + timedelta(minutes=10)
+        held = tick_window_for_job(job, later)
+        assert held.start == window_start
+        assert held.end == window_end
+        assert held != TimeWindow(start=fail_now, end=later)

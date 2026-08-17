@@ -116,32 +116,38 @@ def _parse_stored_datetime(value: Any) -> Optional[datetime]:
     return None
 
 
+def _held_paging_window(job: IngestionJob) -> Optional[TimeWindow]:
+    """Return the stored paging window if an open cursor still needs it."""
+    if not has_open_cursors(cursors_from_job(job)):
+        return None
+    meta = job.metadata_json or {}
+    start = _parse_stored_datetime(meta.get("tail_window_start"))
+    end = _parse_stored_datetime(meta.get("tail_window_end"))
+    if start is None or end is None:
+        return None
+    return TimeWindow(start=start, end=end)
+
+
 def tick_window_for_job(
     job: IngestionJob,
     now: datetime,
 ) -> TimeWindow:
     """Window for one tail poll: last poll → now, else first-window from spec / 1m.
 
-    While any stream still has a pagination cursor, reuse the window that
-    produced it (``last_polled_at`` … ``metadata_json['tail_window_end']``)
-    instead of growing ``end`` to now — Datadog/CloudWatch page tokens are
-    only valid for the original from/to.
+    ``last_polled_at`` is only the poll clock. While any stream still has a
+    pagination cursor, reuse ``metadata_json['tail_window_start'|'tail_window_end']``
+    — Datadog/CloudWatch page tokens are only valid for that original from/to.
     """
-    meta = job.metadata_json or {}
-    stored_end = _parse_stored_datetime(meta.get("tail_window_end"))
-    if (
-        job.last_polled_at is not None
-        and stored_end is not None
-        and job.last_polled_at < stored_end
-        and has_open_cursors(cursors_from_job(job))
-    ):
-        return TimeWindow(start=job.last_polled_at, end=stored_end)
+    held = _held_paging_window(job)
+    if held is not None:
+        return held
 
     if job.last_polled_at is not None:
         return TimeWindow(start=job.last_polled_at, end=now)
 
     from src.utils.time import resolve_window
 
+    meta = job.metadata_json or {}
     since = meta.get("since")
     from_raw = meta.get("from_time")
     to_raw = meta.get("to_time")
@@ -158,22 +164,21 @@ def tick_window_for_job(
 def _apply_tail_window_progress(
     job: IngestionJob, window: TimeWindow, now: datetime
 ) -> None:
-    """Advance or hold the poll window after a successful tick.
+    """Record poll clock and either hold or release the paging window.
 
-    Open pagination cursors stay bound to ``window``; only when every stream
-    is exhausted do we move ``last_polled_at`` to ``now``.
+    ``last_polled_at`` is always ``now``. Open cursors persist
+    ``tail_window_start`` / ``tail_window_end``; exhausted streams drop them.
     """
+    job.last_polled_at = now
     meta = dict(job.metadata_json or {})
     if has_open_cursors(cursors_from_job(job)):
-        if job.last_polled_at is None:
-            job.last_polled_at = window.start
+        meta["tail_window_start"] = window.start.isoformat()
         meta["tail_window_end"] = window.end.isoformat()
         job.metadata_json = meta
         return
-    job.last_polled_at = now
-    if "tail_window_end" in meta:
-        meta.pop("tail_window_end")
-        job.metadata_json = meta
+    meta.pop("tail_window_start", None)
+    meta.pop("tail_window_end", None)
+    job.metadata_json = meta
 
 
 def spec_from_tail_job(job: IngestionJob) -> SourceSpec:
