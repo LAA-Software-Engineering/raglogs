@@ -3,6 +3,9 @@
 `admin` is included in every non-exempt set. Scope is stored on keys for later
 G8 isolation; this module does not filter log queries by scope.
 
+A leading `/v1` or `/v2` (any `/v<digits>`) is stripped before matching, so
+`POST /v1/ingestions` uses the same roles as `POST /ingestions`.
+
 Exempt (no auth): GET/HEAD `/health`, `/metrics` (prefix match). `/docs` is
 not exempt — OpenAPI can leak adapter-oriented config.
 
@@ -21,11 +24,14 @@ unmatched paths           admin
 
 from __future__ import annotations
 
+import re
+
 INGEST_ROLES: frozenset[str] = frozenset({"ingest", "admin"})
 QUERY_ROLES: frozenset[str] = frozenset({"query", "admin"})
 ADMIN_ROLES: frozenset[str] = frozenset({"admin"})
 
 EXEMPT_PREFIXES: tuple[str, ...] = ("/health", "/metrics")
+_API_VERSION_PREFIX = re.compile(r"^/v\d+(?=/|$)")
 
 
 def _normalize_path(path: str) -> str:
@@ -36,9 +42,15 @@ def _normalize_path(path: str) -> str:
     return path
 
 
+def _strip_api_version(path: str) -> str:
+    """Map `/v1/query/explain` onto `/query/explain` for role matching."""
+    stripped = _API_VERSION_PREFIX.sub("", path, count=1)
+    return stripped if stripped else "/"
+
+
 def is_exempt_path(path: str) -> bool:
     """True for `/health` and `/metrics` (and nested paths under those)."""
-    normalized = _normalize_path(path)
+    normalized = _strip_api_version(_normalize_path(path))
     for prefix in EXEMPT_PREFIXES:
         if normalized == prefix or normalized.startswith(prefix + "/"):
             return True
@@ -50,7 +62,7 @@ def required_roles(method: str, path: str) -> frozenset[str] | None:
     if is_exempt_path(path):
         return None
 
-    normalized = _normalize_path(path)
+    normalized = _strip_api_version(_normalize_path(path))
     verb = method.upper()
 
     if normalized == "/ingestions" or normalized.startswith("/ingestions/"):
