@@ -4,6 +4,7 @@ from typing import Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -61,6 +62,9 @@ class IngestionJob(Base):
     cursor: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     consecutive_errors: Mapped[int] = mapped_column(Integer, default=0)
+    scope: Mapped[str] = mapped_column(
+        String(255), nullable=False, default=DEFAULT_LOG_SCOPE, server_default="default"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     source: Mapped["Source"] = relationship("Source", back_populates="jobs")
@@ -101,6 +105,14 @@ class LogEntry(Base):
     __table_args__ = (
         Index("ix_log_entries_timestamp_service", "timestamp", "service"),
         Index("ix_log_entries_source_adapter", "source_adapter"),
+        Index("ix_log_entries_scope_timestamp", "scope", "timestamp"),
+        Index(
+            "ix_log_entries_scope_service_environment_fingerprint",
+            "scope",
+            "service",
+            "environment",
+            "fingerprint",
+        ),
         Index(
             LOG_ENTRY_DEDUP_INDEX,
             "scope",
@@ -208,6 +220,9 @@ class ApiKey(Base):
     key_hash: Mapped[str] = mapped_column(Text, nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False)
     scope: Mapped[str] = mapped_column(String(255), nullable=False, default="default")
+    allow_scope_override: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     webhook_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

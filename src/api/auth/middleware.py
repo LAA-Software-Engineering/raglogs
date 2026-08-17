@@ -24,6 +24,7 @@ class AuthPrincipal:
     auth_method: str
     key_id: str | None = None
     subject: str | None = None
+    allow_scope_override: bool = False
 
 
 def _auth_error(status_code: int, error_code: str, message: str) -> JSONResponse:
@@ -62,6 +63,7 @@ def _authenticate_token(token: str, settings: Any) -> AuthPrincipal | None:
             scope=principal.scope,
             auth_method="oidc",
             subject=principal.subject,
+            allow_scope_override=False,
         )
 
     if mode not in ("api_key", "both"):
@@ -76,6 +78,7 @@ def _authenticate_token(token: str, settings: Any) -> AuthPrincipal | None:
         scope=record.scope,
         auth_method="api_key",
         key_id=str(record.id),
+        allow_scope_override=getattr(record, "allow_scope_override", False) is True,
     )
 
 

@@ -280,6 +280,7 @@ raglogs ingest --adapter k8s ./node-logs.tar.gz
 | `--since` | Window for pull adapters, e.g. `30m`, `1h`, `24h` (default last 1h) |
 | `--from` / `--to` | Explicit ISO 8601 window bounds (pull adapters) |
 | `--resume-job` | Prior ingestion job UUID to resume pagination cursors from |
+| `--scope` | Isolation scope (CLI default `default`). Service requests require a resolvable scope. |
 
 **Loki**
 
@@ -636,6 +637,7 @@ Mint, list, and revoke HTTP API keys. The API bearer token is printed **once** a
 
 ```bash
 raglogs keys create --role query --scope default --name "ci"
+raglogs keys create --role query --scope incident:INC-9 --allow-scope-override --name "ci-override"
 raglogs keys list
 raglogs keys revoke <key-uuid>
 ```
@@ -643,7 +645,8 @@ raglogs keys revoke <key-uuid>
 | Flag | Description |
 |---|---|
 | `--role` | `ingest`, `query`, or `admin` (default `query`) |
-| `--scope` | Stored on the key for later tenant isolation (G8). Default `default`. Not used to filter log queries yet. |
+| `--scope` | Pin the key to this isolation scope (enforced on every service read/write). Default `default`. Convention: `incident:<id>`, `service:<name>`, `env:<name>`. |
+| `--allow-scope-override` | Allow the caller to pass a request `scope` other than the key's pin. Pinned by default. |
 | `--name` | Optional label |
 
 Requires a migrated database (`raglogs init`). See [HTTP API authentication](#http-api-authentication).
@@ -945,7 +948,13 @@ A valid key with the wrong role returns **403**:
 {"error_code": "AUTH_FORBIDDEN", "message": "…"}
 ```
 
-Keys are stored argon2-hashed with a short indexed prefix. `scope` defaults to `default` and is stored for later isolation work — this release does **not** filter clusters or logs by scope. Each new key also gets a `whsec_…` webhook signing secret (shown once; `keys list` shows `whsec_****` only).
+Keys are stored argon2-hashed with a short indexed prefix. Each key is **pinned** to a `scope` (default `default`) and every service ingest/query is filtered by that scope — including baseline comparison — so one incident's logs cannot contaminate another. Mint with `--allow-scope-override` to let the caller pass a request `scope`. A service request with no resolvable scope returns **400**:
+
+```json
+{"error_code": "SCOPE_REQUIRED", "message": "…"}
+```
+
+A pinned key that sends a different non-empty scope returns **403** `SCOPE_MISMATCH`. The CLI is scope-optional and defaults to `default` (`raglogs ingest --scope incident:INC-9`, `raglogs explain --scope …`). Each new key also gets a `whsec_…` webhook signing secret (shown once; `keys list` shows `whsec_****` only).
 
 Optional OIDC: set `AUTH_MODE=oidc` or `both` and `OIDC_ISSUER`. A JWT (three dotted segments) is validated via JWKS (`iss`, `exp`, and `aud` when `OIDC_AUDIENCE` is set). Role comes from claim `raglogs_role` or `roles`, defaulting to `query`. When `AUTH_MODE=api_key`, JWTs are rejected.
 
@@ -1003,11 +1012,11 @@ curl -X POST http://localhost:8000/v1/ingestions \
   -d '{"paths":["/var/log/app"]}'
 ```
 
-**Content dedup.** Every persist path (`ingest_files`, `ingest_from_source` including tail ticks, and push `/lines`) stores `original_line_hash` (SHA-256 of the **raw** line, distinct from the normalized fingerprint) and upserts on `(scope, source_ref, original_line_hash, timestamp)`. Re-reading the same physical lines is a no-op, so cluster counts stay stable across overlapping windows and tail/push retries. Missing `source_ref` is stored as `""` so uniqueness works (Postgres NULLs are distinct). `scope` defaults to `"default"`, or the API key's scope when a principal is present; queries are **not** filtered by scope yet. Duplicate lines are skipped, not errors.
+**Content dedup.** Every persist path (`ingest_files`, `ingest_from_source` including tail ticks, and push `/lines`) stores `original_line_hash` (SHA-256 of the **raw** line, distinct from the normalized fingerprint) and upserts on `(scope, source_ref, original_line_hash, timestamp)`. Re-reading the same physical lines is a no-op, so cluster counts stay stable across overlapping windows and tail/push retries. Missing `source_ref` is stored as `""` so uniqueness works (Postgres NULLs are distinct). `scope` defaults to `"default"` (CLI) or is resolved from the API key / request (service). Queries, ingest lists, and baseline comparison are filtered by the same scope. Duplicate lines are skipped, not errors.
 
 **Completion callbacks.** Optional `callback_url` on `POST /v1/ingestions` (http or https only; `file:` and empty hosts are rejected). When a **batch** worker job reaches a terminal state (`done` / `failed`), raglogs POSTs an HMAC-SHA256-signed JSON body to that URL. Delivery is fail-open: retries with jittered exponential backoff (`WEBHOOK_MAX_RETRIES`, default 5 extra attempts) on 5xx, 429, and connect errors; 4xx other than 429 are not retried. Failures are logged and **do not** change ingest status — poll `GET /v1/ingestions/jobs/{worker_job_id}` still works.
 
-`job_id` in the payload is the **ingestion_job_id** when ingest created a row; if the worker failed before that, it is the `worker_job_id`. `scope` is the authenticated key's scope, or `"default"` when auth is off. `counts.clusters` is `0` (clustering is not part of ingest). Worker `done` maps to `"succeeded"` (or `"partial"` when `error_count > 0`); `failed` maps to `"failed"`.
+`job_id` in the payload is the **ingestion_job_id** when ingest created a row; if the worker failed before that, it is the `worker_job_id`. `scope` is the resolved isolation scope (API key pin, request override when allowed, or `"default"` when auth is off). `counts.clusters` is `0` (clustering is not part of ingest). Worker `done` maps to `"succeeded"` (or `"partial"` when `error_count > 0`); `failed` maps to `"failed"`.
 
 ```bash
 curl -X POST http://localhost:8000/v1/ingestions \

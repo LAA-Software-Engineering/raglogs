@@ -36,6 +36,11 @@ def ingest_cmd(
     from_time: Optional[str] = typer.Option(None, "--from", help="Window start, ISO 8601 (non-file adapters)"),
     to_time: Optional[str] = typer.Option(None, "--to", help="Window end, ISO 8601 (non-file adapters)"),
     resume_job: Optional[str] = typer.Option(None, "--resume-job", help="Prior ingestion job UUID to resume cursors from (non-file adapters)"),
+    scope: str = typer.Option(
+        "default",
+        "--scope",
+        help="Isolation scope (CLI default: default). Convention: incident:<id>, service:<name>, env:<name>",
+    ),
 ):
     """Ingest logs into the database."""
     from src.db.session import get_db
@@ -84,6 +89,7 @@ def ingest_cmd(
                         fmt=fmt,
                         progress_callback=on_progress,
                         with_embeddings=with_embeddings,
+                        scope=scope,
                     )
                 else:
                     import uuid
@@ -132,6 +138,7 @@ def ingest_cmd(
                         resume_completed_streams=resume_completed_streams,
                         progress_callback=on_progress,
                         with_embeddings=with_embeddings,
+                        scope=scope,
                     )
                 job_id = str(job.id)  # read inside session before it closes
         except ValueError as e:

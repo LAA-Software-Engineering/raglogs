@@ -37,8 +37,8 @@ class Settings(BaseSettings):
 
     # HTTP API authentication (G2). Default off so local demo and existing
     # TestClient tests stay unauthenticated. Production/Docker should set
-    # AUTH_ENABLED=true. Scope on keys is stored for later G8 isolation;
-    # queries are not filtered by scope yet.
+    # AUTH_ENABLED=true. Keys are pinned to a scope (G8) unless minted with
+    # allow_scope_override; every service read/write is filtered by scope.
     auth_enabled: bool = False
     auth_mode: Literal["api_key", "oidc", "both"] = "api_key"
     oidc_issuer: str = ""

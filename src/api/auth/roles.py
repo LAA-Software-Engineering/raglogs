@@ -1,7 +1,7 @@
 """Route → allowed role mapping.
 
-`admin` is included in every non-exempt set. Scope is stored on keys for later
-G8 isolation; this module does not filter log queries by scope.
+`admin` is included in every non-exempt set. Scope isolation (G8) is enforced
+in ``src.api.auth.scope`` and query filters, not in this role map.
 
 A leading `/v1` or `/v2` (any `/v<digits>`) is stripped before matching, so
 `POST /v1/ingestions` uses the same roles as `POST /ingestions`.

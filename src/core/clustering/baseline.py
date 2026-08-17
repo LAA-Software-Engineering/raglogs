@@ -5,7 +5,11 @@ from typing import Optional
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from src.db.models import LogEntry, IngestionJob
+from src.db.models import DEFAULT_LOG_SCOPE, IngestionJob, LogEntry
+from src.db.scope_filter import (
+    filter_ingestion_jobs_by_scope,
+    filter_log_entries_by_scope,
+)
 
 
 def get_baseline_counts(
@@ -15,6 +19,7 @@ def get_baseline_counts(
     service: Optional[str] = None,
     environment: Optional[str] = None,
     exclude_ingestion_job_id: Optional[uuid.UUID] = None,
+    scope: str = DEFAULT_LOG_SCOPE,
 ) -> dict[str, int]:
     """
     Return a dict of {fingerprint: count} for the baseline window.
@@ -31,6 +36,7 @@ def get_baseline_counts(
             LogEntry.fingerprint.isnot(None),
         )
     )
+    q = filter_log_entries_by_scope(q, scope)
 
     if service:
         q = q.where(LogEntry.service == service)
@@ -45,11 +51,11 @@ def get_baseline_counts(
 
         if current_job and current_job.started_at:
             # Exclude all jobs that started at or after this job (including itself)
-            later_jobs = db.execute(
-                select(IngestionJob.id).where(
-                    IngestionJob.started_at >= current_job.started_at
-                )
-            ).scalars().all()
+            later_stmt = select(IngestionJob.id).where(
+                IngestionJob.started_at >= current_job.started_at
+            )
+            later_stmt = filter_ingestion_jobs_by_scope(later_stmt, scope)
+            later_jobs = db.execute(later_stmt).scalars().all()
             if later_jobs:
                 q = q.where(LogEntry.ingestion_job_id.notin_(later_jobs))
         else:

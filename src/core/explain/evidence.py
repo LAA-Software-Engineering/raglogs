@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 
 from src.core.clustering.clusterer import ClusterData
 from src.core.normalization.patterns import is_trigger_message
-from src.db.models import LogEntry
+from src.db.models import DEFAULT_LOG_SCOPE, LogEntry
+from src.db.scope_filter import filter_log_entries_by_scope
 from src.utils.time import format_window
 
 
@@ -51,6 +52,7 @@ def find_trigger_candidates(
     window_end: datetime,
     lookback_minutes: int = 10,
     ingestion_job_id: Optional[uuid.UUID] = None,
+    scope: str = DEFAULT_LOG_SCOPE,
 ) -> list[TriggerCandidate]:
     """
     Find likely trigger events in a window slightly before the main window.
@@ -63,6 +65,7 @@ def find_trigger_candidates(
         LogEntry.timestamp >= search_start,
         LogEntry.timestamp <= window_end,
     )
+    q = filter_log_entries_by_scope(q, scope)
     if ingestion_job_id:
         q = q.where(LogEntry.ingestion_job_id == ingestion_job_id)
     q = q.limit(5000)
@@ -99,12 +102,20 @@ def find_trigger_candidates(
     return deduped[:3]
 
 
-def count_logs_in_window(db: Session, window_start: datetime, window_end: datetime, service: Optional[str] = None, ingestion_job_id: Optional[uuid.UUID] = None) -> int:
+def count_logs_in_window(
+    db: Session,
+    window_start: datetime,
+    window_end: datetime,
+    service: Optional[str] = None,
+    ingestion_job_id: Optional[uuid.UUID] = None,
+    scope: str = DEFAULT_LOG_SCOPE,
+) -> int:
     from sqlalchemy import func
     q = select(func.count(LogEntry.id)).where(
         LogEntry.timestamp >= window_start,
         LogEntry.timestamp <= window_end,
     )
+    q = filter_log_entries_by_scope(q, scope)
     if service:
         q = q.where(LogEntry.service == service)
     if ingestion_job_id:
@@ -122,11 +133,19 @@ def assemble_evidence(
     environment_filter: Optional[str] = None,
     max_evidence_items: int = 8,
     ingestion_job_id: Optional[uuid.UUID] = None,
+    scope: str = DEFAULT_LOG_SCOPE,
 ) -> EvidencePacket:
     """
     Assemble an evidence packet from clusters and window data.
     """
-    total_logs = count_logs_in_window(db, window_start, window_end, service=service_filter, ingestion_job_id=ingestion_job_id)
+    total_logs = count_logs_in_window(
+        db,
+        window_start,
+        window_end,
+        service=service_filter,
+        ingestion_job_id=ingestion_job_id,
+        scope=scope,
+    )
 
     # Error/warn clusters only for primary analysis
     significant_clusters = [
@@ -143,7 +162,14 @@ def assemble_evidence(
     secondary = sorted(significant_clusters[1:], key=lambda c: c.count, reverse=True)[:4] if len(significant_clusters) > 1 else []
 
     # Trigger candidates (look back up to 10 min before window start)
-    triggers = find_trigger_candidates(db, window_start, window_end, lookback_minutes=10, ingestion_job_id=ingestion_job_id)
+    triggers = find_trigger_candidates(
+        db,
+        window_start,
+        window_end,
+        lookback_minutes=10,
+        ingestion_job_id=ingestion_job_id,
+        scope=scope,
+    )
 
     # Collect affected services
     services_set: set[str] = set()

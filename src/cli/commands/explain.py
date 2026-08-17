@@ -19,6 +19,11 @@ def explain_cmd(
     no_llm: bool = typer.Option(False, "--no-llm", help="Skip LLM, use deterministic templates"),
     all_ingestions: bool = typer.Option(False, "--all-ingestions", help="Include all historical ingestion data (not just latest)"),
     ingestion_job: Optional[str] = typer.Option(None, "--ingestion-job", help="Scope analysis to a specific ingestion job UUID"),
+    scope: str = typer.Option(
+        "default",
+        "--scope",
+        help="Isolation scope (CLI default: default)",
+    ),
 ):
     """Explain what happened in a time window. This is the core command."""
     import uuid
@@ -49,7 +54,7 @@ def explain_cmd(
                     job_id = uuid.UUID(ingestion_job)
                 elif not all_ingestions:
                     # Default: scope to latest ingestion job to avoid count inflation
-                    job_id = get_latest_ingestion_job_id(db)
+                    job_id = get_latest_ingestion_job_id(db, scope=scope)
                     if job_id:
                         ui.print(f"[dim]Scoped to latest ingestion: {job_id}[/dim]")
                 result = explain_window(
@@ -62,6 +67,7 @@ def explain_cmd(
                     max_clusters=max_clusters,
                     baseline_window_str=baseline_window,
                     ingestion_job_id=job_id,
+                    scope=scope,
                 )
         except Exception as e:
             ui.print(f"[red]Error:[/red] {e}")

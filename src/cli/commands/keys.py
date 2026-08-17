@@ -29,7 +29,12 @@ def create_cmd(
     scope: str = typer.Option(
         "default",
         "--scope",
-        help="Key scope (stored for later isolation; unused today)",
+        help="Pin this key to a scope (enforced on every service read/write). Convention: incident:<id>, service:<name>, env:<name>",
+    ),
+    allow_scope_override: bool = typer.Option(
+        False,
+        "--allow-scope-override",
+        help="Allow the caller to pass a request scope other than the key's pinned scope",
     ),
     name: Optional[str] = typer.Option(
         None, "--name", help="Optional label for this key"
@@ -45,7 +50,10 @@ def create_cmd(
 
     try:
         plaintext, webhook_secret, info = create_api_key(
-            role=role, scope=scope, name=name
+            role=role,
+            scope=scope,
+            name=name,
+            allow_scope_override=allow_scope_override,
         )
     except Exception as exc:
         console.print(f"[red]Error:[/red] {exc}")
@@ -66,7 +74,8 @@ def create_cmd(
         )
     )
     console.print(
-        f"[dim]id={info.id}  prefix={info.key_prefix}  role={info.role}  scope={info.scope}[/dim]"
+        f"[dim]id={info.id}  prefix={info.key_prefix}  role={info.role}  "
+        f"scope={info.scope}  allow_scope_override={info.allow_scope_override}[/dim]"
     )
     console.print(
         "[dim]HMAC ingest callbacks with the webhook secret (whsec_…), not the API key.[/dim]"
@@ -89,6 +98,7 @@ def list_cmd() -> None:
     table.add_column("prefix")
     table.add_column("role")
     table.add_column("scope")
+    table.add_column("override")
     table.add_column("webhook")
     table.add_column("name")
     table.add_column("created")
@@ -102,6 +112,7 @@ def list_cmd() -> None:
             key.key_prefix,
             key.role,
             key.scope,
+            "yes" if key.allow_scope_override else "no",
             key.webhook_secret_preview or "",
             key.name or "",
             created,

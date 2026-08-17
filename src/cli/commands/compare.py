@@ -59,6 +59,11 @@ def compare_cmd(
         help="Include all historical ingestion data"),
     fmt: str = typer.Option("text", "--format",
         help="Output format: text|json"),
+    scope: str = typer.Option(
+        "default",
+        "--scope",
+        help="Isolation scope (CLI default: default)",
+    ),
 ):
     """Diff two time windows — see exactly what changed."""
     from datetime import datetime, timedelta, timezone
@@ -104,20 +109,20 @@ def compare_cmd(
     with console.status("[cyan]Comparing windows...[/cyan]"):
         try:
             with get_db() as db:
-                job_id = None if all_ingestions else get_latest_ingestion_job_id(db)
+                job_id = None if all_ingestions else get_latest_ingestion_job_id(db, scope=scope)
 
                 # Cluster both windows independently (no baseline comparison needed)
                 _, clusters_a = run_clustering(
                     db=db, window_start=a_start, window_end=a_end,
                     service=service, environment=env,
                     save_to_db=False, ingestion_job_id=job_id,
-                    max_clusters=50,
+                    max_clusters=50, scope=scope,
                 )
                 _, clusters_b = run_clustering(
                     db=db, window_start=b_start, window_end=b_end,
                     service=service, environment=env,
                     save_to_db=False, ingestion_job_id=job_id,
-                    max_clusters=50,
+                    max_clusters=50, scope=scope,
                 )
 
                 # Get trigger candidates from evidence assembly for both windows
@@ -125,11 +130,13 @@ def compare_cmd(
                     db=db, window_start=a_start, window_end=a_end,
                     clusters=clusters_a, service_filter=service,
                     environment_filter=env, ingestion_job_id=job_id,
+                    scope=scope,
                 )
                 packet_b = assemble_evidence(
                     db=db, window_start=b_start, window_end=b_end,
                     clusters=clusters_b, service_filter=service,
                     environment_filter=env, ingestion_job_id=job_id,
+                    scope=scope,
                 )
 
                 result = compare_windows(

@@ -277,6 +277,7 @@ def ingest_files(
         source_adapter="file",
         source_ref=", ".join(str(p) for p in files[:5]),
         mode="batch",
+        scope=scope or DEFAULT_LOG_SCOPE,
     )
     db.add(job)
     db.flush()
@@ -449,6 +450,7 @@ def ingest_from_source(
             source_adapter=spec.adapter,
             source_ref=", ".join(r.stream_id for r in refs[:5]),
             mode="batch",
+            scope=scope or DEFAULT_LOG_SCOPE,
         )
         db.add(job)
         db.flush()
@@ -569,6 +571,7 @@ def ingest_push_lines(
         source_adapter="push",
         source_ref="push",
         mode="push",
+        scope=scope or DEFAULT_LOG_SCOPE,
     )
     db.add(job)
     db.flush()

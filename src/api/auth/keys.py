@@ -32,6 +32,7 @@ class ApiKeyInfo:
     revoked_at: datetime | None
     created_at: datetime | None
     webhook_secret_preview: str | None = None
+    allow_scope_override: bool = False
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,7 @@ class ApiKeyRecord:
     scope: str
     revoked_at: datetime | None
     created_at: datetime | None = None
+    allow_scope_override: bool = False
 
 
 def generate_api_key() -> str:
@@ -127,6 +129,7 @@ def lookup_api_key(token: str) -> ApiKeyRecord | None:
                 scope=row.scope,
                 revoked_at=row.revoked_at,
                 created_at=row.created_at,
+                allow_scope_override=bool(getattr(row, "allow_scope_override", False)),
             )
             for row in rows
         ]
@@ -138,6 +141,7 @@ def create_api_key(
     role: str,
     scope: str = DEFAULT_SCOPE,
     name: str | None = None,
+    allow_scope_override: bool = False,
 ) -> tuple[str, str, ApiKeyInfo]:
     """Persist a hashed key and return (api_key, webhook_secret, metadata).
 
@@ -158,6 +162,7 @@ def create_api_key(
         role=role,
         scope=scope,
         name=name,
+        allow_scope_override=allow_scope_override,
     )
     return plaintext, webhook_secret, record
 
@@ -174,6 +179,7 @@ def _key_info(row: Any) -> ApiKeyInfo:
         webhook_secret_preview=mask_webhook_secret(
             getattr(row, "webhook_secret", None)
         ),
+        allow_scope_override=bool(getattr(row, "allow_scope_override", False)),
     )
 
 
@@ -184,6 +190,7 @@ def _persist_key(
     role: str,
     scope: str,
     name: str | None,
+    allow_scope_override: bool = False,
 ) -> ApiKeyInfo:
     from src.db.models import ApiKey
     from src.db.session import get_db
@@ -195,6 +202,7 @@ def _persist_key(
         role=role,
         scope=scope,
         webhook_secret=webhook_secret,
+        allow_scope_override=allow_scope_override,
     )
     with get_db() as db:
         db.add(row)

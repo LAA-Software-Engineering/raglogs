@@ -21,7 +21,6 @@ from src.api.schemas.v1 import (
     ExplainResponse,
     explain_from_cached,
     explain_from_result,
-    scope_from_request,
 )
 
 if TYPE_CHECKING:
@@ -42,11 +41,13 @@ class ExplainRequest(BaseModel):
     ingestion_job_id: Optional[str] = None   # scope to a specific ingest
     force_refresh: bool = False               # bypass cache
     format: Literal["json", "markdown"] = "json"
+    scope: Optional[str] = None
 
 
 def _cache_key(window_start: datetime, window_end: datetime,
                service: Optional[str], env: Optional[str],
-               ingestion_job_id: Optional[str]) -> str:
+               ingestion_job_id: Optional[str],
+               scope: str = "default") -> str:
     """SHA-256 of the canonical filter string — used to detect cache hits."""
     canonical = json.dumps({
         "ws": window_start.isoformat(),
@@ -54,6 +55,7 @@ def _cache_key(window_start: datetime, window_end: datetime,
         "svc": service,
         "env": env,
         "ijid": ingestion_job_id,
+        "scope": scope,
     }, sort_keys=True)
     return hashlib.sha256(canonical.encode()).hexdigest()
 
@@ -183,9 +185,12 @@ def _save_to_cache(db, cache_hash: str, window_start: datetime, window_end: date
     response_model_by_alias=True,
 )
 def explain_endpoint(request: ExplainRequest, http_request: Request) -> ExplainResponse:
+    from src.api.auth.scope import bind_request_scope
     from src.core.explain.summarizer import explain_window
     from src.db.session import get_db
     from src.utils.time import resolve_window
+
+    scope = bind_request_scope(http_request, request.scope)
 
     try:
         window_start, window_end = resolve_window(
@@ -203,8 +208,9 @@ def explain_endpoint(request: ExplainRequest, http_request: Request) -> ExplainR
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid ingestion_job_id")
 
-    cache_hash = _cache_key(window_start, window_end, request.service, request.env, request.ingestion_job_id)
-    scope = scope_from_request(http_request)
+    cache_hash = _cache_key(
+        window_start, window_end, request.service, request.env, request.ingestion_job_id, scope
+    )
 
     try:
         with get_db() as db:
@@ -234,6 +240,7 @@ def explain_endpoint(request: ExplainRequest, http_request: Request) -> ExplainR
                 max_clusters=request.max_clusters,
                 baseline_window_str=request.baseline_window,
                 ingestion_job_id=ingestion_job_id,
+                scope=scope,
             )
 
             body = explain_from_result(
