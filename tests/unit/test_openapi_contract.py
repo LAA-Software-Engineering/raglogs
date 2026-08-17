@@ -72,6 +72,19 @@ def test_ingest_request_includes_callback_url() -> None:
     assert "callback_url" in schema["properties"]
 
 
+def test_list_ingestions_documents_limit_query_param() -> None:
+    paths = app.openapi()["paths"]
+    for path in ("/v1/ingestions", "/ingestions"):
+        params = paths[path]["get"].get("parameters") or []
+        limit = next((p for p in params if p.get("name") == "limit"), None)
+        assert limit is not None, f"{path} GET must document limit"
+        assert limit.get("in") == "query"
+        assert limit.get("required") is not True
+        schema = limit.get("schema") or {}
+        assert schema.get("type") == "integer"
+        assert schema.get("default") == 25
+
+
 def test_ingest_post_documents_idempotency_key_header() -> None:
     paths = app.openapi()["paths"]
     for path in ("/v1/ingestions", "/ingestions"):
