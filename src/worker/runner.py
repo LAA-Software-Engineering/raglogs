@@ -152,7 +152,6 @@ def process_one(db) -> bool:
         db.flush()
 
         job_log.info("worker_job_done", **result)
-        return True
 
     except Exception as exc:
         worker_job.status = "failed"
@@ -160,7 +159,16 @@ def process_one(db) -> bool:
         worker_job.finished_at = datetime.now(tz=timezone.utc)
         db.flush()
         job_log.error("worker_job_failed", error=str(exc))
-        return True  # we did process (even if it failed), don't sleep
+
+    # Persist terminal status before outbound HTTP. get_db() only commits
+    # when the with-block exits; without this, webhook retries hold an
+    # uncommitted done/failed row (poll stays pending, a crash re-claims).
+    db.commit()
+
+    from src.core.ingestion.webhooks import maybe_deliver_ingest_callback
+
+    maybe_deliver_ingest_callback(db, worker_job)
+    return True  # processed (even if failed) — don't sleep
 
 
 def run_worker(poll_interval: int = POLL_INTERVAL):

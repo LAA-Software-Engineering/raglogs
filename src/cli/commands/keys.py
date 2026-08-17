@@ -26,10 +26,16 @@ console = Console()
 @app.command("create")
 def create_cmd(
     role: str = typer.Option("query", "--role", help="ingest | query | admin"),
-    scope: str = typer.Option("default", "--scope", help="Key scope (stored for later isolation; unused today)"),
-    name: Optional[str] = typer.Option(None, "--name", help="Optional label for this key"),
+    scope: str = typer.Option(
+        "default",
+        "--scope",
+        help="Key scope (stored for later isolation; unused today)",
+    ),
+    name: Optional[str] = typer.Option(
+        None, "--name", help="Optional label for this key"
+    ),
 ) -> None:
-    """Create an API key and print the plaintext secret once."""
+    """Create an API key and print the plaintext API key and webhook secret once."""
     from src.api.auth.keys import create_api_key
 
     role = role.strip().lower()
@@ -38,7 +44,9 @@ def create_cmd(
         raise typer.Exit(1)
 
     try:
-        plaintext, info = create_api_key(role=role, scope=scope, name=name)
+        plaintext, webhook_secret, info = create_api_key(
+            role=role, scope=scope, name=name
+        )
     except Exception as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1)
@@ -51,13 +59,23 @@ def create_cmd(
         )
     )
     console.print(
+        Panel(
+            webhook_secret,
+            title="[bold cyan]Webhook signing secret — copy it now; it will not be shown again[/bold cyan]",
+            expand=False,
+        )
+    )
+    console.print(
         f"[dim]id={info.id}  prefix={info.key_prefix}  role={info.role}  scope={info.scope}[/dim]"
+    )
+    console.print(
+        "[dim]HMAC ingest callbacks with the webhook secret (whsec_…), not the API key.[/dim]"
     )
 
 
 @app.command("list")
 def list_cmd() -> None:
-    """List keys (id, prefix, role, scope, created, revoked). Hashes are never shown."""
+    """List keys (id, prefix, role, scope, webhook preview, created, revoked). Hashes are never shown."""
     from src.api.auth.keys import list_api_keys
 
     try:
@@ -71,6 +89,7 @@ def list_cmd() -> None:
     table.add_column("prefix")
     table.add_column("role")
     table.add_column("scope")
+    table.add_column("webhook")
     table.add_column("name")
     table.add_column("created")
     table.add_column("revoked")
@@ -83,6 +102,7 @@ def list_cmd() -> None:
             key.key_prefix,
             key.role,
             key.scope,
+            key.webhook_secret_preview or "",
             key.name or "",
             created,
             revoked,
@@ -90,7 +110,9 @@ def list_cmd() -> None:
 
     console.print(table)
     if not keys:
-        console.print("[dim]No API keys. Create one with: raglogs keys create --role query[/dim]")
+        console.print(
+            "[dim]No API keys. Create one with: raglogs keys create --role query[/dim]"
+        )
 
 
 @app.command("revoke")

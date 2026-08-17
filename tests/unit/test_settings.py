@@ -101,3 +101,22 @@ def test_ingest_backpressure_and_tail_settings_from_env(monkeypatch):
     assert settings.ingest_push_max_lines == 100
     assert settings.tail_poll_interval == 15
     assert settings.tail_error_threshold == 3
+
+
+def test_webhook_settings_defaults():
+    settings = Settings(_env_file=None)
+    assert settings.webhook_secret == ""
+    assert settings.webhook_max_retries == 5
+    assert settings.webhook_timeout == 10.0
+
+
+def test_webhook_settings_from_env(monkeypatch):
+    monkeypatch.setenv("WEBHOOK_SECRET", "whsec_global")
+    monkeypatch.setenv("WEBHOOK_MAX_RETRIES", "3")
+    monkeypatch.setenv("WEBHOOK_TIMEOUT", "7.5")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.webhook_secret == "whsec_global"
+    assert settings.webhook_max_retries == 3
+    assert settings.webhook_timeout == pytest.approx(7.5)

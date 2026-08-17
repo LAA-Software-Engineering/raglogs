@@ -63,6 +63,11 @@ def test_unversioned_aliases_are_deprecated_in_schema() -> None:
     assert paths["/config"]["get"].get("deprecated") is True
 
 
+def test_ingest_request_includes_callback_url() -> None:
+    schema = app.openapi()["components"]["schemas"]["IngestRequest"]
+    assert "callback_url" in schema["properties"]
+
+
 def test_health_is_unversioned() -> None:
     paths = app.openapi()["paths"]
     assert "/health" in paths

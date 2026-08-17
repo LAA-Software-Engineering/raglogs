@@ -17,6 +17,7 @@ def _mock_db():
     db = MagicMock()
     db.flush = MagicMock()
     db.add = MagicMock()
+    db.commit = MagicMock()
     return db
 
 
@@ -319,3 +320,103 @@ class TestProcessOne:
 
         # flush is called twice: once in claim_next_job, once after completion
         assert db.flush.call_count == 2
+
+    def test_callback_invoked_on_done(self):
+        db = _mock_db()
+        job = _mock_worker_job(payload={
+            "paths": ["/app/logs"],
+            "callback_url": "https://hooks.example.com/cb",
+            "scope": "default",
+        })
+        db.execute.return_value.scalar_one_or_none.return_value = job
+
+        with patch("src.worker.runner.run_ingest_job", return_value={
+            "ingestion_job_id": "x",
+            "parsed_count": 10,
+            "error_count": 0,
+        }), patch(
+            "src.core.ingestion.webhooks.maybe_deliver_ingest_callback",
+        ) as mock_deliver:
+            process_one(db)
+
+        assert job.status == "done"
+        mock_deliver.assert_called_once_with(db, job)
+
+    def test_commits_terminal_status_before_webhook_delivery(self):
+        db = _mock_db()
+        job = _mock_worker_job(payload={
+            "paths": ["/app/logs"],
+            "callback_url": "https://hooks.example.com/cb",
+        })
+        db.execute.return_value.scalar_one_or_none.return_value = job
+
+        order: list[str] = []
+        db.commit.side_effect = lambda: order.append("commit")
+
+        with patch(
+            "src.worker.runner.run_ingest_job",
+            return_value={"ingestion_job_id": "x"},
+        ), patch(
+            "src.core.ingestion.webhooks.maybe_deliver_ingest_callback",
+            side_effect=lambda *_a, **_k: order.append("deliver"),
+        ) as mock_deliver:
+            process_one(db)
+
+        assert job.status == "done"
+        mock_deliver.assert_called_once_with(db, job)
+        db.commit.assert_called()
+        assert order == ["commit", "deliver"]
+
+    def test_callback_invoked_on_failed(self):
+        db = _mock_db()
+        job = _mock_worker_job(payload={
+            "paths": ["/app/logs"],
+            "callback_url": "https://hooks.example.com/cb",
+        })
+        db.execute.return_value.scalar_one_or_none.return_value = job
+
+        order: list[str] = []
+        db.commit.side_effect = lambda: order.append("commit")
+
+        with patch(
+            "src.worker.runner.run_ingest_job",
+            side_effect=RuntimeError("disk full"),
+        ), patch(
+            "src.core.ingestion.webhooks.maybe_deliver_ingest_callback",
+            side_effect=lambda *_a, **_k: order.append("deliver"),
+        ) as mock_deliver:
+            result = process_one(db)
+
+        assert result is True
+        assert job.status == "failed"
+        mock_deliver.assert_called_once_with(db, job)
+        assert order == ["commit", "deliver"]
+
+    def test_no_callback_url_still_skips_http_inside_helper(self):
+        db = _mock_db()
+        job = _mock_worker_job()
+        db.execute.return_value.scalar_one_or_none.return_value = job
+
+        with patch("src.worker.runner.run_ingest_job", return_value={"ingestion_job_id": "x"}), \
+             patch("src.core.ingestion.webhooks.deliver_callback") as mock_http:
+            process_one(db)
+
+        mock_http.assert_not_called()
+
+    def test_webhook_exception_does_not_fail_job(self):
+        db = _mock_db()
+        job = _mock_worker_job(payload={
+            "paths": ["/app/logs"],
+            "callback_url": "https://hooks.example.com/cb",
+        })
+        db.execute.return_value.scalar_one_or_none.return_value = job
+
+        with patch("src.worker.runner.run_ingest_job", return_value={"ingestion_job_id": "x"}), \
+             patch(
+                 "src.core.ingestion.webhooks._maybe_deliver_ingest_callback",
+                 side_effect=RuntimeError("boom"),
+             ):
+            result = process_one(db)
+
+        assert result is True
+        assert job.status == "done"

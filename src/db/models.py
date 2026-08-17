@@ -191,6 +191,7 @@ class ApiKey(Base):
     key_hash: Mapped[str] = mapped_column(Text, nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False)
     scope: Mapped[str] = mapped_column(String(255), nullable=False, default="default")
+    webhook_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
