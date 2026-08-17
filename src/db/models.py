@@ -53,6 +53,10 @@ class IngestionJob(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_adapter: Mapped[str] = mapped_column(String(50), nullable=False, default="file")
     source_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mode: Mapped[str] = mapped_column(String(20), nullable=False, default="batch")
+    cursor: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    consecutive_errors: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     source: Mapped["Source"] = relationship("Source", back_populates="jobs")

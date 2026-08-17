@@ -187,6 +187,7 @@ def ingest_files(
         metadata_json={"paths": paths},
         source_adapter="file",
         source_ref=", ".join(str(p) for p in files[:5]),
+        mode="batch",
     )
     db.add(job)
     db.flush()
@@ -256,6 +257,8 @@ def ingest_from_source(
     resume_completed_streams: Optional[Iterable[str]] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
     with_embeddings: bool = False,
+    existing_job: Optional[IngestionJob] = None,
+    finalize: bool = True,
 ) -> tuple[IngestionJob, IngestionStats]:
     """
     Adapter-driven ingestion entry point (e.g. CloudWatch, Loki). Discovers streams via the
@@ -277,6 +280,11 @@ def ingest_from_source(
     entirely rather than re-read from the start of the window — a completed stream's
     saved cursor is None (exhausted), and applying that as a "resume from" token would
     otherwise restart it and duplicate every row it already produced.
+
+    ``existing_job`` appends lines onto a long-lived job (tail mode) instead of
+    creating a new IngestionJob. When ``finalize`` is False the job is left
+    running: status is not set to completed/failed, streams are not marked
+    completed, and counts are additive. Tail ticks pass both.
     """
     import time
 
@@ -309,24 +317,38 @@ def ingest_from_source(
             if ref.stream_id in resume_cursors and ref.stream_id not in completed_at_start:
                 ref.cursor = resume_cursors[ref.stream_id]
 
-    source = _get_or_create_source(
-        db,
-        name=source_name or ", ".join(r.stream_id for r in refs[:2]),
-        type_=spec.adapter,
-    )
-
-    job = IngestionJob(
-        id=uuid.uuid4(),
-        source_id=source.id,
-        status="running",
-        started_at=datetime.now(tz=timezone.utc),
-        file_count=len(refs),
-        metadata_json={"adapter": spec.adapter, "params": spec.params},
-        source_adapter=spec.adapter,
-        source_ref=", ".join(r.stream_id for r in refs[:5]),
-    )
-    db.add(job)
-    db.flush()
+    if existing_job is not None:
+        job = existing_job
+        source = db.query(Source).filter(Source.id == job.source_id).first()
+        if source is None:
+            source = _get_or_create_source(
+                db,
+                name=source_name or ", ".join(r.stream_id for r in refs[:2]),
+                type_=spec.adapter,
+            )
+            job.source_id = source.id
+        if not job.source_ref:
+            job.source_ref = ", ".join(r.stream_id for r in refs[:5])
+        job.file_count = max(job.file_count or 0, len(refs))
+    else:
+        source = _get_or_create_source(
+            db,
+            name=source_name or ", ".join(r.stream_id for r in refs[:2]),
+            type_=spec.adapter,
+        )
+        job = IngestionJob(
+            id=uuid.uuid4(),
+            source_id=source.id,
+            status="running",
+            started_at=datetime.now(tz=timezone.utc),
+            file_count=len(refs),
+            metadata_json={"adapter": spec.adapter, "params": spec.params},
+            source_adapter=spec.adapter,
+            source_ref=", ".join(r.stream_id for r in refs[:5]),
+            mode="batch",
+        )
+        db.add(job)
+        db.flush()
 
     batch: list[LogEntry] = []
     adapter_errors: list[str] = []
@@ -369,7 +391,9 @@ def ingest_from_source(
             except AdapterUnavailableError as e:
                 adapter_errors.append(str(e))
             else:
-                if ref.cursor is None:
+                # Tail ticks re-read the same streams forever; cursor=None means
+                # "caught up for this window", not "never read again".
+                if finalize and ref.cursor is None:
                     completed_streams.add(ref.stream_id)
             finally:
                 cursors[ref.stream_id] = ref.cursor
@@ -382,18 +406,98 @@ def ingest_from_source(
             _flush_log_batch(db, batch, embedder)
 
         stats.duration_seconds = time.time() - start_time
+        _apply_ingest_counts(job, stats, additive=existing_job is not None)
+        _store_job_cursors(
+            job,
+            cursors,
+            completed_streams,
+            adapter_errors,
+            finalize=finalize,
+        )
+        if finalize:
+            job.status = "completed"
+            job.finished_at = datetime.now(tz=timezone.utc)
+        db.flush()
+    except Exception as exc:
+        if finalize:
+            job.status = "failed"
+            job.error_message = str(exc)
+            job.finished_at = datetime.now(tz=timezone.utc)
+            _apply_ingest_counts(job, stats, additive=existing_job is not None)
+            _store_job_cursors(
+                job,
+                cursors,
+                completed_streams,
+                adapter_errors,
+                finalize=True,
+            )
+            db.flush()
+        raise
 
+    return job, stats
+
+
+def ingest_push_lines(
+    db: Session,
+    raw_lines: list[str],
+    source_name: Optional[str] = None,
+    default_service: Optional[str] = None,
+    default_env: Optional[str] = None,
+    fmt: str = "auto",
+    with_embeddings: bool = False,
+) -> tuple[IngestionJob, IngestionStats]:
+    """Persist caller-pushed raw lines through parse → fingerprint → LogEntry."""
+    import time
+
+    start_time = time.time()
+    stats = IngestionStats()
+    embedder = ingest_embeddings_provider(with_embeddings)
+
+    source = _get_or_create_source(db, name=source_name or "push", type_="push")
+    job = IngestionJob(
+        id=uuid.uuid4(),
+        source_id=source.id,
+        status="running",
+        started_at=datetime.now(tz=timezone.utc),
+        file_count=0,
+        metadata_json={"source": "push"},
+        source_adapter="push",
+        source_ref="push",
+        mode="push",
+    )
+    db.add(job)
+    db.flush()
+
+    batch: list[LogEntry] = []
+    try:
+        for line in raw_lines:
+            effective_fmt = _resolve_fmt(line, fmt)
+            entry = _process_line(
+                line,
+                effective_fmt,
+                default_service,
+                default_env,
+                source,
+                job,
+                "push",
+                "push",
+                stats,
+            )
+            if entry is None:
+                continue
+            batch.append(entry)
+            if len(batch) >= BATCH_SIZE:
+                _flush_log_batch(db, batch, embedder)
+
+        if batch:
+            _flush_log_batch(db, batch, embedder)
+
+        stats.duration_seconds = time.time() - start_time
         job.status = "completed"
         job.finished_at = datetime.now(tz=timezone.utc)
         job.line_count = stats.lines_read
         job.error_count = stats.error_count
         job.parsed_count = stats.parsed_count
-        job.metadata_json = {
-            **(job.metadata_json or {}),
-            "cursors": cursors,
-            "completed_streams": sorted(completed_streams),
-            **({"partial": True} if adapter_errors else {}),
-        }
         db.flush()
     except Exception as exc:
         job.status = "failed"
@@ -402,15 +506,46 @@ def ingest_from_source(
         job.line_count = stats.lines_read
         job.error_count = stats.error_count
         job.parsed_count = stats.parsed_count
-        job.metadata_json = {
-            **(job.metadata_json or {}),
-            "cursors": cursors,
-            "completed_streams": sorted(completed_streams),
-        }
         db.flush()
         raise
 
     return job, stats
+
+
+def _apply_ingest_counts(
+    job: IngestionJob,
+    stats: IngestionStats,
+    *,
+    additive: bool,
+) -> None:
+    if additive:
+        job.line_count = (job.line_count or 0) + stats.lines_read
+        job.error_count = (job.error_count or 0) + stats.error_count
+        job.parsed_count = (job.parsed_count or 0) + stats.parsed_count
+    else:
+        job.line_count = stats.lines_read
+        job.error_count = stats.error_count
+        job.parsed_count = stats.parsed_count
+
+
+def _store_job_cursors(
+    job: IngestionJob,
+    cursors: dict[str, Optional[str]],
+    completed_streams: set[str],
+    adapter_errors: list[str],
+    *,
+    finalize: bool,
+) -> None:
+    import json
+
+    job.cursor = json.dumps(cursors)
+    meta = dict(job.metadata_json or {})
+    meta["cursors"] = cursors
+    if finalize:
+        meta["completed_streams"] = sorted(completed_streams)
+        if adapter_errors:
+            meta["partial"] = True
+    job.metadata_json = meta
 
 
 def _get_or_create_source(db: Session, name: str, type_: str = "file") -> Source:

@@ -22,6 +22,10 @@ REQUIRED_POST: tuple[str, ...] = (
     "/v1/query/compare",
     "/v1/query/clusters",
     "/v1/ingestions",
+    "/v1/ingestions/lines",
+    "/v1/ingestions/{ingestion_job_id}:pause",
+    "/v1/ingestions/{ingestion_job_id}:resume",
+    "/v1/ingestions/{ingestion_job_id}:stop",
 )
 
 

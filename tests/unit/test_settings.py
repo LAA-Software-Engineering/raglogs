@@ -81,3 +81,19 @@ def test_auth_settings_from_env(monkeypatch):
     assert settings.oidc_jwks_url == "https://idp.example/jwks.json"
     assert settings.api_bind_host == "0.0.0.0"
     assert settings.auth_refuse_insecure_bind is True
+
+
+def test_ingest_backpressure_and_tail_settings_from_env(monkeypatch):
+    monkeypatch.setenv("INGEST_QUEUE_MAX", "10")
+    monkeypatch.setenv("INGEST_RETRY_AFTER_SECONDS", "8")
+    monkeypatch.setenv("INGEST_PUSH_MAX_LINES", "100")
+    monkeypatch.setenv("TAIL_POLL_INTERVAL", "15")
+    monkeypatch.setenv("TAIL_ERROR_THRESHOLD", "3")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.ingest_queue_max == 10
+    assert settings.ingest_retry_after_seconds == 8
+    assert settings.ingest_push_max_lines == 100
+    assert settings.tail_poll_interval == 15
+    assert settings.tail_error_threshold == 3

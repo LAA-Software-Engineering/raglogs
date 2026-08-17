@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     # Worker
     worker_poll_interval: int = 2          # seconds between idle polls
 
+    # Ingest backpressure (minimal G9 stand-in) and push/tail (G4)
+    ingest_queue_max: int = 100
+    ingest_retry_after_seconds: int = 5
+    ingest_push_max_lines: int = 5000
+    tail_poll_interval: int = 30
+    tail_error_threshold: int = 5
+
     # Adapters
     adapter_cloudwatch_region: str = "us-east-1"
     datadog_api_key: str = ""

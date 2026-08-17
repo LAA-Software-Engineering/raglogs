@@ -17,6 +17,7 @@ class HealthResponse(BaseModel):
     db: str                # connected | disconnected
     worker_queue_depth: Optional[int]   # pending worker jobs; None if DB unreachable
     adapters: dict[str, str]            # adapter name -> "ok" | "unavailable: <reason>"
+    tail_jobs: Optional[dict[str, int]] = None  # {running, paused}; None if DB unreachable
 
 
 def _adapter_health() -> dict[str, str]:
@@ -59,21 +60,32 @@ def health_check():
     adapters = _adapter_health()
 
     if not db_ok:
-        return HealthResponse(status="degraded", db="disconnected", worker_queue_depth=None, adapters=adapters)
+        return HealthResponse(
+            status="degraded",
+            db="disconnected",
+            worker_queue_depth=None,
+            adapters=adapters,
+            tail_jobs=None,
+        )
 
     try:
-        from src.db.models import WorkerJob
         from sqlalchemy import func, select
+
+        from src.core.ingestion.tail import tail_job_counts
+        from src.db.models import WorkerJob
         with get_db() as db:
             depth = db.execute(
                 select(func.count()).select_from(WorkerJob).where(WorkerJob.status == "pending")
             ).scalar_one()
+            tail_jobs = tail_job_counts(db)
     except Exception:
         depth = None
+        tail_jobs = None
 
     return HealthResponse(
         status="ok" if db_ok else "degraded",
         db="connected",
         worker_queue_depth=depth,
         adapters=adapters,
+        tail_jobs=tail_jobs,
     )
