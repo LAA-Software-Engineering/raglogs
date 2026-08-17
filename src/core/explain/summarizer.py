@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
+import structlog
 from sqlalchemy.orm import Session
 
 from src.config import get_settings
@@ -13,6 +14,8 @@ from src.core.explain.templates import render_insufficient_evidence, render_text
 from src.core.llm.provider import build_llm_provider
 from src.db.models import DEFAULT_LOG_SCOPE, IngestionJob
 from src.db.scope_filter import filter_ingestion_jobs_by_scope
+
+log = structlog.get_logger()
 
 
 @dataclass
@@ -122,8 +125,9 @@ def explain_window(
                 summary_text = llm_text
                 mode = "llm"
         except Exception:
-            # Degrade gracefully
-            pass
+            # Timeout, retries exhausted, open breaker, or budget: keep mode
+            # "rules" so llm.fell_back is true when an LLM was requested.
+            log.warning("llm_explain_failed", exc_info=True)
 
     if not summary_text:
         summary_text = render_text_summary(packet, confidence)

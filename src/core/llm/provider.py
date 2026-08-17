@@ -5,7 +5,8 @@ from contextlib import contextmanager
 from typing import Any, Protocol, runtime_checkable
 
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential
+
+from src.core.llm.resilience import invoke_llm, prepare_llm_packet
 
 
 @runtime_checkable
@@ -39,6 +40,18 @@ Confidence: low | medium | medium-high | high
 If evidence is insufficient, say so clearly. Keep the entire output under 300 words. No markdown formatting."""
 
 
+def _llm_timeout() -> float:
+    from src.config import get_settings
+
+    return float(get_settings().llm_timeout)
+
+
+def _llm_max_tokens() -> int:
+    from src.config import get_settings
+
+    return int(get_settings().llm_max_tokens)
+
+
 class OpenAILLMProvider:
     def __init__(
         self,
@@ -50,12 +63,9 @@ class OpenAILLMProvider:
         self.model = model
         self.base_url = base_url.rstrip("/")
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    def generate_summary(self, evidence_packet: dict) -> str:
-        payload = json.dumps(evidence_packet, default=str, indent=2)
-        user_message = f"Analyze this incident evidence and produce a summary:\n\n{payload}"
-
-        with httpx.Client(timeout=60) as client:
+    def complete(self, system_prompt: str, user_message: str) -> str:
+        """Single OpenAI chat-completions attempt (timeout/max_tokens from settings)."""
+        with httpx.Client(timeout=_llm_timeout()) as client:
             response = client.post(
                 f"{self.base_url}/chat/completions",
                 headers={
@@ -64,10 +74,10 @@ class OpenAILLMProvider:
                 },
                 json={
                     "model": self.model,
-                    "max_tokens": 600,
+                    "max_tokens": _llm_max_tokens(),
                     "temperature": 0,
                     "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_message},
                     ],
                 },
@@ -75,6 +85,11 @@ class OpenAILLMProvider:
             response.raise_for_status()
             data = response.json()
             return data["choices"][0]["message"]["content"].strip()
+
+    def generate_summary(self, evidence_packet: dict) -> str:
+        payload = json.dumps(evidence_packet, default=str, indent=2)
+        user_message = f"Analyze this incident evidence and produce a summary:\n\n{payload}"
+        return self.complete(SYSTEM_PROMPT, user_message)
 
 
 class OllamaLLMProvider:
@@ -86,24 +101,54 @@ class OllamaLLMProvider:
         self.model = model
         self.base_url = base_url.rstrip("/")
 
-    @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=1, max=5))
-    def generate_summary(self, evidence_packet: dict) -> str:
-        payload = json.dumps(evidence_packet, default=str, indent=2)
-        prompt = f"{SYSTEM_PROMPT}\n\nIncident evidence:\n{payload}\n\nSummary:"
-
-        with httpx.Client(timeout=120) as client:
+    def complete(self, system_prompt: str, user_message: str) -> str:
+        """Single Ollama /api/generate attempt (timeout/num_predict from settings)."""
+        prompt = f"{system_prompt}\n\n{user_message}"
+        with httpx.Client(timeout=_llm_timeout()) as client:
             response = client.post(
                 f"{self.base_url}/api/generate",
                 json={
                     "model": self.model,
                     "prompt": prompt,
                     "stream": False,
-                    "options": {"temperature": 0},
+                    "options": {
+                        "temperature": 0,
+                        "num_predict": _llm_max_tokens(),
+                    },
                 },
             )
             response.raise_for_status()
             data = response.json()
             return data.get("response", "").strip()
+
+    def generate_summary(self, evidence_packet: dict) -> str:
+        payload = json.dumps(evidence_packet, default=str, indent=2)
+        user_message = f"Incident evidence:\n{payload}\n\nSummary:"
+        return self.complete(SYSTEM_PROMPT, user_message)
+
+
+class ResilientLLMProvider:
+    """G10 breaker + token budget + retries around an inner provider.
+
+    Lives *inside* ``CappedLLMProvider`` so in-flight slots cover the whole
+    retry sequence, but the breaker check still skips HTTP when open.
+    """
+
+    def __init__(self, inner: LLMProvider) -> None:
+        self.inner = inner
+
+    def generate_summary(self, evidence_packet: dict) -> str:
+        from src.config import get_settings
+
+        prepared = prepare_llm_packet(evidence_packet, get_settings())
+        return invoke_llm(lambda: self.inner.generate_summary(prepared))
+
+    def complete(self, system_prompt: str, user_message: str) -> str:
+        inner = self.inner
+        complete = getattr(inner, "complete", None)
+        if complete is None:
+            return ""
+        return invoke_llm(lambda: complete(system_prompt, user_message))
 
 
 _llm_sem_lock = threading.Lock()
@@ -153,21 +198,24 @@ class CappedLLMProvider:
 
     Noop inner providers skip the wait so deterministic mode never blocks,
     but still go through this entrypoint (CLI and API share the semaphore).
+
+    Stack (outer → inner): CappedLLMProvider → ResilientLLMProvider → OpenAI/Ollama.
+    Noop skips ResilientLLMProvider entirely.
     """
 
     def __init__(self, inner: LLMProvider) -> None:
         self.inner = inner
 
     def generate_summary(self, evidence_packet: dict) -> str:
-        skip = isinstance(self.inner, NoopLLMProvider)
+        skip = isinstance(unwrap_llm_provider(self), NoopLLMProvider)
         with llm_concurrency_slot(skip=skip):
             return self.inner.generate_summary(evidence_packet)
 
 
 def unwrap_llm_provider(provider: LLMProvider) -> LLMProvider:
-    """Return the inner provider if ``provider`` is concurrency-capped."""
+    """Return the inner provider if ``provider`` is concurrency-capped or resilient."""
     inner: LLMProvider = provider
-    while isinstance(inner, CappedLLMProvider):
+    while isinstance(inner, (CappedLLMProvider, ResilientLLMProvider)):
         inner = inner.inner
     return inner
 
@@ -190,5 +238,12 @@ def _build_inner_llm_provider(settings: Any) -> LLMProvider:
 
 
 def build_llm_provider(settings: Any) -> LLMProvider:
-    """Factory: build the configured LLM provider (concurrency-capped)."""
-    return CappedLLMProvider(_build_inner_llm_provider(settings))
+    """Factory: build the configured LLM provider (resilient + concurrency-capped).
+
+    Order: CappedLLMProvider (G9) wraps ResilientLLMProvider (G10) wraps the
+    HTTP provider. Noop skips the resilience wrapper so disabled mode is unchanged.
+    """
+    inner = _build_inner_llm_provider(settings)
+    if not isinstance(inner, NoopLLMProvider):
+        inner = ResilientLLMProvider(inner)
+    return CappedLLMProvider(inner)

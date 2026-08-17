@@ -142,6 +142,12 @@ def test_ratelimit_and_llm_concurrency_defaults():
     assert settings.ratelimit_retry_after_seconds == 1
     assert settings.llm_max_concurrency == 4
     assert settings.ingest_queue_max == 100
+    assert settings.llm_timeout == 30.0
+    assert settings.llm_max_retries == 2
+    assert settings.llm_max_tokens == 600
+    assert settings.llm_max_input_tokens == 0
+    assert settings.llm_breaker_threshold == 5
+    assert settings.llm_breaker_cooldown_seconds == 60.0
 
 
 def test_ratelimit_and_llm_concurrency_from_env(monkeypatch):
@@ -162,3 +168,21 @@ def test_ratelimit_and_llm_concurrency_from_env(monkeypatch):
     assert settings.ratelimit_retry_after_seconds == 9
     assert settings.llm_max_concurrency == 1
     assert settings.ingest_queue_max == 7
+
+
+def test_llm_resilience_settings_from_env(monkeypatch):
+    monkeypatch.setenv("LLM_TIMEOUT", "15")
+    monkeypatch.setenv("LLM_MAX_RETRIES", "4")
+    monkeypatch.setenv("LLM_MAX_TOKENS", "200")
+    monkeypatch.setenv("LLM_MAX_INPUT_TOKENS", "3000")
+    monkeypatch.setenv("LLM_BREAKER_THRESHOLD", "3")
+    monkeypatch.setenv("LLM_BREAKER_COOLDOWN_SECONDS", "45")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.llm_timeout == pytest.approx(15.0)
+    assert settings.llm_max_retries == 4
+    assert settings.llm_max_tokens == 200
+    assert settings.llm_max_input_tokens == 3000
+    assert settings.llm_breaker_threshold == 3
+    assert settings.llm_breaker_cooldown_seconds == pytest.approx(45.0)

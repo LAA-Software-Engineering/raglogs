@@ -12,12 +12,19 @@ _ADAPTER_HEALTH_TTL = 30.0  # seconds — avoid hitting the AWS credential chain
 _adapter_health_cache: dict[str, tuple[float, str]] = {}
 
 
+class LlmBreakerHealth(BaseModel):
+    state: str  # closed | open | half_open
+    consecutive_failures: int
+    cooldown_remaining_seconds: float
+
+
 class HealthResponse(BaseModel):
     status: str           # ok | degraded
     db: str                # connected | disconnected
     worker_queue_depth: Optional[int]   # pending worker jobs; None if DB unreachable
     adapters: dict[str, str]            # adapter name -> "ok" | "unavailable: <reason>"
     tail_jobs: Optional[dict[str, int]] = None  # {running, paused}; None if DB unreachable
+    llm_breaker: Optional[LlmBreakerHealth] = None
 
 
 def _adapter_health() -> dict[str, str]:
@@ -52,12 +59,25 @@ def _adapter_health() -> dict[str, str]:
     return statuses
 
 
+def _llm_breaker_health() -> LlmBreakerHealth:
+    from src.core.llm.resilience import breaker_health
+
+    snap = breaker_health()
+    return LlmBreakerHealth(
+        state=str(snap["state"]),
+        consecutive_failures=int(snap["consecutive_failures"]),
+        cooldown_remaining_seconds=float(snap["cooldown_remaining_seconds"]),
+    )
+
+
 @router.get("/health", response_model=HealthResponse)
-def health_check():
+def health_check() -> HealthResponse:
     from src.db.session import check_connection, get_db
 
     db_ok = check_connection()
     adapters = _adapter_health()
+    llm_breaker = _llm_breaker_health()
+    breaker_open = llm_breaker.state == "open"
 
     if not db_ok:
         return HealthResponse(
@@ -66,6 +86,7 @@ def health_check():
             worker_queue_depth=None,
             adapters=adapters,
             tail_jobs=None,
+            llm_breaker=llm_breaker,
         )
 
     try:
@@ -83,9 +104,10 @@ def health_check():
         tail_jobs = None
 
     return HealthResponse(
-        status="ok" if db_ok else "degraded",
+        status="degraded" if breaker_open else "ok",
         db="connected",
         worker_queue_depth=depth,
         adapters=adapters,
         tail_jobs=tail_jobs,
+        llm_breaker=llm_breaker,
     )

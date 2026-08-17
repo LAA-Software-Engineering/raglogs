@@ -323,7 +323,7 @@ def answer_question(
             if answer_text:
                 mode = "llm"
         except Exception:
-            pass  # degrade to rules
+            log.warning("llm_ask_failed", exc_info=True)
 
     if not answer_text:
         answer_text = _rules_answer(question, clusters, len(matching))
@@ -403,9 +403,13 @@ def _call_llm_ask(llm: object, question: str, evidence_packet: dict) -> str:
     Constructs the HTTP call directly rather than reusing generate_summary,
     which uses the incident-summary system prompt. Shares the G9 LLM
     concurrency semaphore with generate_summary.
+
+    Order matches generate_summary: cap (slot) → breaker/retries (invoke_llm)
+    → single HTTP attempt on the unwrapped OpenAI/Ollama provider.
     """
     import json
-    import httpx
+
+    from src.config import get_settings
     from src.core.llm.provider import (
         NoopLLMProvider,
         OpenAILLMProvider,
@@ -413,46 +417,23 @@ def _call_llm_ask(llm: object, question: str, evidence_packet: dict) -> str:
         llm_concurrency_slot,
         unwrap_llm_provider,
     )
+    from src.core.llm.resilience import invoke_llm, prepare_llm_packet
 
-    inner = unwrap_llm_provider(llm)
-    payload_str = json.dumps(evidence_packet, default=str, indent=2)
+    inner = unwrap_llm_provider(llm)  # type: ignore[arg-type]
+    settings = get_settings()
+    prepared = prepare_llm_packet(evidence_packet, settings)
+    payload_str = json.dumps(prepared, default=str, indent=2)
     user_message = f"Question: {question}\n\nLog evidence:\n{payload_str}"
 
-    with llm_concurrency_slot(skip=isinstance(inner, NoopLLMProvider)):
+    def _attempt() -> str:
         if isinstance(inner, OpenAILLMProvider):
-            with httpx.Client(timeout=60) as client:
-                resp = client.post(
-                    f"{inner.base_url}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {inner.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": inner.model,
-                        "max_tokens": 400,
-                        "temperature": 0,
-                        "messages": [
-                            {"role": "system", "content": ASK_SYSTEM_PROMPT},
-                            {"role": "user", "content": user_message},
-                        ],
-                    },
-                )
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"].strip()
-
+            return inner.complete(ASK_SYSTEM_PROMPT, user_message)
         if isinstance(inner, OllamaLLMProvider):
-            prompt = f"{ASK_SYSTEM_PROMPT}\n\n{user_message}\n\nAnswer:"
-            with httpx.Client(timeout=120) as client:
-                resp = client.post(
-                    f"{inner.base_url}/api/generate",
-                    json={
-                        "model": inner.model,
-                        "prompt": prompt,
-                        "stream": False,
-                        "options": {"temperature": 0},
-                    },
-                )
-                resp.raise_for_status()
-                return resp.json().get("response", "").strip()
+            return inner.complete(ASK_SYSTEM_PROMPT, f"{user_message}\n\nAnswer:")
+        return ""
+
+    with llm_concurrency_slot(skip=isinstance(inner, NoopLLMProvider)):
+        if isinstance(inner, (OpenAILLMProvider, OllamaLLMProvider)):
+            return invoke_llm(_attempt)
 
     return ""
