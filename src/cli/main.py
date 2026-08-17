@@ -43,7 +43,22 @@ def _build_app() -> typer.Typer:
 app = _build_app()
 
 
-def main():
+def _configure_cli_logging() -> None:
+    """JSON when LOG_FORMAT=json; console on a TTY for readable operator output."""
+    import sys
+
+    from src.config import get_settings
+    from src.observability import setup_observability
+
+    settings = get_settings()
+    fmt = settings.log_format
+    if fmt == "json" and sys.stderr.isatty():
+        fmt = "console"
+    setup_observability(log_format=fmt)
+
+
+def main() -> None:
+    _configure_cli_logging()
     app()
 
 

@@ -66,6 +66,38 @@ def explain_window(
     """
     Full explain pipeline for a time window.
     """
+    from src.observability.tracing import start_span
+
+    with start_span("explain", **{"raglogs.scope": scope}):
+        return _explain_window(
+            db=db,
+            window_start=window_start,
+            window_end=window_end,
+            service=service,
+            environment=environment,
+            no_llm=no_llm,
+            max_clusters=max_clusters,
+            baseline_window_str=baseline_window_str,
+            ingestion_job_id=ingestion_job_id,
+            scope=scope,
+        )
+
+
+def _explain_window(
+    db: Session,
+    window_start: datetime,
+    window_end: datetime,
+    service: Optional[str] = None,
+    environment: Optional[str] = None,
+    no_llm: bool = False,
+    max_clusters: int = 10,
+    baseline_window_str: Optional[str] = None,
+    ingestion_job_id: Optional[uuid.UUID] = None,
+    scope: str = DEFAULT_LOG_SCOPE,
+) -> ExplainResult:
+    """
+    Full explain pipeline for a time window.
+    """
     settings = get_settings()
     baseline_window = baseline_window_str or settings.default_baseline_window
 
@@ -115,8 +147,9 @@ def explain_window(
     # 5. Generate summary
     mode = "rules"
     summary_text = ""
+    llm_requested = not no_llm and settings.llm_provider != "disabled"
 
-    if not no_llm and settings.llm_provider != "disabled":
+    if llm_requested:
         try:
             llm = build_llm_provider(settings)
             evidence_dict = _packet_to_dict(packet)
@@ -128,6 +161,11 @@ def explain_window(
             # Timeout, retries exhausted, open breaker, or budget: keep mode
             # "rules" so llm.fell_back is true when an LLM was requested.
             log.warning("llm_explain_failed", exc_info=True)
+
+    if llm_requested and mode != "llm":
+        from src.observability.metrics import record_llm_fallback
+
+        record_llm_fallback()
 
     if not summary_text:
         summary_text = render_text_summary(packet, confidence)

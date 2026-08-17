@@ -21,3 +21,7 @@ jinja2>=3.1.0
 argon2-cffi>=23.1.0
 PyJWT>=2.8.0
 cryptography>=42.0.0
+prometheus_client>=0.21.0
+opentelemetry-api>=1.27.0
+opentelemetry-sdk>=1.27.0
+opentelemetry-exporter-otlp-proto-http>=1.27.0

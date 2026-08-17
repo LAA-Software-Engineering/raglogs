@@ -317,13 +317,19 @@ def answer_question(
     answer_text = ""
 
     llm = build_llm_provider(settings)
-    if not isinstance(unwrap_llm_provider(llm), NoopLLMProvider):
+    llm_requested = not isinstance(unwrap_llm_provider(llm), NoopLLMProvider)
+    if llm_requested:
         try:
             answer_text = _call_llm_ask(llm, question, evidence_packet)
             if answer_text:
                 mode = "llm"
         except Exception:
             log.warning("llm_ask_failed", exc_info=True)
+
+    if llm_requested and mode != "llm":
+        from src.observability.metrics import record_llm_fallback
+
+        record_llm_fallback()
 
     if not answer_text:
         answer_text = _rules_answer(question, clusters, len(matching))
@@ -417,11 +423,13 @@ def _call_llm_ask(llm: object, question: str, evidence_packet: dict) -> str:
         llm_concurrency_slot,
         unwrap_llm_provider,
     )
-    from src.core.llm.resilience import invoke_llm, prepare_llm_packet
+    from src.core.llm.resilience import estimate_tokens, invoke_llm, prepare_llm_packet
+    from src.observability.metrics import record_llm_estimated_tokens
 
     inner = unwrap_llm_provider(llm)  # type: ignore[arg-type]
     settings = get_settings()
     prepared = prepare_llm_packet(evidence_packet, settings)
+    record_llm_estimated_tokens(estimate_tokens(prepared))
     payload_str = json.dumps(prepared, default=str, indent=2)
     user_message = f"Question: {question}\n\nLog evidence:\n{payload_str}"
 

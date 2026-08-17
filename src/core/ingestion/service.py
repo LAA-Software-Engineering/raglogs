@@ -96,6 +96,9 @@ def _process_line(
         parsed = _parse_line(line, fmt, default_service=default_service)
     except Exception:
         stats.error_count += 1
+        from src.observability.metrics import record_ingest_lines
+
+        record_ingest_lines(1, result="error")
         return None
 
     if parsed is None:
@@ -103,6 +106,9 @@ def _process_line(
 
     if parsed.parse_error:
         stats.error_count += 1
+        from src.observability.metrics import record_ingest_lines
+
+        record_ingest_lines(1, result="error")
         return None
 
     if parsed.timestamp is None and received_at is not None:
@@ -226,6 +232,10 @@ def _flush_and_count(
 ) -> None:
     _inserted, skipped = _flush_log_batch(db, batch, embedder)
     stats.deduped_count += skipped
+    from src.observability.metrics import record_ingest_lines
+
+    record_ingest_lines(_inserted, result="inserted")
+    record_ingest_lines(skipped, result="deduped")
 
 
 def ingest_files(
@@ -292,6 +302,13 @@ def ingest_files(
     # job row won't persist at all rather than being left "failed". Both outcomes are
     # fine (no job stuck at "running" either way) — don't "simplify" by dropping the
     # re-raise, it's what lets get_db() know to roll back for those callers.
+    from src.observability.tracing import start_span
+
+    ingest_cm = start_span(
+        "ingest",
+        **{"raglogs.adapter": "file", "raglogs.scope": scope or ""},
+    )
+    ingest_cm.__enter__()
     try:
         for file_path in files:
             file_fmt = detect_format(file_path, hint=fmt)
@@ -325,6 +342,9 @@ def ingest_files(
             _flush_and_count(db, batch, embedder, stats)
 
         stats.duration_seconds = time.time() - start_time
+        from src.observability.metrics import record_ingest_duration
+
+        record_ingest_duration(stats.duration_seconds)
 
         job.status = "completed"
         job.finished_at = datetime.now(tz=timezone.utc)
@@ -341,6 +361,8 @@ def ingest_files(
         job.parsed_count = stats.parsed_count
         db.flush()
         raise
+    finally:
+        ingest_cm.__exit__(None, None, None)
 
     return job, stats
 
@@ -461,6 +483,13 @@ def ingest_from_source(
     completed_streams: set[str] = set(completed_at_start)
 
     # See the matching NOTE in ingest_files() re: this try/except and get_db() rollback.
+    from src.observability.tracing import start_span
+
+    ingest_cm = start_span(
+        "ingest",
+        **{"raglogs.adapter": spec.adapter, "raglogs.scope": scope or ""},
+    )
+    ingest_cm.__enter__()
     try:
         for ref in refs:
             if ref.stream_id in completed_at_start:
@@ -513,6 +542,9 @@ def ingest_from_source(
 
         stats.duration_seconds = time.time() - start_time
         _apply_ingest_counts(job, stats, additive=existing_job is not None)
+        from src.observability.metrics import record_ingest_duration
+
+        record_ingest_duration(stats.duration_seconds)
         _store_job_cursors(
             job,
             cursors,
@@ -539,6 +571,8 @@ def ingest_from_source(
             )
             db.flush()
         raise
+    finally:
+        ingest_cm.__exit__(None, None, None)
 
     return job, stats
 
@@ -577,6 +611,13 @@ def ingest_push_lines(
     db.flush()
 
     batch: list[LogEntry] = []
+    from src.observability.tracing import start_span
+
+    ingest_cm = start_span(
+        "ingest",
+        **{"raglogs.adapter": "push", "raglogs.scope": scope or ""},
+    )
+    ingest_cm.__enter__()
     try:
         for line in raw_lines:
             effective_fmt = _resolve_fmt(line, fmt)
@@ -603,6 +644,9 @@ def ingest_push_lines(
 
         stats.duration_seconds = time.time() - start_time
         job.status = "completed"
+        from src.observability.metrics import record_ingest_duration
+
+        record_ingest_duration(stats.duration_seconds)
         job.finished_at = datetime.now(tz=timezone.utc)
         job.line_count = stats.lines_read
         job.error_count = stats.error_count
@@ -617,6 +661,8 @@ def ingest_push_lines(
         job.parsed_count = stats.parsed_count
         db.flush()
         raise
+    finally:
+        ingest_cm.__exit__(None, None, None)
 
     return job, stats
 

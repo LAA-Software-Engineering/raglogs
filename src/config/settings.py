@@ -108,6 +108,14 @@ class Settings(BaseSettings):
     loki_password: str = ""
     loki_query: str = ""
 
+    # Self-observability (G12). LOG_FORMAT=json|console. OTEL_SDK_DISABLED
+    # skips the SDK (tests/demo still get a request id). OTLP is optional and
+    # off unless OTEL_EXPORTER_OTLP_ENDPOINT is set — no collector required.
+    log_format: Literal["json", "console"] = "json"
+    otel_sdk_disabled: bool = False
+    otel_exporter_otlp_endpoint: str = ""
+    otel_service_name: str = "raglogs"
+
     # Cluster scoring weights
     severity_weight_fatal: float = 5.0
     severity_weight_error: float = 4.0

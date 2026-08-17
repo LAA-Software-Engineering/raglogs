@@ -18,6 +18,11 @@ class LlmBreakerHealth(BaseModel):
     cooldown_remaining_seconds: float
 
 
+class LlmProviderHealth(BaseModel):
+    provider: str  # disabled | openai | ollama
+    status: str    # ok | disabled | unavailable: <reason>
+
+
 class HealthResponse(BaseModel):
     status: str           # ok | degraded
     db: str                # connected | disconnected
@@ -25,6 +30,7 @@ class HealthResponse(BaseModel):
     adapters: dict[str, str]            # adapter name -> "ok" | "unavailable: <reason>"
     tail_jobs: Optional[dict[str, int]] = None  # {running, paused}; None if DB unreachable
     llm_breaker: Optional[LlmBreakerHealth] = None
+    llm: Optional[LlmProviderHealth] = None
 
 
 def _adapter_health() -> dict[str, str]:
@@ -70,6 +76,31 @@ def _llm_breaker_health() -> LlmBreakerHealth:
     )
 
 
+def _llm_provider_health() -> LlmProviderHealth:
+    """Local-only status — does not ping OpenAI or Ollama."""
+    from src.config import get_settings
+
+    settings = get_settings()
+    provider = settings.llm_provider
+    if provider == "disabled":
+        return LlmProviderHealth(provider="disabled", status="disabled")
+    if provider == "openai":
+        if not settings.openai_api_key:
+            return LlmProviderHealth(
+                provider="openai",
+                status="unavailable: OPENAI_API_KEY is not set",
+            )
+        return LlmProviderHealth(provider="openai", status="ok")
+    if provider == "ollama":
+        if not settings.ollama_base_url:
+            return LlmProviderHealth(
+                provider="ollama",
+                status="unavailable: OLLAMA_BASE_URL is not set",
+            )
+        return LlmProviderHealth(provider="ollama", status="ok")
+    return LlmProviderHealth(provider=provider, status="ok")
+
+
 @router.get("/health", response_model=HealthResponse)
 def health_check() -> HealthResponse:
     from src.db.session import check_connection, get_db
@@ -77,6 +108,7 @@ def health_check() -> HealthResponse:
     db_ok = check_connection()
     adapters = _adapter_health()
     llm_breaker = _llm_breaker_health()
+    llm = _llm_provider_health()
     breaker_open = llm_breaker.state == "open"
 
     if not db_ok:
@@ -87,6 +119,7 @@ def health_check() -> HealthResponse:
             adapters=adapters,
             tail_jobs=None,
             llm_breaker=llm_breaker,
+            llm=llm,
         )
 
     try:
@@ -110,4 +143,5 @@ def health_check() -> HealthResponse:
         adapters=adapters,
         tail_jobs=tail_jobs,
         llm_breaker=llm_breaker,
+        llm=llm,
     )

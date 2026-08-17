@@ -237,21 +237,34 @@ def invoke_llm(attempt: Callable[[], str]) -> str:
         raise LLMCircuitOpen("LLM circuit breaker is open")
 
     result = ""
-    try:
-        for retry_state in Retrying(
-            stop=stop_after_attempt(max(1, int(settings.llm_max_retries) + 1)),
-            wait=default_llm_wait(),
-            retry=retry_if_exception(_is_retryable_llm_error),
-            reraise=True,
-        ):
-            with retry_state:
-                result = attempt()
-    except (LLMCircuitOpen, LLMBudgetExceeded):
-        raise
-    except Exception:
-        breaker.record_failure(threshold=threshold, cooldown_seconds=cooldown)
-        log.warning("llm_call_failed", exc_info=True)
-        raise
+    started = time.monotonic()
+    from src.observability.tracing import start_span
 
+    with start_span("llm"):
+        try:
+            for retry_state in Retrying(
+                stop=stop_after_attempt(max(1, int(settings.llm_max_retries) + 1)),
+                wait=default_llm_wait(),
+                retry=retry_if_exception(_is_retryable_llm_error),
+                reraise=True,
+            ):
+                with retry_state:
+                    result = attempt()
+        except (LLMCircuitOpen, LLMBudgetExceeded):
+            from src.observability.metrics import record_llm_duration
+
+            record_llm_duration(time.monotonic() - started)
+            raise
+        except Exception:
+            from src.observability.metrics import record_llm_duration
+
+            record_llm_duration(time.monotonic() - started)
+            breaker.record_failure(threshold=threshold, cooldown_seconds=cooldown)
+            log.warning("llm_call_failed", exc_info=True)
+            raise
+
+    from src.observability.metrics import record_llm_duration
+
+    record_llm_duration(time.monotonic() - started)
     breaker.record_success()
     return result

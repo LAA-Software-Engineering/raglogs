@@ -215,9 +215,11 @@ class TestAuthMiddleware:
         assert resp.status_code == 200
 
     def test_metrics_path_exempt_when_auth_enabled(self) -> None:
-        with patch("src.config.get_settings", return_value=_auth_settings()):
+        with patch("src.config.get_settings", return_value=_auth_settings()), \
+             patch("src.db.session.check_connection", return_value=False):
             resp = client.get("/metrics")
-        assert resp.status_code not in {401, 403}
+        assert resp.status_code == 200
+        assert "raglogs_" in resp.text
 
     def test_explain_401_without_header_when_auth_enabled(self) -> None:
         with patch("src.config.get_settings", return_value=_auth_settings()):

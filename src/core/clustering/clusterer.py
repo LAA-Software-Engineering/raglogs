@@ -55,6 +55,42 @@ def run_clustering(
     Main clustering pipeline for a time window.
     Returns (ClusterRun, list[ClusterData]) sorted by importance descending.
     """
+    from src.observability.metrics import record_cluster_count
+    from src.observability.tracing import start_span
+
+    with start_span("cluster", **{"raglogs.scope": scope}):
+        cluster_run, top_clusters = _run_clustering(
+            db=db,
+            window_start=window_start,
+            window_end=window_end,
+            service=service,
+            environment=environment,
+            baseline_window_str=baseline_window_str,
+            max_clusters=max_clusters,
+            save_to_db=save_to_db,
+            ingestion_job_id=ingestion_job_id,
+            scope=scope,
+        )
+        record_cluster_count(len(top_clusters))
+        return cluster_run, top_clusters
+
+
+def _run_clustering(
+    db: Session,
+    window_start: datetime,
+    window_end: datetime,
+    service: Optional[str] = None,
+    environment: Optional[str] = None,
+    baseline_window_str: str = "24h",
+    max_clusters: int = 50,
+    save_to_db: bool = True,
+    ingestion_job_id: Optional[uuid.UUID] = None,
+    scope: str = DEFAULT_LOG_SCOPE,
+) -> tuple["ClusterRun", list[ClusterData]]:
+    """
+    Main clustering pipeline for a time window.
+    Returns (ClusterRun, list[ClusterData]) sorted by importance descending.
+    """
     # 1. Query log entries in window
     q = select(
         LogEntry.fingerprint,

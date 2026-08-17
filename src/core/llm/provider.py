@@ -139,8 +139,11 @@ class ResilientLLMProvider:
 
     def generate_summary(self, evidence_packet: dict) -> str:
         from src.config import get_settings
+        from src.core.llm.resilience import estimate_tokens
+        from src.observability.metrics import record_llm_estimated_tokens
 
         prepared = prepare_llm_packet(evidence_packet, get_settings())
+        record_llm_estimated_tokens(estimate_tokens(prepared))
         return invoke_llm(lambda: self.inner.generate_summary(prepared))
 
     def complete(self, system_prompt: str, user_message: str) -> str:

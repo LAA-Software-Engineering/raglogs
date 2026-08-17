@@ -27,6 +27,26 @@
         }
       }
     },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Prometheus Metrics",
+        "description": "Expose Prometheus text format. Exempt from auth (G2) and rate limits.",
+        "operationId": "prometheus_metrics_metrics_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/ingestions": {
       "post": {
         "tags": [
@@ -2472,6 +2492,16 @@
                 "type": "null"
               }
             ]
+          },
+          "llm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LlmProviderHealth"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -2871,6 +2901,24 @@
           "fell_back"
         ],
         "title": "LlmProvenance"
+      },
+      "LlmProviderHealth": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider",
+          "status"
+        ],
+        "title": "LlmProviderHealth"
       },
       "PushLinesResponse": {
         "properties": {
