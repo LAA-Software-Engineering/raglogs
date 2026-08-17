@@ -7,7 +7,11 @@ shapes are not asserted here; that is G7.
 from __future__ import annotations
 
 from src.api.app import app
-from src.api.deprecation import is_deprecated_alias, is_versioned_api_path, successor_path
+from src.api.deprecation import (
+    is_deprecated_alias,
+    is_versioned_api_path,
+    successor_path,
+)
 
 REQUIRED_GET: tuple[str, ...] = (
     "/health",

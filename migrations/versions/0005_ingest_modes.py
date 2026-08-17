@@ -4,6 +4,7 @@ Revision ID: 0005_ingest_modes
 Revises: 0004_api_keys
 Create Date: 2026-08-17 00:00:00.000000
 """
+
 from typing import Sequence, Union
 
 import sqlalchemy as sa
@@ -28,7 +29,9 @@ def upgrade() -> None:
     )
     op.add_column(
         "ingestion_jobs",
-        sa.Column("consecutive_errors", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column(
+            "consecutive_errors", sa.Integer(), nullable=False, server_default="0"
+        ),
     )
 
 

@@ -1,4 +1,5 @@
 """Tests for unprefixed environment variable names on Settings."""
+
 import pytest
 
 from src.config.settings import Settings
@@ -51,7 +52,10 @@ def test_ignores_legacy_raglogs_prefix(monkeypatch):
     settings = Settings(_env_file=None)
 
     assert settings.llm_provider == "disabled"
-    assert settings.db_url == "postgresql+psycopg://postgres:postgres@localhost:5432/raglogs"
+    assert (
+        settings.db_url
+        == "postgresql+psycopg://postgres:postgres@localhost:5432/raglogs"
+    )
 
 
 def test_auth_settings_defaults_disabled():

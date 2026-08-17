@@ -9,6 +9,7 @@ GET  /ingestions/jobs/{id}  — poll worker job status (pending|running|done|fai
 GET  /ingestions/latest     — most recently completed ingestion job, if any
 GET  /ingestions/{id}       — fetch IngestionJob detail by ingestion_job_id
 """
+
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
@@ -23,6 +24,7 @@ router = APIRouter()
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────────
+
 
 class IngestRequest(BaseModel):
     paths: list[str] = []
@@ -70,8 +72,8 @@ class EnqueuedResponse(BaseModel):
 
 class WorkerJobStatus(BaseModel):
     worker_job_id: str
-    status: str                        # pending | running | done | failed
-    ingestion_job_id: Optional[str]    # set once worker completes ingestion
+    status: str  # pending | running | done | failed
+    ingestion_job_id: Optional[str]  # set once worker completes ingestion
     error: Optional[str]
     created_at: str
     started_at: Optional[str]
@@ -129,6 +131,7 @@ class TailLifecycleResponse(BaseModel):
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+
 def _queue_full_response() -> JSONResponse:
     from src.config import get_settings
 
@@ -145,7 +148,10 @@ def _queue_full_response() -> JSONResponse:
 
 def _reject_if_queue_full(db: Any) -> Optional[JSONResponse]:
     from src.config import get_settings
-    from src.core.ingestion.backpressure import ingest_queue_is_full, pending_worker_job_count
+    from src.core.ingestion.backpressure import (
+        ingest_queue_is_full,
+        pending_worker_job_count,
+    )
 
     settings = get_settings()
     pending = pending_worker_job_count(db)
@@ -171,7 +177,9 @@ def _validate_non_file_adapter(request: IngestRequest) -> dict[str, Any]:
 
     try:
         adapter = get_adapter(request.adapter, get_settings())
-        refs = list(adapter.discover(SourceSpec(adapter=request.adapter, params=params)))
+        refs = list(
+            adapter.discover(SourceSpec(adapter=request.adapter, params=params))
+        )
     except AdapterUnavailableError as e:
         raise HTTPException(
             status_code=400,
@@ -179,13 +187,19 @@ def _validate_non_file_adapter(request: IngestRequest) -> dict[str, Any]:
         )
 
     if request.adapter in ("k8s", "kubernetes") and not refs:
-        raise HTTPException(status_code=400, detail="No log files found at the given paths")
+        raise HTTPException(
+            status_code=400, detail="No log files found at the given paths"
+        )
 
     if request.since or request.from_time or request.to_time:
         from src.utils.time import resolve_window
 
         try:
-            resolve_window(since=request.since, from_time=request.from_time, to_time=request.to_time)
+            resolve_window(
+                since=request.since,
+                from_time=request.from_time,
+                to_time=request.to_time,
+            )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
@@ -211,7 +225,9 @@ def _ingest_payload(request: IngestRequest, params: dict[str, Any]) -> dict[str,
     }
 
 
-def _create_tail_job(request: IngestRequest, params: dict[str, Any], db: Any) -> EnqueuedResponse:
+def _create_tail_job(
+    request: IngestRequest, params: dict[str, Any], db: Any
+) -> EnqueuedResponse:
     from src.core.ingestion.service import _get_or_create_source
     from src.db.models import IngestionJob
 
@@ -246,7 +262,9 @@ def _parse_ingestion_job_id(ingestion_job_id: str) -> uuid.UUID:
         raise HTTPException(status_code=400, detail="Invalid ingestion_job_id")
 
 
-def _apply_tail_action(ingestion_job_id: str, action: Literal["pause", "resume", "stop"]) -> TailLifecycleResponse:
+def _apply_tail_action(
+    ingestion_job_id: str, action: Literal["pause", "resume", "stop"]
+) -> TailLifecycleResponse:
     from src.core.ingestion.tail import TailLifecycleError, apply_tail_lifecycle
     from src.db.models import IngestionJob
     from src.db.session import get_db
@@ -272,6 +290,7 @@ def _apply_tail_action(ingestion_job_id: str, action: Literal["pause", "resume",
 
 # ── Routes ───────────────────────────────────────────────────────────────────
 
+
 @router.post("", response_model=EnqueuedResponse, status_code=202)
 def create_ingestion(request: IngestRequest):
     """
@@ -291,7 +310,9 @@ def create_ingestion(request: IngestRequest):
 
         files = discover_files(request.paths, recursive=request.recursive)
         if not files:
-            raise HTTPException(status_code=400, detail="No log files found at the given paths")
+            raise HTTPException(
+                status_code=400, detail="No log files found at the given paths"
+            )
     else:
         params = _validate_non_file_adapter(request)
 
@@ -340,7 +361,9 @@ def list_ingestions():
                     ingestion_job_id=str(job.id),
                     source_name=source_name,
                     parsed_count=job.parsed_count,
-                    finished_at=job.finished_at.isoformat() if job.finished_at else None,
+                    finished_at=job.finished_at.isoformat()
+                    if job.finished_at
+                    else None,
                 )
                 for job, source_name in rows
             ]
@@ -369,7 +392,9 @@ def get_worker_job_status(worker_job_id: str):
         return WorkerJobStatus(
             worker_job_id=str(job.id),
             status=job.status,
-            ingestion_job_id=str(job.ingestion_job_id) if job.ingestion_job_id else None,
+            ingestion_job_id=str(job.ingestion_job_id)
+            if job.ingestion_job_id
+            else None,
             error=job.error,
             created_at=job.created_at.isoformat(),
             started_at=job.started_at.isoformat() if job.started_at else None,

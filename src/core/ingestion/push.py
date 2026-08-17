@@ -31,9 +31,7 @@ def parse_ndjson_payload(body: str, max_lines: int) -> list[str]:
     if not physical:
         raise NdjsonParseError("NDJSON body is empty")
     if len(physical) > max_lines:
-        raise NdjsonParseError(
-            f"payload exceeds INGEST_PUSH_MAX_LINES ({max_lines})"
-        )
+        raise NdjsonParseError(f"payload exceeds INGEST_PUSH_MAX_LINES ({max_lines})")
 
     return [_coerce_ndjson_line(line) for line in physical]
 

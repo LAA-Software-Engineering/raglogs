@@ -175,7 +175,9 @@ def ingest_files(
         raise ValueError(f"No files found for paths: {paths}")
 
     # Create or find source
-    source = _get_or_create_source(db, name=source_name or ", ".join(paths[:2]), type_="file")
+    source = _get_or_create_source(
+        db, name=source_name or ", ".join(paths[:2]), type_="file"
+    )
 
     # Create ingestion job
     job = IngestionJob(
@@ -209,8 +211,15 @@ def ingest_files(
 
             for line in read_lines(file_path):
                 entry = _process_line(
-                    line, file_fmt, file_service, default_env,
-                    source, job, "file", str(file_path), stats,
+                    line,
+                    file_fmt,
+                    file_service,
+                    default_env,
+                    source,
+                    job,
+                    "file",
+                    str(file_path),
+                    stats,
                 )
                 if entry is None:
                     continue
@@ -308,13 +317,18 @@ def ingest_from_source(
     stats.files_processed = len(refs)
 
     if not refs:
-        raise ValueError(f"No streams discovered for adapter={spec.adapter!r} params={spec.params!r}")
+        raise ValueError(
+            f"No streams discovered for adapter={spec.adapter!r} params={spec.params!r}"
+        )
 
     completed_at_start = set(resume_completed_streams or ())
 
     if resume_cursors:
         for ref in refs:
-            if ref.stream_id in resume_cursors and ref.stream_id not in completed_at_start:
+            if (
+                ref.stream_id in resume_cursors
+                and ref.stream_id not in completed_at_start
+            ):
                 ref.cursor = resume_cursors[ref.stream_id]
 
     if existing_job is not None:
@@ -563,6 +577,7 @@ def _infer_service_from_filename(path: Path) -> Optional[str]:
     name = path.stem  # filename without extension
     # Remove common suffixes like .log, dates, numbers
     import re
+
     name = re.sub(r"[-_]?\d{4}[-_]\d{2}[-_]\d{2}.*$", "", name)
     name = re.sub(r"[-_]?\d+$", "", name)
     name = name.strip("-_")

@@ -34,6 +34,7 @@ def _ctx_db(*, execute_scalar: int = 0, query_result=None):
 
 # ── NDJSON parsing ────────────────────────────────────────────────────────────
 
+
 class TestParseNdjson:
     def test_raw_and_json_objects(self) -> None:
         body = (
@@ -66,6 +67,7 @@ class TestParseNdjson:
 
 # ── Backpressure helper ───────────────────────────────────────────────────────
 
+
 class TestQueueBackpressure:
     def test_full_at_max(self) -> None:
         assert ingest_queue_is_full(100, 100) is True
@@ -75,6 +77,7 @@ class TestQueueBackpressure:
 
 
 # ── Tail lifecycle state machine ──────────────────────────────────────────────
+
 
 class TestTailLifecycle:
     def test_pause_resume_stop(self) -> None:
@@ -115,6 +118,7 @@ class TestAutoPauseCounter:
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
+
 class TestPushLinesRoute:
     def test_returns_counts_when_persist_mocked(self) -> None:
         mock_job = MagicMock()
@@ -126,9 +130,12 @@ class TestPushLinesRoute:
         mock_stats.error_count = 0
         mock_db = _ctx_db()
 
-        with patch("src.db.session.get_db", side_effect=lambda: mock_db), patch(
-            "src.core.ingestion.service.ingest_push_lines",
-            return_value=(mock_job, mock_stats),
+        with (
+            patch("src.db.session.get_db", side_effect=lambda: mock_db),
+            patch(
+                "src.core.ingestion.service.ingest_push_lines",
+                return_value=(mock_job, mock_stats),
+            ),
         ):
             resp = client.post(
                 "/v1/ingestions/lines",
@@ -153,9 +160,12 @@ class TestPushLinesRoute:
         mock_stats.error_count = 0
         mock_db = _ctx_db()
 
-        with patch("src.db.session.get_db", side_effect=lambda: mock_db), patch(
-            "src.core.ingestion.service.ingest_push_lines",
-            return_value=(mock_job, mock_stats),
+        with (
+            patch("src.db.session.get_db", side_effect=lambda: mock_db),
+            patch(
+                "src.core.ingestion.service.ingest_push_lines",
+                return_value=(mock_job, mock_stats),
+            ),
         ):
             resp = client.post(
                 "/ingestions/lines",
@@ -200,8 +210,9 @@ class TestPushLinesRoute:
 class TestQueueFull429:
     def test_post_ingestions_429_when_pending_at_max(self) -> None:
         mock_db = _ctx_db(execute_scalar=100)
-        with patch("src.adapters.file.adapter.discover_files", return_value=["f.log"]), patch(
-            "src.db.session.get_db", side_effect=lambda: mock_db
+        with (
+            patch("src.adapters.file.adapter.discover_files", return_value=["f.log"]),
+            patch("src.db.session.get_db", side_effect=lambda: mock_db),
         ):
             resp = client.post("/v1/ingestions", json={"paths": ["/logs"]})
 
@@ -213,9 +224,10 @@ class TestQueueFull429:
 
     def test_push_lines_429_when_queue_full(self) -> None:
         mock_db = _ctx_db(execute_scalar=100)
-        with patch("src.db.session.get_db", side_effect=lambda: mock_db), patch(
-            "src.core.ingestion.service.ingest_push_lines"
-        ) as mock_ingest:
+        with (
+            patch("src.db.session.get_db", side_effect=lambda: mock_db),
+            patch("src.core.ingestion.service.ingest_push_lines") as mock_ingest,
+        ):
             resp = client.post(
                 "/v1/ingestions/lines",
                 content="hello\n",
@@ -241,8 +253,9 @@ class TestTailCreateAndLifecycleRoutes:
         mock_adapter = MagicMock()
         mock_adapter.discover.return_value = [MagicMock(stream_id="/aws/lambda/x")]
 
-        with patch("src.adapters.registry.get_adapter", return_value=mock_adapter), patch(
-            "src.db.session.get_db", side_effect=lambda: mock_db
+        with (
+            patch("src.adapters.registry.get_adapter", return_value=mock_adapter),
+            patch("src.db.session.get_db", side_effect=lambda: mock_db),
         ):
             resp = client.post(
                 "/v1/ingestions",

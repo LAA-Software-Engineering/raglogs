@@ -123,7 +123,9 @@ def spec_from_tail_job(job: IngestionJob) -> SourceSpec:
     )
 
 
-def _due_tail_jobs(db: Session, now: datetime, poll_interval: int) -> list[IngestionJob]:
+def _due_tail_jobs(
+    db: Session, now: datetime, poll_interval: int
+) -> list[IngestionJob]:
     cutoff = now - timedelta(seconds=poll_interval)
     stmt = (
         select(IngestionJob)
@@ -140,7 +142,9 @@ def _due_tail_jobs(db: Session, now: datetime, poll_interval: int) -> list[Inges
     return list(db.execute(stmt).scalars().all())
 
 
-def tick_one_tail_job(db: Session, job: IngestionJob, now: datetime, error_threshold: int) -> None:
+def tick_one_tail_job(
+    db: Session, job: IngestionJob, now: datetime, error_threshold: int
+) -> None:
     """Run one adapter poll against an existing tail IngestionJob."""
     from src.core.ingestion.service import ingest_from_source
 
@@ -198,7 +202,10 @@ def tick_one_tail_job(db: Session, job: IngestionJob, now: datetime, error_thres
 def tick_tail_jobs(db: Session) -> int:
     """Poll due running tail jobs. Returns the number of jobs ticked."""
     from src.config import get_settings
-    from src.core.ingestion.backpressure import ingest_queue_is_full, pending_worker_job_count
+    from src.core.ingestion.backpressure import (
+        ingest_queue_is_full,
+        pending_worker_job_count,
+    )
 
     settings = get_settings()
     pending = pending_worker_job_count(db)

@@ -247,6 +247,7 @@ class TestIngestFromSource:
     def test_raw_line_defaults_fill_service_env_host(self, monkeypatch):
         """Adapters (Loki labels, k8s fields) may set RawLogLine defaults; ingestion
         should persist them when the parsed line has no service/env/host."""
+
         class LabelAdapter:
             name = "labels"
 
@@ -268,7 +269,9 @@ class TestIngestFromSource:
         _patch_get_adapter(monkeypatch, LabelAdapter())
 
         job, stats = ingest_from_source(
-            db=db, spec=SourceSpec(adapter="labels", params={}), window=_WINDOW,
+            db=db,
+            spec=SourceSpec(adapter="labels", params={}),
+            window=_WINDOW,
         )
 
         assert job.status == "completed"
@@ -411,7 +414,10 @@ class TestIngestPushLines:
         db = _mock_db()
         job, stats = ingest_push_lines(
             db,
-            raw_lines=['{"message": "pushed", "level": "error", "service": "api"}', "text line"],
+            raw_lines=[
+                '{"message": "pushed", "level": "error", "service": "api"}',
+                "text line",
+            ],
         )
         assert job.mode == "push"
         assert job.status == "completed"
@@ -449,7 +455,9 @@ class TestIngestFiles:
 
         monkeypatch.setattr(
             "src.core.ingestion.service.ingest_embeddings_provider",
-            lambda with_embeddings, settings=None: object() if with_embeddings else None,
+            lambda with_embeddings, settings=None: (
+                object() if with_embeddings else None
+            ),
         )
         monkeypatch.setattr(
             "src.core.ingestion.service.persist_log_embeddings", fake_persist
