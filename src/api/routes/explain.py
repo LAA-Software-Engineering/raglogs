@@ -6,14 +6,19 @@ POST /query/explain
   - caches results in the explanations table keyed on (window, service, env, ingestion_job_id)
   - returns cached result on repeated calls for the same window+filters
 """
+from __future__ import annotations
+
 import hashlib
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import TYPE_CHECKING, Literal, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from src.core.explain.summarizer import ExplainResult
 
 router = APIRouter()
 
@@ -29,6 +34,7 @@ class ExplainRequest(BaseModel):
     baseline_window: Optional[str] = None
     ingestion_job_id: Optional[str] = None   # scope to a specific ingest
     force_refresh: bool = False               # bypass cache
+    format: Literal["json", "markdown"] = "json"
 
 
 def _cache_key(window_start: datetime, window_end: datetime,
@@ -60,6 +66,39 @@ def _load_from_cache(db, cache_hash: str) -> Optional[dict]:
     if row and row.result_json:
         return row.result_json
     return None
+
+
+def _explain_result_from_payload(
+    payload: dict,
+    window_start: datetime,
+    window_end: datetime,
+) -> ExplainResult:
+    """Rebuild an ExplainResult from a cached/API payload for markdown rendering."""
+    from src.core.explain.summarizer import ExplainResult as ExplainResultCls
+
+    return ExplainResultCls(
+        window_start=window_start,
+        window_end=window_end,
+        summary_text=payload.get("summary") or "",
+        confidence=payload.get("confidence") or "low",
+        evidence_items=list(payload.get("evidence") or []),
+        services_affected=list(payload.get("services_affected") or []),
+        primary_cluster=payload.get("primary_cluster"),
+        secondary_clusters=list(payload.get("secondary_clusters") or []),
+        trigger_candidates=list(payload.get("trigger_candidates") or []),
+        total_logs=int(payload.get("total_logs") or 0),
+        mode=payload.get("mode") or "rules",
+    )
+
+
+def _maybe_add_markdown(payload: dict, result: ExplainResult, request: ExplainRequest) -> dict:
+    if request.format != "markdown":
+        return payload
+    from src.core.explain.markdown_report import render_incident_report
+
+    out = dict(payload)
+    out["markdown"] = render_incident_report(result, environment=request.env)
+    return out
 
 
 def _save_to_cache(db, cache_hash: str, window_start: datetime, window_end: datetime,
@@ -112,7 +151,11 @@ def explain_endpoint(request: ExplainRequest):
             if not request.force_refresh and not request.no_llm:
                 cached = _load_from_cache(db, cache_hash)
                 if cached:
-                    return {**cached, "cached": True}
+                    payload = {**cached, "cached": True}
+                    cached_result = _explain_result_from_payload(
+                        payload, window_start, window_end
+                    )
+                    return _maybe_add_markdown(payload, cached_result, request)
 
             result = explain_window(
                 db=db,
@@ -151,7 +194,7 @@ def explain_endpoint(request: ExplainRequest):
                     request.service, request.env, payload, result.confidence, result.mode,
                 )
 
-            return payload
+            return _maybe_add_markdown(payload, result, request)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

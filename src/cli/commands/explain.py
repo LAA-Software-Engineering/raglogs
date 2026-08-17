@@ -3,7 +3,6 @@ from typing import Optional
 import typer
 from rich.console import Console
 from rich.panel import Panel
-from rich.syntax import Syntax
 
 console = Console()
 
@@ -29,17 +28,20 @@ def explain_cmd(
     from src.db.session import get_db
     from src.utils.time import resolve_window
 
+    # Status/errors go to stderr for markdown so `> postmortem.md` stays clean.
+    ui = Console(stderr=True) if fmt == "markdown" else console
+
     # Resolve window
     try:
         from_dt = datetime.fromisoformat(from_time) if from_time else None
         to_dt = datetime.fromisoformat(to_time) if to_time else None
         window_start, window_end = resolve_window(since=since, from_time=from_dt, to_time=to_dt)
     except ValueError as e:
-        console.print(f"[red]Error:[/red] {e}")
-        console.print("[dim]Example: --since 30m  or  --from 2026-03-12T22:00:00Z --to 2026-03-12T22:30:00Z[/dim]")
+        ui.print(f"[red]Error:[/red] {e}")
+        ui.print("[dim]Example: --since 30m  or  --from 2026-03-12T22:00:00Z --to 2026-03-12T22:30:00Z[/dim]")
         raise typer.Exit(1)
 
-    with console.status("[cyan]Analyzing logs...[/cyan]"):
+    with ui.status("[cyan]Analyzing logs...[/cyan]"):
         try:
             with get_db() as db:
                 job_id = None
@@ -49,7 +51,7 @@ def explain_cmd(
                     # Default: scope to latest ingestion job to avoid count inflation
                     job_id = get_latest_ingestion_job_id(db)
                     if job_id:
-                        console.print(f"[dim]Scoped to latest ingestion: {job_id}[/dim]")
+                        ui.print(f"[dim]Scoped to latest ingestion: {job_id}[/dim]")
                 result = explain_window(
                     db=db,
                     window_start=window_start,
@@ -62,7 +64,7 @@ def explain_cmd(
                     ingestion_job_id=job_id,
                 )
         except Exception as e:
-            console.print(f"[red]Error:[/red] {e}")
+            ui.print(f"[red]Error:[/red] {e}")
             raise typer.Exit(1)
 
     if fmt == "json":
@@ -84,32 +86,32 @@ def explain_cmd(
         }
         console.print_json(json.dumps(output, default=str))
     elif fmt == "markdown":
-        md = _render_markdown(result)
-        console.print(md)
+        from src.core.explain.markdown_report import (
+            build_explain_reproduce_cmd,
+            render_incident_report,
+        )
+
+        reproduce_cmd = build_explain_reproduce_cmd(
+            since=since,
+            from_time=from_time,
+            to_time=to_time,
+            service=service,
+            env=env,
+            no_llm=no_llm,
+            baseline_window=baseline_window,
+            ingestion_job=ingestion_job,
+            all_ingestions=all_ingestions,
+            max_clusters=max_clusters,
+        )
+        md = render_incident_report(
+            result,
+            reproduce_cmd=reproduce_cmd,
+            environment=env,
+        )
+        # Raw stdout — Rich would wrap lines and interpret ** as markup.
+        print(md, end="")
     else:
         mode_label = "[dim](LLM)[/dim]" if result.mode == "llm" else "[dim](rules)[/dim]"
         console.print()
         console.print(Panel(result.summary_text, title=f"[bold cyan]raglogs explain[/bold cyan] {mode_label}", expand=False))
         console.print()
-
-
-def _render_markdown(result) -> str:
-    from src.utils.time import format_window
-    lines = [
-        "# Incident Summary",
-        "",
-        f"**Window:** {format_window(result.window_start, result.window_end)}",
-        f"**Services:** {', '.join(result.services_affected) or 'N/A'}",
-        f"**Confidence:** {result.confidence}",
-        f"**Mode:** {result.mode}",
-        "",
-        "## Summary",
-        "",
-        result.summary_text,
-        "",
-        "## Evidence",
-        "",
-    ]
-    for item in result.evidence_items:
-        lines.append(f"- {item}")
-    return "\n".join(lines)
