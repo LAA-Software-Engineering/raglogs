@@ -286,6 +286,7 @@ class ApiKey(Base):
         Boolean, nullable=False, default=False, server_default=text("false")
     )
     webhook_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
+    config_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

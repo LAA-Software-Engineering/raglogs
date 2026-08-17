@@ -3,19 +3,18 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
 
+from src.api.overrides import QueryOverrideFields
 from src.api.schemas.v1 import (
     SCHEMA_VERSION,
     AskResponse,
-    llm_from_mode,
-    llm_requested,
+    llm_from_overrides,
 )
 
 router = APIRouter()
 
 
-class AskRequest(BaseModel):
+class AskRequest(QueryOverrideFields):
     question: str
     since: Optional[str] = None
     from_time: Optional[datetime] = None
@@ -23,6 +22,7 @@ class AskRequest(BaseModel):
     service: Optional[str] = None
     ingestion_job_id: Optional[str] = None
     scope: Optional[str] = None
+    no_llm: Optional[bool] = None
 
 
 @router.post(
@@ -32,11 +32,13 @@ class AskRequest(BaseModel):
 )
 def ask_endpoint(request: AskRequest, http_request: Request) -> AskResponse:
     from src.api.auth.scope import bind_request_scope
+    from src.api.overrides import resolve_overrides_from_http
     from src.core.retrieval.question_router import answer_question
     from src.db.session import get_db
     from src.utils.time import resolve_window
 
     scope = bind_request_scope(http_request, request.scope)
+    overrides = resolve_overrides_from_http(http_request, request)
 
     window_start, window_end = None, None
     if request.since or request.from_time:
@@ -66,6 +68,10 @@ def ask_endpoint(request: AskRequest, http_request: Request) -> AskResponse:
                 service=request.service,
                 ingestion_job_id=ingestion_job_id,
                 scope=scope,
+                no_llm=overrides.no_llm,
+                max_clusters=overrides.max_clusters,
+                max_evidence_items=overrides.max_evidence_items,
+                llm_provider=overrides.llm_provider,
             )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -78,7 +84,11 @@ def ask_endpoint(request: AskRequest, http_request: Request) -> AskResponse:
         clusters=result.clusters_used,
         total_matches=result.total_matches,
         retrieval_mode=result.retrieval_mode,
-        llm=llm_from_mode(mode=result.mode, requested=llm_requested()),
+        llm=llm_from_overrides(
+            mode=result.mode,
+            llm_provider=overrides.llm_provider,
+            llm_enabled=overrides.llm_enabled,
+        ),
         rendered_text=result.answer_text,
         mode=result.mode,
     )

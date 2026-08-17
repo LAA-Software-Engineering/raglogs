@@ -39,9 +39,27 @@ def create_cmd(
     name: Optional[str] = typer.Option(
         None, "--name", help="Optional label for this key"
     ),
+    max_clusters: Optional[int] = typer.Option(
+        None, "--max-clusters", help="Per-key default max_clusters (1–100)"
+    ),
+    max_evidence_items: Optional[int] = typer.Option(
+        None, "--max-evidence-items", help="Per-key default max_evidence_items (1–50)"
+    ),
+    baseline_window: Optional[str] = typer.Option(
+        None, "--baseline-window", help="Per-key default baseline window (e.g. 24h)"
+    ),
+    llm_provider: Optional[str] = typer.Option(
+        None, "--llm-provider", help="Per-key default LLM provider: openai|ollama|disabled"
+    ),
+    llm_enabled: Optional[bool] = typer.Option(
+        None,
+        "--llm-enabled/--no-llm-enabled",
+        help="Per-key default for whether LLM is used",
+    ),
 ) -> None:
     """Create an API key and print the plaintext API key and webhook secret once."""
     from src.api.auth.keys import create_api_key
+    from src.api.overrides import OverrideValidationError, build_key_config_json
 
     role = role.strip().lower()
     if role not in VALID_ROLES:
@@ -49,12 +67,23 @@ def create_cmd(
         raise typer.Exit(1)
 
     try:
+        config_json = build_key_config_json(
+            baseline_window=baseline_window,
+            max_clusters=max_clusters,
+            max_evidence_items=max_evidence_items,
+            llm_provider=llm_provider,
+            llm_enabled=llm_enabled,
+        )
         plaintext, webhook_secret, info = create_api_key(
             role=role,
             scope=scope,
             name=name,
             allow_scope_override=allow_scope_override,
+            config_json=config_json,
         )
+    except OverrideValidationError as exc:
+        console.print(f"[red]Error:[/red] {exc.message}")
+        raise typer.Exit(1)
     except Exception as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1)
@@ -77,6 +106,8 @@ def create_cmd(
         f"[dim]id={info.id}  prefix={info.key_prefix}  role={info.role}  "
         f"scope={info.scope}  allow_scope_override={info.allow_scope_override}[/dim]"
     )
+    if info.config_json:
+        console.print(f"[dim]defaults={info.config_json}[/dim]")
     console.print(
         "[dim]HMAC ingest callbacks with the webhook secret (whsec_…), not the API key.[/dim]"
     )
@@ -150,3 +181,79 @@ def revoke_cmd(
         raise typer.Exit(1)
 
     console.print(f"[green]Revoked[/green] {info.id} (prefix {info.key_prefix})")
+
+
+@app.command("set-defaults")
+def set_defaults_cmd(
+    key_id: str = typer.Argument(..., help="UUID of the key to update"),
+    max_clusters: Optional[int] = typer.Option(
+        None, "--max-clusters", help="Per-key default max_clusters (1–100)"
+    ),
+    max_evidence_items: Optional[int] = typer.Option(
+        None, "--max-evidence-items", help="Per-key default max_evidence_items (1–50)"
+    ),
+    baseline_window: Optional[str] = typer.Option(
+        None, "--baseline-window", help="Per-key default baseline window (e.g. 24h)"
+    ),
+    llm_provider: Optional[str] = typer.Option(
+        None, "--llm-provider", help="Per-key default LLM provider: openai|ollama|disabled"
+    ),
+    llm_enabled: Optional[bool] = typer.Option(
+        None,
+        "--llm-enabled/--no-llm-enabled",
+        help="Per-key default for whether LLM is used",
+    ),
+    clear: bool = typer.Option(
+        False, "--clear", help="Remove all per-key query defaults"
+    ),
+) -> None:
+    """Set per-key query override defaults (G14). Merges with existing config_json."""
+    from src.api.auth.keys import set_api_key_defaults
+    from src.api.overrides import OverrideValidationError
+
+    try:
+        parsed = uuid.UUID(key_id)
+    except ValueError:
+        console.print("[red]Error:[/red] key id must be a UUID")
+        raise typer.Exit(1)
+
+    if not clear and all(
+        value is None
+        for value in (
+            max_clusters,
+            max_evidence_items,
+            baseline_window,
+            llm_provider,
+            llm_enabled,
+        )
+    ):
+        console.print(
+            "[red]Error:[/red] provide at least one default flag, or --clear"
+        )
+        raise typer.Exit(1)
+
+    try:
+        info = set_api_key_defaults(
+            parsed,
+            baseline_window=baseline_window,
+            max_clusters=max_clusters,
+            max_evidence_items=max_evidence_items,
+            llm_provider=llm_provider,
+            llm_enabled=llm_enabled,
+            clear=clear,
+        )
+    except OverrideValidationError as exc:
+        console.print(f"[red]Error:[/red] {exc.message}")
+        raise typer.Exit(1)
+    except Exception as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1)
+
+    if info is None:
+        console.print(f"[red]Error:[/red] no API key with id {key_id}")
+        raise typer.Exit(1)
+
+    if info.config_json:
+        console.print(f"[green]Updated defaults[/green] {info.id}: {info.config_json}")
+    else:
+        console.print(f"[green]Cleared defaults[/green] {info.id}")

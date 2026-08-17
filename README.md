@@ -647,11 +647,14 @@ raglogs purge --dry-run    # count only
 
 ### `raglogs keys`
 
-Mint, list, and revoke HTTP API keys. The API bearer token is printed **once** at create time and is never stored or logged — only an argon2 hash and a short prefix are kept. A separate **webhook signing secret** (`whsec_…`) is also printed once; it is stored server-side so ingest completion callbacks can be HMAC-signed. It is not the bearer token. `raglogs keys list` shows `whsec_****` when a signing secret exists (legacy keys minted before this column fall back to `WEBHOOK_SECRET`).
+Mint, list, revoke, and set per-key query defaults for HTTP API keys. The API bearer token is printed **once** at create time and is never stored or logged — only an argon2 hash and a short prefix are kept. A separate **webhook signing secret** (`whsec_…`) is also printed once; it is stored server-side so ingest completion callbacks can be HMAC-signed. It is not the bearer token. `raglogs keys list` shows `whsec_****` when a signing secret exists (legacy keys minted before this column fall back to `WEBHOOK_SECRET`).
 
 ```bash
 raglogs keys create --role query --scope default --name "ci"
 raglogs keys create --role query --scope incident:INC-9 --allow-scope-override --name "ci-override"
+raglogs keys create --role query --max-clusters 5 --baseline-window 12h
+raglogs keys set-defaults <key-uuid> --max-clusters 8 --max-evidence-items 4 --llm-provider ollama
+raglogs keys set-defaults <key-uuid> --clear
 raglogs keys list
 raglogs keys revoke <key-uuid>
 ```
@@ -662,8 +665,13 @@ raglogs keys revoke <key-uuid>
 | `--scope` | Pin the key to this isolation scope (enforced on every service read/write). Default `default`. Convention: `incident:<id>`, `service:<name>`, `env:<name>`. |
 | `--allow-scope-override` | Allow the caller to pass a request `scope` other than the key's pin. Pinned by default. |
 | `--name` | Optional label |
+| `--max-clusters` | Per-key default `max_clusters` (1–100) stored on `api_keys.config_json` |
+| `--max-evidence-items` | Per-key default `max_evidence_items` (1–50) |
+| `--baseline-window` | Per-key default baseline duration (e.g. `24h`) |
+| `--llm-provider` | Per-key default `openai` / `ollama` / `disabled` |
+| `--llm-enabled` / `--no-llm-enabled` | Per-key default for whether the LLM is used |
 
-Requires a migrated database (`raglogs init`). See [HTTP API authentication](#http-api-authentication).
+`raglogs keys set-defaults` merges flags into the key's `config_json`. `--clear` removes all per-key query defaults. Requires a migrated database (`raglogs init`). See [HTTP API authentication](#http-api-authentication) and [per-request overrides](#per-request-query-overrides).
 
 ---
 
@@ -1175,6 +1183,38 @@ curl -X POST http://localhost:8000/v1/query/explain \
 ```
 
 **Explain** — `POST /v1/query/explain` accepts the same window filters as the CLI. Optional `"format": "markdown"` adds a paste-ready `markdown` incident report field alongside the JSON payload (same shape as `raglogs explain --format markdown`).
+
+### Per-request query overrides
+
+`POST /v1/query/*` bodies accept optional tunables that override server defaults for that call only:
+
+```json
+{
+  "since": "30m",
+  "baseline_window": "24h",
+  "max_clusters": 10,
+  "max_evidence_items": 8,
+  "llm": { "provider": "openai", "enabled": true }
+}
+```
+
+| Field | Bounds | Server default |
+|---|---|---|
+| `baseline_window` | duration parsed like CLI (`30m`, `24h`, `7d`) | `DEFAULT_BASELINE_WINDOW` (`24h`) |
+| `max_clusters` | 1–100 | `MAX_CLUSTERS_FOR_EXPLAIN` (`10`) |
+| `max_evidence_items` | 1–50 | `MAX_EVIDENCE_ITEMS` (`8`) |
+| `llm.provider` | `openai` / `ollama` / `disabled` | `LLM_PROVIDER` |
+| `llm.enabled` | bool; `false` acts like `no_llm` | inferred from `LLM_PROVIDER` |
+
+**Precedence:** request field > per-key default (`api_keys.config_json`) > server env default. Omitted fields fall through. When `AUTH_ENABLED=false` the per-key layer is skipped. `llm.provider` does not persist globally; openai without `OPENAI_API_KEY` still uses the noop provider. The explain cache key includes the **resolved** overrides so different `max_clusters` values do not share an entry.
+
+Invalid values return **400**:
+
+```json
+{"error_code": "INVALID_OVERRIDE", "message": "max_clusters must be between 1 and 100", "field": "max_clusters", "min": 1, "max": 100}
+```
+
+Applies to explain, timeline, compare, clusters, ask, and similar (similar uses `max_clusters` when clustering; `top` remains the match count). Clusters still accepts `top` as an alias for `max_clusters` when `max_clusters` is omitted.
 
 **Timeline** — `POST /v1/query/timeline` accepts the same window filters as the CLI (`since` or `from_time`/`to_time`, optional `service`, `env`, `all_ingestions`, `ingestion_job_id`). Set `"format": "text"` to include plain-text `rendered_text` (and a `text` alias) alongside `events`. Timeline is rules-only (`llm.used` is always false).
 

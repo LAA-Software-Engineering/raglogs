@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from src.api.auth.middleware import AuthMiddleware
 from src.api.auth.scope import ScopeResolutionError, scope_error_response
 from src.api.deprecation import DeprecationHeaderMiddleware
+from src.api.overrides import OverrideValidationError, override_error_response
 from src.api.ratelimit import RateLimitMiddleware
 from src.api.routes import (
     ask,
@@ -92,6 +93,13 @@ async def handle_scope_resolution_error(
     request: Request, exc: ScopeResolutionError
 ) -> JSONResponse:
     return scope_error_response(exc)
+
+
+@app.exception_handler(OverrideValidationError)
+async def handle_override_validation_error(
+    request: Request, exc: OverrideValidationError
+) -> JSONResponse:
+    return override_error_response(exc)
 
 app.include_router(health.router, tags=["health"])
 app.include_router(metrics.router, tags=["metrics"])

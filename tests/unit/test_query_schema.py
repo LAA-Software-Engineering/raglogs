@@ -122,6 +122,34 @@ def test_cached_old_payload_upgrades_to_v1() -> None:
     assert data["cached"] is True
 
 
+def _openapi_properties(model: dict, components: dict) -> dict:
+    props = dict(model.get("properties") or {})
+    for item in model.get("allOf") or []:
+        if "$ref" in item:
+            name = item["$ref"].rsplit("/", 1)[-1]
+            props.update(_openapi_properties(components[name], components))
+        elif isinstance(item, dict):
+            props.update(_openapi_properties(item, components))
+    return props
+
+
+def test_explain_request_documents_optional_overrides() -> None:
+    schema = app.openapi()
+    components = schema["components"]["schemas"]
+    explain_req = None
+    for name, model in components.items():
+        if name.endswith("ExplainRequest") or name == "ExplainRequest":
+            explain_req = model
+            break
+    assert explain_req is not None
+    props = _openapi_properties(explain_req, components)
+    for key in ("baseline_window", "max_clusters", "max_evidence_items", "llm"):
+        assert key in props
+    required = explain_req.get("required") or []
+    for key in ("baseline_window", "max_clusters", "max_evidence_items", "llm"):
+        assert key not in required
+
+
 def test_explain_openapi_documents_response_model() -> None:
     schema = app.openapi()
     explain = schema["paths"]["/v1/query/explain"]["post"]

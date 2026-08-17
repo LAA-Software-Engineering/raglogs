@@ -243,33 +243,53 @@ def scope_from_request(http_request: Optional[Request] = None) -> str:
     return str(scope) if scope else "default"
 
 
-def build_llm_provenance(*, used: bool, fell_back: bool) -> LlmProvenance:
+def build_llm_provenance(
+    *,
+    used: bool,
+    fell_back: bool,
+    provider: Optional[str] = None,
+) -> LlmProvenance:
     from src.config import get_settings
 
     settings = get_settings()
     return LlmProvenance(
         used=used,
-        provider=settings.llm_provider,
+        provider=provider or settings.llm_provider,
         model=settings.llm_model,
         fell_back=fell_back,
     )
 
 
-def llm_from_mode(*, mode: str, requested: bool) -> LlmProvenance:
+def llm_from_mode(
+    *,
+    mode: str,
+    requested: bool,
+    provider: Optional[str] = None,
+) -> LlmProvenance:
     used = mode == "llm"
     fell_back = requested and not used
-    return build_llm_provenance(used=used, fell_back=fell_back)
+    return build_llm_provenance(used=used, fell_back=fell_back, provider=provider)
+
+
+def llm_from_overrides(*, mode: str, llm_provider: str, llm_enabled: bool) -> LlmProvenance:
+    requested = llm_enabled and llm_provider != "disabled"
+    return llm_from_mode(mode=mode, requested=requested, provider=llm_provider)
 
 
 def llm_rules_only() -> LlmProvenance:
     return build_llm_provenance(used=False, fell_back=False)
 
 
-def llm_requested(*, no_llm: bool = False) -> bool:
+def llm_requested(
+    *,
+    no_llm: bool = False,
+    llm_provider: Optional[str] = None,
+) -> bool:
     from src.config import get_settings
 
     settings = get_settings()
-    return (not no_llm) and settings.llm_provider != "disabled"
+    provider = llm_provider if llm_provider is not None else settings.llm_provider
+    return (not no_llm) and provider != "disabled"
 
 
 def window_from_bounds(start: datetime, end: datetime) -> TimeWindow:
@@ -438,6 +458,7 @@ def explain_from_result(
     no_llm: bool,
     cached: bool,
     scope: str = "default",
+    llm_provider: Optional[str] = None,
 ) -> ExplainResponse:
     primary = cluster_from_mapping(result.primary_cluster)
     secondary = [
@@ -456,7 +477,11 @@ def explain_from_result(
         primary_cluster=primary,
         secondary_clusters=secondary,
         evidence=evidence_from_items(result.evidence_items),
-        llm=llm_from_mode(mode=result.mode, requested=llm_requested(no_llm=no_llm)),
+        llm=llm_from_mode(
+            mode=result.mode,
+            requested=llm_requested(no_llm=no_llm, llm_provider=llm_provider),
+            provider=llm_provider,
+        ),
         rendered_text=prose,
         cached=cached,
         total_logs=result.total_logs,
@@ -472,6 +497,7 @@ def explain_from_cached(
     window_end: datetime,
     no_llm: bool,
     scope: str = "default",
+    llm_provider: Optional[str] = None,
 ) -> ExplainResponse:
     """Upgrade a cached dict (old or v1) so the response always has v1 fields."""
     primary = cluster_from_mapping(payload.get("primary_cluster"))
@@ -505,7 +531,11 @@ def explain_from_cached(
         primary_cluster=primary,
         secondary_clusters=secondary,
         evidence=evidence_from_items(payload.get("evidence")),
-        llm=llm_from_mode(mode=mode, requested=llm_requested(no_llm=no_llm)),
+        llm=llm_from_mode(
+            mode=mode,
+            requested=llm_requested(no_llm=no_llm, llm_provider=llm_provider),
+            provider=llm_provider,
+        ),
         rendered_text=prose,
         cached=True,
         total_logs=int(payload.get("total_logs") or 0),

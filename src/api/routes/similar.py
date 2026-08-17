@@ -12,21 +12,22 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import Field
 
+from src.api.overrides import QueryOverrideFields
 from src.api.schemas.v1 import (
     SCHEMA_VERSION,
     SimilarMatchModel,
     SimilarQueryCluster,
     SimilarResponse,
-    llm_rules_only,
+    llm_from_overrides,
     window_from_bounds,
 )
 
 router = APIRouter()
 
 
-class SimilarRequest(BaseModel):
+class SimilarRequest(QueryOverrideFields):
     since: Optional[str] = None
     from_time: Optional[datetime] = None
     to_time: Optional[datetime] = None
@@ -53,6 +54,7 @@ def _iso(value: Optional[datetime]) -> Optional[str]:
 def similar_endpoint(request: SimilarRequest, http_request: Request) -> SimilarResponse:
     from src.api.auth.middleware import AuthPrincipal
     from src.api.auth.scope import bind_request_scope
+    from src.api.overrides import resolve_overrides_from_http
     from src.config import get_settings
     from src.core.clustering.clusterer import run_clustering
     from src.core.retrieval.similar import (
@@ -67,6 +69,7 @@ def similar_endpoint(request: SimilarRequest, http_request: Request) -> SimilarR
     from src.utils.time import resolve_window
 
     scope = bind_request_scope(http_request, request.scope)
+    overrides = resolve_overrides_from_http(http_request, request)
     settings = get_settings()
     principal = getattr(http_request.state, "auth_principal", None)
     if principal is not None and not isinstance(principal, AuthPrincipal):
@@ -118,7 +121,8 @@ def similar_endpoint(request: SimilarRequest, http_request: Request) -> SimilarR
                     window_end=window_end,
                     service=request.service,
                     environment=request.env,
-                    max_clusters=max(request.top, 5),
+                    baseline_window_str=overrides.baseline_window,
+                    max_clusters=overrides.max_clusters,
                     save_to_db=False,
                     ingestion_job_id=ingestion_job_id,
                     scope=scope,
@@ -166,6 +170,10 @@ def similar_endpoint(request: SimilarRequest, http_request: Request) -> SimilarR
             for m in result.matches
         ],
         retrieval_mode=result.retrieval_mode,
-        llm=llm_rules_only(),
+        llm=llm_from_overrides(
+            mode="rules",
+            llm_provider=overrides.llm_provider,
+            llm_enabled=False,
+        ),
         rendered_text=render_similar_summary(result.matches, result.retrieval_mode),
     )

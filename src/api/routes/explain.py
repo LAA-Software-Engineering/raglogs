@@ -3,7 +3,7 @@ Explain API route with caching.
 
 POST /query/explain
   - optional ingestion_job_id scopes analysis to a specific ingest
-  - caches results in the explanations table keyed on (window, service, env, ingestion_job_id, scope)
+  - caches results in the explanations table keyed on (window, service, env, ingestion_job_id, scope, resolved overrides)
   - returns cached result on repeated calls for the same window+filters
 """
 from __future__ import annotations
@@ -15,8 +15,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
 
+from src.api.overrides import QueryOverrideFields, ResolvedOverrides
 from src.api.schemas.v1 import (
     ExplainResponse,
     explain_from_cached,
@@ -29,15 +29,13 @@ if TYPE_CHECKING:
 router = APIRouter()
 
 
-class ExplainRequest(BaseModel):
+class ExplainRequest(QueryOverrideFields):
     since: Optional[str] = None
     from_time: Optional[datetime] = None
     to_time: Optional[datetime] = None
     service: Optional[str] = None
     env: Optional[str] = None
-    no_llm: bool = False
-    max_clusters: int = 10
-    baseline_window: Optional[str] = None
+    no_llm: Optional[bool] = None
     ingestion_job_id: Optional[str] = None   # scope to a specific ingest
     force_refresh: bool = False               # bypass cache
     format: Literal["json", "markdown"] = "json"
@@ -47,7 +45,8 @@ class ExplainRequest(BaseModel):
 def _cache_key(window_start: datetime, window_end: datetime,
                service: Optional[str], env: Optional[str],
                ingestion_job_id: Optional[str],
-               scope: str = "default") -> str:
+               scope: str = "default",
+               overrides: Optional[ResolvedOverrides] = None) -> str:
     """SHA-256 of the canonical filter string — used to detect cache hits."""
     canonical = json.dumps({
         "ws": window_start.isoformat(),
@@ -56,6 +55,7 @@ def _cache_key(window_start: datetime, window_end: datetime,
         "env": env,
         "ijid": ingestion_job_id,
         "scope": scope,
+        "ov": None if overrides is None else overrides.cache_parts(),
     }, sort_keys=True)
     return hashlib.sha256(canonical.encode()).hexdigest()
 
@@ -197,11 +197,13 @@ def _save_to_cache(
 )
 def explain_endpoint(request: ExplainRequest, http_request: Request) -> ExplainResponse:
     from src.api.auth.scope import bind_request_scope
+    from src.api.overrides import resolve_overrides_from_http
     from src.core.explain.summarizer import explain_window
     from src.db.session import get_db
     from src.utils.time import resolve_window
 
     scope = bind_request_scope(http_request, request.scope)
+    overrides = resolve_overrides_from_http(http_request, request)
 
     try:
         window_start, window_end = resolve_window(
@@ -220,21 +222,24 @@ def explain_endpoint(request: ExplainRequest, http_request: Request) -> ExplainR
             raise HTTPException(status_code=400, detail="Invalid ingestion_job_id")
 
     cache_hash = _cache_key(
-        window_start, window_end, request.service, request.env, request.ingestion_job_id, scope
+        window_start, window_end, request.service, request.env, request.ingestion_job_id,
+        scope, overrides=overrides,
     )
 
     try:
         with get_db() as db:
-            # Cache check — skip if force_refresh or no_llm (rules-only is fast)
-            if not request.force_refresh and not request.no_llm:
+            # Cache check — skip only on force_refresh. The key includes resolved
+            # overrides so different max_clusters / llm settings do not collide.
+            if not request.force_refresh:
                 cached = _load_from_cache(db, cache_hash)
                 if cached:
                     body = explain_from_cached(
                         cached,
                         window_start=window_start,
                         window_end=window_end,
-                        no_llm=request.no_llm,
+                        no_llm=overrides.no_llm,
                         scope=scope,
+                        llm_provider=overrides.llm_provider,
                     )
                     cached_result = _explain_result_from_payload(
                         body.model_dump(by_alias=True), window_start, window_end
@@ -247,18 +252,21 @@ def explain_endpoint(request: ExplainRequest, http_request: Request) -> ExplainR
                 window_end=window_end,
                 service=request.service,
                 environment=request.env,
-                no_llm=request.no_llm,
-                max_clusters=request.max_clusters,
-                baseline_window_str=request.baseline_window,
+                no_llm=overrides.no_llm,
+                max_clusters=overrides.max_clusters,
+                baseline_window_str=overrides.baseline_window,
+                max_evidence_items=overrides.max_evidence_items,
+                llm_provider=overrides.llm_provider,
                 ingestion_job_id=ingestion_job_id,
                 scope=scope,
             )
 
             body = explain_from_result(
                 result,
-                no_llm=request.no_llm,
+                no_llm=overrides.no_llm,
                 cached=False,
                 scope=scope,
+                llm_provider=overrides.llm_provider,
             )
 
             # Persist to cache (only rules mode — LLM results are expensive and should

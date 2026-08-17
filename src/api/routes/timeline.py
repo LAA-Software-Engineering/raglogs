@@ -6,13 +6,13 @@ from datetime import datetime
 from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
 
+from src.api.overrides import QueryOverrideFields
 from src.api.schemas.v1 import (
     SCHEMA_VERSION,
     TimelineEventModel,
     TimelineResponse,
-    llm_rules_only,
+    llm_from_overrides,
     window_from_bounds,
 )
 from src.core.timeline.plain_text import format_timeline_plain
@@ -20,7 +20,7 @@ from src.core.timeline.plain_text import format_timeline_plain
 router = APIRouter()
 
 
-class TimelineRequest(BaseModel):
+class TimelineRequest(QueryOverrideFields):
     since: Optional[str] = None
     from_time: Optional[datetime] = None
     to_time: Optional[datetime] = None
@@ -55,6 +55,7 @@ def _events_to_models(events) -> list[TimelineEventModel]:
 )
 def timeline_endpoint(request: TimelineRequest, http_request: Request) -> TimelineResponse:
     from src.api.auth.scope import bind_request_scope
+    from src.api.overrides import resolve_overrides_from_http
     from src.core.clustering.clusterer import run_clustering
     from src.core.explain.evidence import assemble_evidence
     from src.core.explain.summarizer import get_latest_ingestion_job_id
@@ -63,6 +64,7 @@ def timeline_endpoint(request: TimelineRequest, http_request: Request) -> Timeli
     from src.utils.time import resolve_window
 
     scope = bind_request_scope(http_request, request.scope)
+    overrides = resolve_overrides_from_http(http_request, request)
 
     try:
         window_start, window_end = resolve_window(
@@ -94,6 +96,8 @@ def timeline_endpoint(request: TimelineRequest, http_request: Request) -> Timeli
                 window_end=window_end,
                 service=request.service,
                 environment=request.env,
+                baseline_window_str=overrides.baseline_window,
+                max_clusters=overrides.max_clusters,
                 save_to_db=False,
                 ingestion_job_id=job_id,
                 scope=scope,
@@ -106,6 +110,7 @@ def timeline_endpoint(request: TimelineRequest, http_request: Request) -> Timeli
                 clusters=clusters,
                 service_filter=request.service,
                 environment_filter=request.env,
+                max_evidence_items=overrides.max_evidence_items,
                 ingestion_job_id=job_id,
                 scope=scope,
             )
@@ -120,7 +125,11 @@ def timeline_endpoint(request: TimelineRequest, http_request: Request) -> Timeli
         scope=scope,
         window=window_from_bounds(window_start, window_end),
         events=_events_to_models(events),
-        llm=llm_rules_only(),
+        llm=llm_from_overrides(
+            mode="rules",
+            llm_provider=overrides.llm_provider,
+            llm_enabled=False,
+        ),
         ingestion_job_id=request.ingestion_job_id,
         all_ingestions=request.all_ingestions,
     )

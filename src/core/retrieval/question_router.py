@@ -165,7 +165,7 @@ def search_logs_semantic(
     return list(db.execute(q).scalars().all())
 
 
-def cluster_logs(entries: list[LogEntry]) -> list[dict]:
+def cluster_logs(entries: list[LogEntry], max_clusters: int = 8) -> list[dict]:
     """Group log entries by fingerprint, return top clusters sorted by count."""
     groups: dict[str, list[LogEntry]] = defaultdict(list)
     for entry in entries:
@@ -173,7 +173,7 @@ def cluster_logs(entries: list[LogEntry]) -> list[dict]:
         groups[key].append(entry)
 
     clusters = []
-    for fp, group in sorted(groups.items(), key=lambda x: len(x[1]), reverse=True)[:8]:
+    for fp, group in sorted(groups.items(), key=lambda x: len(x[1]), reverse=True)[:max_clusters]:
         timestamps = sorted(e.timestamp for e in group if e.timestamp)
         rep = group[0].normalized_message or group[0].raw_message or ""
         services = sorted(set(e.service for e in group if e.service))
@@ -247,6 +247,10 @@ def answer_question(
     service: Optional[str] = None,
     ingestion_job_id: Optional[uuid.UUID] = None,
     scope: str = DEFAULT_LOG_SCOPE,
+    no_llm: bool = False,
+    max_clusters: Optional[int] = None,
+    max_evidence_items: Optional[int] = None,
+    llm_provider: Optional[str] = None,
 ) -> AskResult:
     from src.config import get_settings
     from src.core.llm.provider import (
@@ -257,6 +261,13 @@ def answer_question(
     from src.utils.time import resolve_window
 
     settings = get_settings()
+    if llm_provider is not None or max_evidence_items is not None:
+        update: dict[str, object] = {}
+        if llm_provider is not None:
+            update["llm_provider"] = llm_provider
+        if max_evidence_items is not None:
+            update["max_evidence_items"] = max_evidence_items
+        settings = settings.model_copy(update=update)
 
     if window_start is None:
         window_start, window_end = resolve_window(since="24h")
@@ -290,12 +301,15 @@ def answer_question(
             retrieval_mode=retrieval_mode,
         )
 
-    clusters = cluster_logs(matching)
+    cluster_cap = max_clusters if max_clusters is not None else 8
+    clusters = cluster_logs(matching, max_clusters=cluster_cap)
     evidence_items = [
         f"{c['count']} events: '{c['message'][:80]}' in "
         f"{', '.join(c['services']) or 'unknown'}"
         for c in clusters
     ]
+    if max_evidence_items is not None:
+        evidence_items = evidence_items[:max_evidence_items]
 
     evidence_packet = {
         "question": question,
@@ -316,15 +330,18 @@ def answer_question(
     mode = "rules"
     answer_text = ""
 
-    llm = build_llm_provider(settings)
-    llm_requested = not isinstance(unwrap_llm_provider(llm), NoopLLMProvider)
+    llm_requested = (not no_llm) and settings.llm_provider != "disabled"
     if llm_requested:
-        try:
-            answer_text = _call_llm_ask(llm, question, evidence_packet)
-            if answer_text:
-                mode = "llm"
-        except Exception:
-            log.warning("llm_ask_failed", exc_info=True)
+        llm = build_llm_provider(settings)
+        if isinstance(unwrap_llm_provider(llm), NoopLLMProvider):
+            llm_requested = False
+        else:
+            try:
+                answer_text = _call_llm_ask(llm, question, evidence_packet, settings=settings)
+                if answer_text:
+                    mode = "llm"
+            except Exception:
+                log.warning("llm_ask_failed", exc_info=True)
 
     if llm_requested and mode != "llm":
         from src.observability.metrics import record_llm_fallback
@@ -403,7 +420,12 @@ def _retrieve_matching_logs(
     return matching, "fallback"
 
 
-def _call_llm_ask(llm: object, question: str, evidence_packet: dict) -> str:
+def _call_llm_ask(
+    llm: object,
+    question: str,
+    evidence_packet: dict,
+    settings: Optional[Settings] = None,
+) -> str:
     """
     Call the LLM provider with the ask-specific system prompt.
     Constructs the HTTP call directly rather than reusing generate_summary,
@@ -427,8 +449,8 @@ def _call_llm_ask(llm: object, question: str, evidence_packet: dict) -> str:
     from src.observability.metrics import record_llm_estimated_tokens
 
     inner = unwrap_llm_provider(llm)  # type: ignore[arg-type]
-    settings = get_settings()
-    prepared = prepare_llm_packet(evidence_packet, settings)
+    resolved = settings if settings is not None else get_settings()
+    prepared = prepare_llm_packet(evidence_packet, resolved)
     record_llm_estimated_tokens(estimate_tokens(prepared))
     payload_str = json.dumps(prepared, default=str, indent=2)
     user_message = f"Question: {question}\n\nLog evidence:\n{payload_str}"

@@ -134,15 +134,17 @@ class ResilientLLMProvider:
     retry sequence, but the breaker check still skips HTTP when open.
     """
 
-    def __init__(self, inner: LLMProvider) -> None:
+    def __init__(self, inner: LLMProvider, settings: Any | None = None) -> None:
         self.inner = inner
+        self._settings = settings
 
     def generate_summary(self, evidence_packet: dict) -> str:
         from src.config import get_settings
         from src.core.llm.resilience import estimate_tokens
         from src.observability.metrics import record_llm_estimated_tokens
 
-        prepared = prepare_llm_packet(evidence_packet, get_settings())
+        settings = self._settings if self._settings is not None else get_settings()
+        prepared = prepare_llm_packet(evidence_packet, settings)
         record_llm_estimated_tokens(estimate_tokens(prepared))
         return invoke_llm(lambda: self.inner.generate_summary(prepared))
 
@@ -248,5 +250,5 @@ def build_llm_provider(settings: Any) -> LLMProvider:
     """
     inner = _build_inner_llm_provider(settings)
     if not isinstance(inner, NoopLLMProvider):
-        inner = ResilientLLMProvider(inner)
+        inner = ResilientLLMProvider(inner, settings)
     return CappedLLMProvider(inner)
