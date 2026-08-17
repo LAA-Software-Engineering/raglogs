@@ -24,9 +24,6 @@ from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.text import Text
-from rich import box
-from rich.table import Table
 
 console = Console()
 
@@ -65,7 +62,7 @@ def timeline_cmd(
     from src.core.explain.summarizer import get_latest_ingestion_job_id
     from src.core.timeline.builder import build_timeline
     from src.db.session import get_db
-    from src.utils.time import format_window, resolve_window
+    from src.utils.time import resolve_window
 
     try:
         from_dt = datetime.fromisoformat(from_time) if from_time else None

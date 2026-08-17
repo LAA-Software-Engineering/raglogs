@@ -1,7 +1,7 @@
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional, Union
+from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -10,7 +10,6 @@ from src.core.clustering.clusterer import ClusterData
 from src.core.normalization.patterns import is_trigger_message
 from src.db.models import DEFAULT_LOG_SCOPE, LogEntry
 from src.db.scope_filter import filter_log_entries_by_scope
-from src.utils.time import format_window
 
 
 def _trunc(text: str, max_len: int) -> str:
@@ -150,7 +149,7 @@ def assemble_evidence(
     # Error/warn clusters only for primary analysis
     significant_clusters = [
         c for c in clusters
-        if any(l in ("error", "fatal", "warn", "critical") for l in c.levels)
+        if any(lvl in ("error", "fatal", "warn", "critical") for lvl in c.levels)
     ]
 
     if not significant_clusters:

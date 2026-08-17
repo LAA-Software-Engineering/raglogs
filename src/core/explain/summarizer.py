@@ -13,7 +13,6 @@ from src.core.explain.templates import render_insufficient_evidence, render_text
 from src.core.llm.provider import NoopLLMProvider, build_llm_provider
 from src.db.models import DEFAULT_LOG_SCOPE, IngestionJob
 from src.db.scope_filter import filter_ingestion_jobs_by_scope
-from src.utils.time import resolve_baseline_window
 
 
 @dataclass
@@ -123,7 +122,7 @@ def explain_window(
                 if llm_text:
                     summary_text = llm_text
                     mode = "llm"
-        except Exception as e:
+        except Exception:
             # Degrade gracefully
             pass
 

@@ -24,7 +24,6 @@ from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.text import Text
 
 console = Console()
 
@@ -66,14 +65,14 @@ def compare_cmd(
     ),
 ):
     """Diff two time windows — see exactly what changed."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timezone
 
     from src.core.clustering.clusterer import run_clustering
     from src.core.compare.differ import compare_windows
     from src.core.explain.evidence import assemble_evidence
     from src.core.explain.summarizer import get_latest_ingestion_job_id
     from src.db.session import get_db
-    from src.utils.time import format_window, parse_duration, resolve_window
+    from src.utils.time import parse_duration
 
     now = datetime.now(tz=timezone.utc)
 
