@@ -11,6 +11,7 @@ from .models import (
     IngestionJob,
     LogEmbedding,
     LogEntry,
+    ScopeRetention,
     Source,
     WorkerJob,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "Explanation",
     "ApiKey",
     "AppConfig",
+    "ScopeRetention",
     "IngestIdempotencyKey",
     "WorkerJob",
     "get_db",

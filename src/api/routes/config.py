@@ -6,6 +6,7 @@ router = APIRouter()
 @router.get("")
 def get_config():
     from src.config import get_settings
+
     settings = get_settings()
     return {
         "llm_provider": settings.llm_provider,
@@ -15,4 +16,7 @@ def get_config():
         "default_baseline_window": settings.default_baseline_window,
         "max_clusters_for_explain": settings.max_clusters_for_explain,
         "max_evidence_items": settings.max_evidence_items,
+        "retention_raw": settings.retention_raw,
+        "retention_summary": settings.retention_summary,
+        "purge_interval_seconds": settings.purge_interval_seconds,
     }

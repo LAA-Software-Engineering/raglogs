@@ -130,7 +130,12 @@ class LogEmbedding(Base):
     __tablename__ = "log_embeddings"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    log_entry_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("log_entries.id"), nullable=False, unique=True)
+    log_entry_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("log_entries.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
     embedding: Mapped[Any] = mapped_column(Vector(1536), nullable=False)
     model_name: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -177,16 +182,23 @@ class ClusterRun(Base):
     environment_filter: Mapped[str | None] = mapped_column(String(100), nullable=True)
     algorithm: Mapped[str] = mapped_column(String(50), default="fingerprint")
     status: Mapped[str] = mapped_column(String(50), default="completed")
+    scope: Mapped[str] = mapped_column(
+        String(255), nullable=False, default=DEFAULT_LOG_SCOPE, server_default="default"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     clusters: Mapped[list["Cluster"]] = relationship("Cluster", back_populates="cluster_run")
+
+    __table_args__ = (Index("ix_cluster_runs_scope", "scope"),)
 
 
 class Cluster(Base):
     __tablename__ = "clusters"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    cluster_run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("cluster_runs.id"), nullable=False)
+    cluster_run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cluster_runs.id", ondelete="CASCADE"), nullable=False
+    )
     cluster_key: Mapped[str] = mapped_column(String(64), nullable=False)
     representative_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -209,8 +221,12 @@ class ClusterMember(Base):
     __tablename__ = "cluster_members"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    cluster_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("clusters.id"), nullable=False)
-    log_entry_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("log_entries.id"), nullable=False)
+    cluster_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("clusters.id", ondelete="CASCADE"), nullable=False
+    )
+    log_entry_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("log_entries.id", ondelete="CASCADE"), nullable=False
+    )
 
     cluster: Mapped["Cluster"] = relationship("Cluster", back_populates="members")
     log_entry: Mapped["LogEntry"] = relationship("LogEntry", back_populates="cluster_members")
@@ -229,7 +245,23 @@ class Explanation(Base):
     result_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     result_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     confidence: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    scope: Mapped[str] = mapped_column(
+        String(255), nullable=False, default=DEFAULT_LOG_SCOPE, server_default="default"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (Index("ix_explanations_scope", "scope"),)
+
+
+class ScopeRetention(Base):
+    """Per-scope TTL overrides. NULL interval = fall back to env default."""
+
+    __tablename__ = "scope_retention"
+
+    scope: Mapped[str] = mapped_column(String(255), primary_key=True)
+    raw_interval: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    summary_interval: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class AppConfig(Base):

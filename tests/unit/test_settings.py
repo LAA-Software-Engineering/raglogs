@@ -216,3 +216,25 @@ def test_observability_settings_from_env(monkeypatch):
     assert settings.otel_sdk_disabled is True
     assert settings.otel_exporter_otlp_endpoint == "http://localhost:4318/v1/traces"
     assert settings.otel_service_name == "raglogs-test"
+
+
+def test_retention_settings_defaults():
+    settings = Settings(_env_file=None)
+    assert settings.retention_raw == "30d"
+    assert settings.retention_summary == "180d"
+    assert settings.purge_interval_seconds == 3600
+    assert settings.purge_chunk_size == 1000
+
+
+def test_retention_settings_from_env(monkeypatch):
+    monkeypatch.setenv("RETENTION_RAW", "7d")
+    monkeypatch.setenv("RETENTION_SUMMARY", "off")
+    monkeypatch.setenv("PURGE_INTERVAL_SECONDS", "120")
+    monkeypatch.setenv("PURGE_CHUNK_SIZE", "50")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.retention_raw == "7d"
+    assert settings.retention_summary == "off"
+    assert settings.purge_interval_seconds == 120
+    assert settings.purge_chunk_size == 50

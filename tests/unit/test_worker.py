@@ -445,3 +445,37 @@ class TestProcessOne:
 
         assert result is True
         assert job.status == "done"
+
+
+class TestPurgeJob:
+    def test_purge_job_type_dispatches(self):
+        db = _mock_db()
+        job = _mock_worker_job(job_type="purge", payload={})
+        db.execute.return_value.scalar_one_or_none.return_value = job
+
+        with patch(
+            "src.core.retention.purge.run_purge_job",
+            return_value={"raw": 3, "summary": 0, "embedding": 1, "scopes": ["default"]},
+        ) as mock_purge:
+            result = process_one(db)
+
+        assert result is True
+        assert job.status == "done"
+        assert job.result_json["raw"] == 3
+        mock_purge.assert_called_once_with(db, job)
+
+    def test_purge_job_skips_ingest_webhook(self):
+        db = _mock_db()
+        job = _mock_worker_job(job_type="purge", payload={})
+        db.execute.return_value.scalar_one_or_none.return_value = job
+
+        with patch(
+            "src.core.retention.purge.run_purge_job",
+            return_value={"raw": 0, "summary": 0, "embedding": 0, "scopes": []},
+        ), patch(
+            "src.core.ingestion.webhooks.maybe_deliver_ingest_callback",
+        ) as mock_deliver:
+            process_one(db)
+
+        mock_deliver.assert_not_called()
+        assert job.status == "done"

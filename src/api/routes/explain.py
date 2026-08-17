@@ -158,10 +158,20 @@ def _maybe_add_markdown(
     )
 
 
-def _save_to_cache(db, cache_hash: str, window_start: datetime, window_end: datetime,
-                   service: Optional[str], env: Optional[str], result: dict, confidence: str, mode: str):
+def _save_to_cache(
+    db,
+    cache_hash: str,
+    window_start: datetime,
+    window_end: datetime,
+    service: Optional[str],
+    env: Optional[str],
+    result: dict,
+    confidence: str,
+    mode: str,
+    scope: str = "default",
+):
     """Persist an explanation result to the cache."""
-    from src.db.models import Explanation
+    from src.db.models import DEFAULT_LOG_SCOPE, Explanation
 
     row = Explanation(
         id=uuid.uuid4(),
@@ -173,6 +183,7 @@ def _save_to_cache(db, cache_hash: str, window_start: datetime, window_end: date
         prompt_hash=cache_hash,
         result_json=result,
         confidence=confidence,
+        scope=scope or DEFAULT_LOG_SCOPE,
     )
     db.add(row)
     db.flush()
@@ -259,6 +270,7 @@ def explain_endpoint(request: ExplainRequest, http_request: Request) -> ExplainR
                 _save_to_cache(
                     db, cache_hash, window_start, window_end,
                     request.service, request.env, cache_payload, result.confidence, result.mode,
+                    scope=scope,
                 )
 
             return _maybe_add_markdown(body, result, request)

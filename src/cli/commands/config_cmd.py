@@ -18,7 +18,9 @@ def config_cmd(
 
     if key is None:
         # Show all
-        table = Table(title="raglogs configuration", show_header=True, header_style="bold cyan")
+        table = Table(
+            title="raglogs configuration", show_header=True, header_style="bold cyan"
+        )
         table.add_column("Key")
         table.add_column("Value")
 
@@ -28,13 +30,18 @@ def config_cmd(
             "LLM_MODEL": settings.llm_model,
             "EMBEDDINGS_PROVIDER": settings.embeddings_provider,
             "EMBEDDINGS_MODEL": settings.embeddings_model,
-            "CLUSTER_MERGE_SIMILARITY_THRESHOLD": str(settings.cluster_merge_similarity_threshold),
+            "CLUSTER_MERGE_SIMILARITY_THRESHOLD": str(
+                settings.cluster_merge_similarity_threshold
+            ),
             "CLUSTER_MERGE_MIN_COUNT": str(settings.cluster_merge_min_count),
             "ASK_SEMANTIC_TOP_K": str(settings.ask_semantic_top_k),
             "ASK_SEMANTIC_MIN_SIMILARITY": str(settings.ask_semantic_min_similarity),
             "DEFAULT_BASELINE_WINDOW": settings.default_baseline_window,
             "MAX_CLUSTERS_FOR_EXPLAIN": str(settings.max_clusters_for_explain),
             "MAX_EVIDENCE_ITEMS": str(settings.max_evidence_items),
+            "RETENTION_RAW": settings.retention_raw,
+            "RETENTION_SUMMARY": settings.retention_summary,
+            "PURGE_INTERVAL_SECONDS": str(settings.purge_interval_seconds),
         }
 
         for k, v in config_items.items():
