@@ -1,4 +1,4 @@
-"""Persist and score log-line embeddings for semantic retrieval.
+"""Persist log-line embeddings for semantic retrieval.
 
 Ingest writes ``LogEmbedding`` rows after ``LogEntry`` PKs exist.
 Ask reads those vectors via pgvector cosine similarity. The stored
@@ -8,9 +8,7 @@ column is ``Vector(1536)`` (migration 0001); other dimensions are skipped.
 from __future__ import annotations
 
 import uuid
-from typing import Sequence, TypeVar
 
-import numpy as np
 import structlog
 from sqlalchemy.orm import Session
 
@@ -23,33 +21,6 @@ log = structlog.get_logger()
 
 # Must match ``log_embeddings.embedding Vector(1536)`` in the applied schema.
 STORED_EMBEDDING_DIMS = 1536
-
-T = TypeVar("T")
-
-
-def cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
-    """Return cosine similarity in ``[-1, 1]``. Zero vectors score 0.0."""
-    va = np.asarray(a, dtype=np.float64)
-    vb = np.asarray(b, dtype=np.float64)
-    if va.size == 0 or vb.size == 0:
-        return 0.0
-    denom = float(np.linalg.norm(va) * np.linalg.norm(vb))
-    if denom == 0.0:
-        return 0.0
-    return float(np.dot(va, vb) / denom)
-
-
-def filter_by_min_similarity(
-    items: list[T],
-    similarities: list[float],
-    min_similarity: float,
-) -> list[T]:
-    """Keep items whose paired similarity is at or above ``min_similarity``."""
-    if len(items) != len(similarities):
-        raise ValueError(
-            f"items length {len(items)} does not match similarities length {len(similarities)}"
-        )
-    return [item for item, sim in zip(items, similarities) if sim >= min_similarity]
 
 
 def ingest_embeddings_provider(
@@ -125,7 +96,10 @@ def persist_log_embeddings(
 ) -> int:
     """Embed a flushed batch of log entries and insert ``LogEmbedding`` rows.
 
-    Fail-open on provider errors: log and return 0 so ingest still succeeds.
+    Fail-open on provider errors and on insert/flush errors: log and return 0
+    so ingest still succeeds. Inserts run in a savepoint (``begin_nested``)
+    so a failed embedding write cannot roll back the already-flushed
+    ``LogEntry`` batch or poison the session.
     Returns the number of rows inserted.
     """
     if not entries:
@@ -172,6 +146,12 @@ def persist_log_embeddings(
     )
     if not rows:
         return 0
-    db.bulk_save_objects(rows)
-    db.flush()
+
+    try:
+        with db.begin_nested():
+            db.bulk_save_objects(rows)
+            db.flush()
+    except Exception:
+        log.warning("embeddings_persist_failed", count=len(rows), exc_info=True)
+        return 0
     return len(rows)

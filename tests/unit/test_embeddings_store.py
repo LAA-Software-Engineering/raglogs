@@ -3,15 +3,11 @@
 import uuid
 from unittest.mock import MagicMock
 
-import pytest
-
 from src.config.settings import Settings
 from src.core.embeddings.provider import DisabledEmbeddingsProvider
 from src.core.embeddings.store import (
     STORED_EMBEDDING_DIMS,
     build_embedding_rows,
-    cosine_similarity,
-    filter_by_min_similarity,
     ingest_embeddings_provider,
     persist_log_embeddings,
 )
@@ -51,27 +47,6 @@ def _entry(message: str, entry_id: uuid.UUID | None = None) -> LogEntry:
 
 def _settings(**kwargs) -> Settings:
     return Settings(_env_file=None, **kwargs)
-
-
-class TestCosineSimilarity:
-    def test_identical_unit_vectors(self) -> None:
-        assert cosine_similarity([1.0, 0.0], [1.0, 0.0]) == pytest.approx(1.0)
-
-    def test_orthogonal_vectors(self) -> None:
-        assert cosine_similarity([1.0, 0.0], [0.0, 1.0]) == pytest.approx(0.0)
-
-    def test_zero_vector_is_zero(self) -> None:
-        assert cosine_similarity([0.0, 0.0], [1.0, 0.0]) == 0.0
-
-
-class TestFilterByMinSimilarity:
-    def test_excludes_below_threshold(self) -> None:
-        kept = filter_by_min_similarity(["a", "b", "c"], [0.9, 0.5, 0.8], 0.75)
-        assert kept == ["a", "c"]
-
-    def test_length_mismatch_raises(self) -> None:
-        with pytest.raises(ValueError, match="does not match"):
-            filter_by_min_similarity(["a"], [0.9, 0.1], 0.75)
 
 
 class TestBuildEmbeddingRows:
@@ -166,3 +141,20 @@ class TestPersistLogEmbeddings:
         assert count == 0
         assert provider.calls == []
         db.bulk_save_objects.assert_not_called()
+
+    def test_insert_failure_returns_zero_without_raising(self) -> None:
+        entry = _entry("connection refused")
+        provider = FakeEmbeddingsProvider([[0.05] * STORED_EMBEDDING_DIMS])
+        db = MagicMock()
+        nested = MagicMock()
+        nested.__enter__.return_value = nested
+        nested.__exit__.return_value = None
+        db.begin_nested.return_value = nested
+        db.flush.side_effect = RuntimeError("deadlock")
+
+        count = persist_log_embeddings(
+            db, [entry], provider=provider, settings=_settings()
+        )
+
+        assert count == 0
+        db.begin_nested.assert_called()

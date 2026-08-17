@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
+import structlog
 from sqlalchemy import Select, or_, select
 from sqlalchemy.orm import Session
 
@@ -28,6 +29,8 @@ from src.config.settings import Settings
 from src.core.embeddings.provider import get_embeddings_provider
 from src.core.embeddings.store import STORED_EMBEDDING_DIMS
 from src.db.models import LogEmbedding, LogEntry
+
+log = structlog.get_logger()
 
 
 LEVEL_KEYWORDS = {
@@ -357,7 +360,7 @@ def _retrieve_matching_logs(
                 if semantic_hits:
                     return semantic_hits, "semantic"
         except Exception:
-            pass
+            log.warning("ask_semantic_retrieval_failed", exc_info=True)
 
     matching = search_logs(
         db, keywords, window_start, window_end, service, level_bias,

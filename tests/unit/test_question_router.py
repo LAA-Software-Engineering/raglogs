@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 from src.core.embeddings.provider import DisabledEmbeddingsProvider
-from src.core.embeddings.store import STORED_EMBEDDING_DIMS, filter_by_min_similarity
+from src.core.embeddings.store import STORED_EMBEDDING_DIMS
 from src.core.retrieval.question_router import (
     answer_question,
     fetch_fallback_clusters,
@@ -131,12 +131,38 @@ class TestSearchLogsSemanticSQL:
             min_similarity=0.75,
         )
 
-        sql = _compiled_sql(db).lower()
-        assert "log_embeddings" in sql
-        assert "ingestion_job_id" in sql
-        assert "service" in sql
+        sql = _compiled_sql(db)
+        where = _where_clause(db)
+        compiled = db.execute.call_args[0][0].compile(compile_kwargs={"literal_binds": False})
+
+        assert "log_embeddings" in sql.lower()
+        assert "ingestion_job_id" in where
+        assert "service" in where
+        assert "<=>" in where
+        assert 0.75 in compiled.params.values()
         assert QUESTION not in sql
         assert QUESTION not in str(db.execute.call_args)
+
+    def test_applies_min_similarity_threshold_in_where(self):
+        db = _mock_db_returning()
+        vector = [0.04] * STORED_EMBEDDING_DIMS
+
+        search_logs_semantic(
+            db,
+            vector,
+            None,
+            None,
+            None,
+            None,
+            min_similarity=0.75,
+        )
+
+        query = db.execute.call_args[0][0]
+        where = str(query.whereclause)
+        compiled = query.compile(compile_kwargs={"literal_binds": False})
+        assert "<=>" in where
+        assert ">=" in where
+        assert 0.75 in compiled.params.values()
 
     def test_window_and_service_filters_without_job(self):
         db = _mock_db_returning()
@@ -155,7 +181,8 @@ class TestSearchLogsSemanticSQL:
         where = _where_clause(db).lower()
         assert "log_embeddings" in sql
         assert "ingestion_job_id" not in where
-        assert "timestamp" in sql
+        assert "service" in where
+        assert "timestamp" in where
 
     def test_skips_db_when_vector_dimension_mismatches(self):
         db = _mock_db_returning()
@@ -174,14 +201,6 @@ class TestSearchLogsSemanticSQL:
         compiled = db.execute.call_args[0][0].compile()
         blob = str(compiled) + str(compiled.params)
         assert QUESTION not in blob
-
-
-class TestSimilarityThreshold:
-    def test_below_min_similarity_is_excluded(self):
-        high = _entry("stripe signature verification failed")
-        low = _entry("cache miss on session store")
-        kept = filter_by_min_similarity([high, low], [0.91, 0.40], 0.75)
-        assert kept == [high]
 
 
 class TestAnswerQuestionRetrieval:
@@ -316,6 +335,9 @@ class TestAnswerQuestionRetrieval:
             patch(
                 "src.core.llm.provider.build_llm_provider",
             ) as mock_llm,
+            patch(
+                "src.core.retrieval.question_router.log.warning",
+            ) as mock_warn,
         ):
             from src.core.llm.provider import NoopLLMProvider
 
@@ -330,6 +352,9 @@ class TestAnswerQuestionRetrieval:
         mock_semantic.assert_not_called()
         assert result.retrieval_mode == "keyword"
         assert result.total_matches == 1
+        mock_warn.assert_called()
+        assert mock_warn.call_args.args[0] == "ask_semantic_retrieval_failed"
+        assert mock_warn.call_args.kwargs.get("exc_info") is True
 
     def test_keyword_empty_uses_fallback_clusters(self):
         fallback_hit = _entry("auth token invalid")
