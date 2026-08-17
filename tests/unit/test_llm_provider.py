@@ -1,4 +1,5 @@
 """Unit tests for the Claude LLM provider and factory (no database, no live API)."""
+
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -96,7 +97,9 @@ class _CapturingClient:
     last_timeout: float | None = None
     response: _FakeResponse | None = None
 
-    def __init__(self, *args: object, timeout: float | None = None, **kwargs: object) -> None:
+    def __init__(
+        self, *args: object, timeout: float | None = None, **kwargs: object
+    ) -> None:
         type(self).last_timeout = timeout
 
     def __enter__(self) -> _CapturingClient:
@@ -113,7 +116,9 @@ class _CapturingClient:
         type(self).last_json = payload if isinstance(payload, dict) else None
         if type(self).response is not None:
             return type(self).response
-        return _FakeResponse({"content": [{"type": "text", "text": "  claude summary  "}]})
+        return _FakeResponse(
+            {"content": [{"type": "text", "text": "  claude summary  "}]}
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -169,8 +174,10 @@ def test_generate_summary_builds_messages_request_and_parses_text() -> None:
         model="claude-haiku-4-5",
         base_url="https://api.anthropic.com",
     )
-    with patch("src.config.get_settings", return_value=settings), \
-         patch("httpx.Client", _CapturingClient):
+    with (
+        patch("src.config.get_settings", return_value=settings),
+        patch("httpx.Client", _CapturingClient),
+    ):
         text = provider.generate_summary({"primary": "payment 502"})
 
     assert text == "claude summary"
@@ -212,13 +219,18 @@ def test_claude_http_error_does_not_crash_explain_pipeline() -> None:
         )
     )
     llm = build_llm_provider(settings)
-    with patch("src.config.get_settings", return_value=settings), \
-         patch("src.core.explain.summarizer.get_settings", return_value=settings), \
-         patch("src.core.explain.summarizer.run_clustering", return_value=(None, [packet.primary_cluster])), \
-         patch("src.core.explain.summarizer.assemble_evidence", return_value=packet), \
-         patch("src.core.explain.summarizer.build_llm_provider", return_value=llm), \
-         patch("src.core.llm.resilience.default_llm_wait", return_value=wait_none()), \
-         patch("httpx.Client", _CapturingClient):
+    with (
+        patch("src.config.get_settings", return_value=settings),
+        patch("src.core.explain.summarizer.get_settings", return_value=settings),
+        patch(
+            "src.core.explain.summarizer.run_clustering",
+            return_value=(None, [packet.primary_cluster]),
+        ),
+        patch("src.core.explain.summarizer.assemble_evidence", return_value=packet),
+        patch("src.core.explain.summarizer.build_llm_provider", return_value=llm),
+        patch("src.core.llm.resilience.default_llm_wait", return_value=wait_none()),
+        patch("httpx.Client", _CapturingClient),
+    ):
         result = explain_window(
             db=MagicMock(),
             window_start=packet.window_start,
@@ -234,10 +246,14 @@ def test_claude_http_error_does_not_crash_explain_pipeline() -> None:
 def test_call_llm_ask_claude_posts_messages_api() -> None:
     settings = _settings(llm_timeout=9.0, llm_max_tokens=120, llm_max_retries=0)
     llm = ClaudeLLMProvider(api_key="sk-ant-ask", model="claude-haiku-4-5")
-    with patch("src.config.get_settings", return_value=settings), \
-         patch("src.core.llm.resilience.default_llm_wait", return_value=wait_none()), \
-         patch("httpx.Client", _CapturingClient):
-        text = _call_llm_ask(llm, "why did checkout fail?", {"clusters": [{"message": "502"}]})
+    with (
+        patch("src.config.get_settings", return_value=settings),
+        patch("src.core.llm.resilience.default_llm_wait", return_value=wait_none()),
+        patch("httpx.Client", _CapturingClient),
+    ):
+        text = _call_llm_ask(
+            llm, "why did checkout fail?", {"clusters": [{"message": "502"}]}
+        )
 
     assert text == "claude summary"
     assert _CapturingClient.last_url == "https://api.anthropic.com/v1/messages"
