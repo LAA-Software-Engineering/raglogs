@@ -11,8 +11,7 @@ validation, timeline/compare query routes, health queue depth, and 4xx cases.
 import uuid
 import pytest
 from datetime import datetime, timezone
-from contextlib import contextmanager
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 from src.api.app import app
