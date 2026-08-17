@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from src.api.schemas.v1 import (
@@ -22,6 +22,7 @@ class AskRequest(BaseModel):
     to_time: Optional[datetime] = None
     service: Optional[str] = None
     ingestion_job_id: Optional[str] = None
+    scope: Optional[str] = None
 
 
 @router.post(
@@ -29,10 +30,13 @@ class AskRequest(BaseModel):
     response_model=AskResponse,
     response_model_exclude_unset=True,
 )
-def ask_endpoint(request: AskRequest) -> AskResponse:
+def ask_endpoint(request: AskRequest, http_request: Request) -> AskResponse:
+    from src.api.auth.scope import bind_request_scope
     from src.core.retrieval.question_router import answer_question
     from src.db.session import get_db
     from src.utils.time import resolve_window
+
+    scope = bind_request_scope(http_request, request.scope)
 
     window_start, window_end = None, None
     if request.since or request.from_time:
@@ -61,6 +65,7 @@ def ask_endpoint(request: AskRequest) -> AskResponse:
                 window_end=window_end,
                 service=request.service,
                 ingestion_job_id=ingestion_job_id,
+                scope=scope,
             )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

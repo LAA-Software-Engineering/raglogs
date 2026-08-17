@@ -26,6 +26,7 @@ class CompareRequest(BaseModel):
     all_ingestions: bool = False
     ingestion_job_id: Optional[str] = None
     format: Literal["json", "text"] = "json"
+    scope: Optional[str] = None
 
 
 def _ensure_utc(dt: datetime) -> datetime:
@@ -178,12 +179,14 @@ def format_compare_plain(result: CompareResult) -> str:
     response_model_by_alias=True,
 )
 def compare_endpoint(request: CompareRequest, http_request: Request) -> CompareResponse:
-    from src.api.schemas.v1 import scope_from_request
+    from src.api.auth.scope import bind_request_scope
     from src.core.clustering.clusterer import run_clustering
     from src.core.compare.differ import compare_windows as run_compare_windows
     from src.core.explain.evidence import assemble_evidence
     from src.core.explain.summarizer import get_latest_ingestion_job_id
     from src.db.session import get_db
+
+    scope = bind_request_scope(http_request, request.scope)
 
     try:
         a_start, a_end, b_start, b_end = _resolve_compare_windows(request)
@@ -203,7 +206,7 @@ def compare_endpoint(request: CompareRequest, http_request: Request) -> CompareR
             if ingestion_job_id is not None:
                 job_id = ingestion_job_id
             elif not request.all_ingestions:
-                job_id = get_latest_ingestion_job_id(db)
+                job_id = get_latest_ingestion_job_id(db, scope=scope)
 
             _, clusters_a = run_clustering(
                 db=db,
@@ -214,6 +217,7 @@ def compare_endpoint(request: CompareRequest, http_request: Request) -> CompareR
                 save_to_db=False,
                 ingestion_job_id=job_id,
                 max_clusters=50,
+                scope=scope,
             )
             _, clusters_b = run_clustering(
                 db=db,
@@ -224,6 +228,7 @@ def compare_endpoint(request: CompareRequest, http_request: Request) -> CompareR
                 save_to_db=False,
                 ingestion_job_id=job_id,
                 max_clusters=50,
+                scope=scope,
             )
 
             packet_a = assemble_evidence(
@@ -234,6 +239,7 @@ def compare_endpoint(request: CompareRequest, http_request: Request) -> CompareR
                 service_filter=request.service,
                 environment_filter=request.env,
                 ingestion_job_id=job_id,
+                scope=scope,
             )
             packet_b = assemble_evidence(
                 db=db,
@@ -243,6 +249,7 @@ def compare_endpoint(request: CompareRequest, http_request: Request) -> CompareR
                 service_filter=request.service,
                 environment_filter=request.env,
                 ingestion_job_id=job_id,
+                scope=scope,
             )
 
             result = run_compare_windows(
@@ -259,7 +266,7 @@ def compare_endpoint(request: CompareRequest, http_request: Request) -> CompareR
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    body = _compare_result_to_response(result, scope=scope_from_request(http_request))
+    body = _compare_result_to_response(result, scope=scope)
     if request.format == "text":
         rendered = format_compare_plain(result)
         body = body.model_copy(update={"rendered_text": rendered, "text": rendered})

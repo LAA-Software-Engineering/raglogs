@@ -28,7 +28,8 @@ from sqlalchemy.orm import Session
 from src.config.settings import Settings
 from src.core.embeddings.provider import get_embeddings_provider
 from src.core.embeddings.store import STORED_EMBEDDING_DIMS
-from src.db.models import LogEmbedding, LogEntry
+from src.db.models import DEFAULT_LOG_SCOPE, LogEmbedding, LogEntry
+from src.db.scope_filter import filter_log_entries_by_scope
 
 log = structlog.get_logger()
 
@@ -89,8 +90,10 @@ def _filter_log_entries(
     service: Optional[str],
     level_bias: Optional[str],
     ingestion_job_id: Optional[uuid.UUID],
+    scope: str = DEFAULT_LOG_SCOPE,
 ) -> Select:
-    """Apply the shared window / service / level / job filters used by ask search."""
+    """Apply the shared window / service / level / job / scope filters used by ask search."""
+    q = filter_log_entries_by_scope(q, scope)
     if window_start:
         q = q.where(LogEntry.timestamp >= window_start)
     if window_end:
@@ -113,6 +116,7 @@ def search_logs(
     level_bias: Optional[str],
     limit: int = 500,
     ingestion_job_id: Optional[uuid.UUID] = None,
+    scope: str = DEFAULT_LOG_SCOPE,
 ) -> list[LogEntry]:
     q = select(LogEntry)
 
@@ -120,7 +124,9 @@ def search_logs(
         conditions = [LogEntry.normalized_message.ilike(f"%{kw}%") for kw in keywords[:6]]
         q = q.where(or_(*conditions))
 
-    q = _filter_log_entries(q, window_start, window_end, service, level_bias, ingestion_job_id)
+    q = _filter_log_entries(
+        q, window_start, window_end, service, level_bias, ingestion_job_id, scope=scope
+    )
     q = q.order_by(LogEntry.timestamp.desc()).limit(limit)
     return list(db.execute(q).scalars().all())
 
@@ -135,6 +141,7 @@ def search_logs_semantic(
     limit: int = 100,
     ingestion_job_id: Optional[uuid.UUID] = None,
     min_similarity: float = 0.75,
+    scope: str = DEFAULT_LOG_SCOPE,
 ) -> list[LogEntry]:
     """Nearest-neighbor log lines via pgvector cosine similarity.
 
@@ -151,7 +158,9 @@ def search_logs_semantic(
         .join(LogEmbedding, LogEmbedding.log_entry_id == LogEntry.id)
         .where(similarity >= min_similarity)
     )
-    q = _filter_log_entries(q, window_start, window_end, service, level_bias, ingestion_job_id)
+    q = _filter_log_entries(
+        q, window_start, window_end, service, level_bias, ingestion_job_id, scope=scope
+    )
     q = q.order_by(distance.asc()).limit(limit)
     return list(db.execute(q).scalars().all())
 
@@ -186,6 +195,7 @@ def fetch_fallback_clusters(
     service: Optional[str],
     level_bias: Optional[str],
     ingestion_job_id: Optional[uuid.UUID] = None,
+    scope: str = DEFAULT_LOG_SCOPE,
 ) -> list[LogEntry]:
     """
     Fallback: fetch the most significant error/warn logs from the window
@@ -197,6 +207,7 @@ def fetch_fallback_clusters(
         .where(LogEntry.timestamp >= window_start, LogEntry.timestamp <= window_end)
         .where(LogEntry.level.in_(["error", "fatal", "warn", "critical"]))
     )
+    q = filter_log_entries_by_scope(q, scope)
     if service:
         q = q.where(LogEntry.service == service)
     if ingestion_job_id:
@@ -235,6 +246,7 @@ def answer_question(
     window_end: Optional[datetime] = None,
     service: Optional[str] = None,
     ingestion_job_id: Optional[uuid.UUID] = None,
+    scope: str = DEFAULT_LOG_SCOPE,
 ) -> AskResult:
     from src.config import get_settings
     from src.core.llm.provider import NoopLLMProvider, build_llm_provider
@@ -258,6 +270,7 @@ def answer_question(
         level_bias=level_bias,
         ingestion_job_id=ingestion_job_id,
         settings=settings,
+        scope=scope,
     )
 
     if not matching:
@@ -333,6 +346,7 @@ def _retrieve_matching_logs(
     level_bias: Optional[str],
     ingestion_job_id: Optional[uuid.UUID],
     settings: Settings,
+    scope: str = DEFAULT_LOG_SCOPE,
 ) -> tuple[list[LogEntry], str]:
     """Semantic-first retrieval, then keyword, then error/warn fallback.
 
@@ -356,6 +370,7 @@ def _retrieve_matching_logs(
                     limit=settings.ask_semantic_top_k,
                     ingestion_job_id=ingestion_job_id,
                     min_similarity=settings.ask_semantic_min_similarity,
+                    scope=scope,
                 )
                 if semantic_hits:
                     return semantic_hits, "semantic"
@@ -365,6 +380,7 @@ def _retrieve_matching_logs(
     matching = search_logs(
         db, keywords, window_start, window_end, service, level_bias,
         ingestion_job_id=ingestion_job_id,
+        scope=scope,
     )
     if matching:
         return matching, "keyword"
@@ -372,6 +388,7 @@ def _retrieve_matching_logs(
     matching = fetch_fallback_clusters(
         db, window_start, window_end, service, level_bias,
         ingestion_job_id=ingestion_job_id,
+        scope=scope,
     )
     return matching, "fallback"
 

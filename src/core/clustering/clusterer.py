@@ -11,7 +11,8 @@ from src.core.clustering.baseline import compute_change_ratio, get_baseline_coun
 from src.core.clustering.scoring import compute_importance_score
 from src.core.embeddings.provider import EmbeddingsProvider
 from src.core.normalization.patterns import is_trigger_message
-from src.db.models import Cluster, ClusterMember, ClusterRun, LogEntry
+from src.db.models import DEFAULT_LOG_SCOPE, Cluster, ClusterMember, ClusterRun, LogEntry
+from src.db.scope_filter import filter_log_entries_by_scope
 from src.utils.time import resolve_baseline_window
 
 
@@ -42,6 +43,7 @@ def run_clustering(
     max_clusters: int = 50,
     save_to_db: bool = True,
     ingestion_job_id: Optional[uuid.UUID] = None,
+    scope: str = DEFAULT_LOG_SCOPE,
 ) -> tuple["ClusterRun", list[ClusterData]]:
     """
     Main clustering pipeline for a time window.
@@ -60,6 +62,7 @@ def run_clustering(
         LogEntry.timestamp <= window_end,
         LogEntry.fingerprint.isnot(None),
     )
+    q = filter_log_entries_by_scope(q, scope)
 
     if service:
         q = q.where(LogEntry.service == service)
@@ -104,7 +107,14 @@ def run_clustering(
         baseline_counts: dict[str, int] = {}
     else:
         baseline_start, baseline_end = resolve_baseline_window(window_start, window_end, baseline_window_str)
-        baseline_counts = get_baseline_counts(db, baseline_start, baseline_end, service=service, environment=environment)
+        baseline_counts = get_baseline_counts(
+            db,
+            baseline_start,
+            baseline_end,
+            service=service,
+            environment=environment,
+            scope=scope,
+        )
 
     # 4. Build cluster data
     clusters: list[ClusterData] = []

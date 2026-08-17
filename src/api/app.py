@@ -3,12 +3,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 import re
 
-from fastapi import APIRouter, FastAPI
-from fastapi.responses import ORJSONResponse
+from fastapi import APIRouter, FastAPI, Request
+from fastapi.responses import JSONResponse, ORJSONResponse
 from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 
 from src.api.auth.middleware import AuthMiddleware
+from src.api.auth.scope import ScopeResolutionError, scope_error_response
 from src.api.deprecation import DeprecationHeaderMiddleware
 from src.api.routes import ask, clusters, compare_windows, config, explain, health, ingestions, timeline, ui
 
@@ -62,6 +63,13 @@ app = FastAPI(
 # Last added middleware is outermost: deprecation headers apply even to auth errors.
 app.add_middleware(AuthMiddleware)
 app.add_middleware(DeprecationHeaderMiddleware)
+
+
+@app.exception_handler(ScopeResolutionError)
+async def handle_scope_resolution_error(
+    request: Request, exc: ScopeResolutionError
+) -> JSONResponse:
+    return scope_error_response(exc)
 
 app.include_router(health.router, tags=["health"])
 app.include_router(ui.router, tags=["ui"])

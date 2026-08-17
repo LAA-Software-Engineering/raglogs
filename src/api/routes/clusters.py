@@ -10,7 +10,6 @@ from src.api.schemas.v1 import (
     SCHEMA_VERSION,
     ClustersResponse,
     llm_rules_only,
-    scope_from_request,
     window_from_bounds,
 )
 
@@ -25,6 +24,7 @@ class ClustersRequest(BaseModel):
     env: Optional[str] = None
     top: int = 15
     ingestion_job_id: Optional[str] = None
+    scope: Optional[str] = None
 
 
 @router.post(
@@ -34,9 +34,12 @@ class ClustersRequest(BaseModel):
     response_model_by_alias=True,
 )
 def clusters_endpoint(request: ClustersRequest, http_request: Request) -> ClustersResponse:
+    from src.api.auth.scope import bind_request_scope
     from src.core.clustering.clusterer import run_clustering
     from src.db.session import get_db
     from src.utils.time import resolve_window
+
+    scope = bind_request_scope(http_request, request.scope)
 
     try:
         window_start, window_end = resolve_window(
@@ -65,13 +68,14 @@ def clusters_endpoint(request: ClustersRequest, http_request: Request) -> Cluste
                 max_clusters=request.top,
                 save_to_db=False,
                 ingestion_job_id=ingestion_job_id,
+                scope=scope,
             )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
     return ClustersResponse(
         schema_version=SCHEMA_VERSION,
-        scope=scope_from_request(http_request),
+        scope=scope,
         window=window_from_bounds(window_start, window_end),
         ingestion_job_id=request.ingestion_job_id,
         llm=llm_rules_only(),

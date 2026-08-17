@@ -17,6 +17,11 @@ def clusters_cmd(
     fmt: str = typer.Option("text", "--format", help="Output format: text|json"),
     all_ingestions: bool = typer.Option(False, "--all-ingestions", help="Include all historical ingestion data (not just latest)"),
     ingestion_job: Optional[str] = typer.Option(None, "--ingestion-job", help="Scope to a specific ingestion job UUID"),
+    scope: str = typer.Option(
+        "default",
+        "--scope",
+        help="Isolation scope (CLI default: default)",
+    ),
 ):
     """List top log clusters in a time window."""
     import uuid
@@ -42,7 +47,7 @@ def clusters_cmd(
                 if ingestion_job:
                     job_id = uuid.UUID(ingestion_job)
                 elif not all_ingestions:
-                    job_id = get_latest_ingestion_job_id(db)
+                    job_id = get_latest_ingestion_job_id(db, scope=scope)
                 _, clusters = run_clustering(
                     db=db,
                     window_start=window_start,
@@ -52,6 +57,7 @@ def clusters_cmd(
                     max_clusters=top,
                     save_to_db=False,
                     ingestion_job_id=job_id,
+                    scope=scope,
                 )
         except Exception as e:
             console.print(f"[red]Error:[/red] {e}")

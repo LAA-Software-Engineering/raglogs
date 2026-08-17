@@ -46,6 +46,7 @@ class IngestRequest(BaseModel):
     with_embeddings: bool = False
     mode: Literal["batch", "tail"] = "batch"
     callback_url: Optional[str] = None
+    scope: Optional[str] = None
 
     @field_validator("callback_url")
     @classmethod
@@ -249,12 +250,16 @@ def _ingest_payload(
 def _callback_meta_from_request(http_request: Request) -> dict[str, Any]:
     """Stash scope + api_key_id for HMAC at delivery time (not the bearer token)."""
     meta: dict[str, Any] = {"scope": "default"}
+    resolved = getattr(http_request.state, "resolved_scope", None)
+    if isinstance(resolved, str) and resolved.strip():
+        meta["scope"] = resolved.strip()
     principal = getattr(http_request.state, "auth_principal", None)
     if principal is None:
         return meta
-    scope = getattr(principal, "scope", None)
-    if scope:
-        meta["scope"] = scope
+    if not isinstance(resolved, str) or not resolved.strip():
+        scope = getattr(principal, "scope", None)
+        if scope:
+            meta["scope"] = scope
     key_id = getattr(principal, "key_id", None)
     if key_id:
         meta["api_key_id"] = key_id
@@ -262,7 +267,64 @@ def _callback_meta_from_request(http_request: Request) -> dict[str, Any]:
 
 
 def _scope_from_request(http_request: Request) -> str:
+    resolved = getattr(http_request.state, "resolved_scope", None)
+    if isinstance(resolved, str) and resolved.strip():
+        return resolved.strip()
     return str(_callback_meta_from_request(http_request).get("scope") or "default")
+
+
+def _payload_scope(payload: Any, fallback: str = "default") -> str:
+    if not isinstance(payload, dict):
+        return fallback
+    value = payload.get("scope")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return fallback
+
+
+def _column_scope(job: Any, fallback: str = "default") -> str:
+    value = getattr(job, "scope", None)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return fallback
+
+
+def _scope_of_idempotency_row(db: Any, row: Any) -> str:
+    """Scope of the job this Idempotency-Key is bound to (payload or column)."""
+    worker_job_id = getattr(row, "worker_job_id", None)
+    if worker_job_id is not None:
+        from src.db.models import WorkerJob
+
+        job = db.query(WorkerJob).filter(WorkerJob.id == worker_job_id).first()
+        if job is not None:
+            return _payload_scope(getattr(job, "payload_json", None))
+
+    ingestion_job_id = getattr(row, "ingestion_job_id", None)
+    if ingestion_job_id is not None:
+        from src.db.models import IngestionJob
+
+        job = db.query(IngestionJob).filter(IngestionJob.id == ingestion_job_id).first()
+        if job is not None:
+            column = _column_scope(job, fallback="")
+            if column:
+                return column
+            meta = getattr(job, "metadata_json", None)
+            if isinstance(meta, dict):
+                return _payload_scope(meta)
+    return "default"
+
+
+def _idempotency_scope_conflict() -> JSONResponse:
+    return JSONResponse(
+        status_code=409,
+        content={
+            "error_code": "IDEMPOTENCY_SCOPE_CONFLICT",
+            "message": (
+                "Idempotency-Key is already bound to a different scope; "
+                "use a distinct key or wait for the original mapping to expire."
+            ),
+        },
+    )
 
 
 def _enqueued_from_idempotency(row: Any) -> EnqueuedResponse:
@@ -284,7 +346,9 @@ def _enqueued_from_idempotency(row: Any) -> EnqueuedResponse:
     )
 
 
-def _replay_if_active(db: Any, key: Optional[str]) -> Optional[EnqueuedResponse]:
+def _replay_if_active(
+    db: Any, key: Optional[str], scope: str
+) -> Optional[EnqueuedResponse | JSONResponse]:
     if not key:
         return None
     from datetime import datetime, timezone
@@ -294,6 +358,8 @@ def _replay_if_active(db: Any, key: Optional[str]) -> Optional[EnqueuedResponse]
     row = lookup_active_key(db, key, datetime.now(tz=timezone.utc))
     if row is None:
         return None
+    if _scope_of_idempotency_row(db, row) != scope:
+        return _idempotency_scope_conflict()
     import structlog
 
     structlog.get_logger().info(
@@ -311,7 +377,8 @@ def _bind_idempotency_key(
     worker_job_id: Optional[uuid.UUID],
     ingestion_job_id: Optional[uuid.UUID],
     mode: str,
-) -> Optional[EnqueuedResponse]:
+    scope: str,
+) -> Optional[EnqueuedResponse | JSONResponse]:
     """Persist the key mapping. Returns a replay response on unique-key race."""
     if not key:
         return None
@@ -331,6 +398,8 @@ def _bind_idempotency_key(
         ttl_seconds=settings.ingest_idempotency_ttl_seconds,
     )
     if is_replay:
+        if _scope_of_idempotency_row(db, _row) != scope:
+            return _idempotency_scope_conflict()
         return _enqueued_from_idempotency(_row)
     return None
 
@@ -348,6 +417,11 @@ def _create_tail_job(
     source_name = request.source_name or f"tail:{request.adapter}"
     source = _get_or_create_source(db, name=source_name, type_=request.adapter)
     now = datetime.now(tz=timezone.utc)
+    scope = "default"
+    if callback_meta:
+        raw = callback_meta.get("scope")
+        if isinstance(raw, str) and raw.strip():
+            scope = raw.strip()
     job = IngestionJob(
         id=uuid.uuid4(),
         source_id=source.id,
@@ -358,6 +432,7 @@ def _create_tail_job(
         source_ref=source_name,
         mode="tail",
         consecutive_errors=0,
+        scope=scope,
     )
     db.add(job)
     db.flush()
@@ -377,7 +452,10 @@ def _parse_ingestion_job_id(ingestion_job_id: str) -> uuid.UUID:
 
 
 def _apply_tail_action(
-    ingestion_job_id: str, action: Literal["pause", "resume", "stop"]
+    ingestion_job_id: str,
+    action: Literal["pause", "resume", "stop"],
+    *,
+    scope: str,
 ) -> TailLifecycleResponse:
     from src.core.ingestion.tail import TailLifecycleError, apply_tail_lifecycle
     from src.db.models import IngestionJob
@@ -385,7 +463,11 @@ def _apply_tail_action(
 
     ij_uuid = _parse_ingestion_job_id(ingestion_job_id)
     with get_db() as db:
-        job = db.query(IngestionJob).filter(IngestionJob.id == ij_uuid).first()
+        job = (
+            db.query(IngestionJob)
+            .filter(IngestionJob.id == ij_uuid, IngestionJob.scope == scope)
+            .first()
+        )
         if not job:
             raise HTTPException(status_code=404, detail="Ingestion job not found")
         try:
@@ -434,12 +516,15 @@ def create_ingestion(
     Optional ``Idempotency-Key`` (also accepted as ``idempotency-key``): a
     repeat within the TTL returns the original 202 job rather than a new one.
     """
+    from src.api.auth.scope import bind_request_scope
     from src.core.ingestion.idempotency import (
         InvalidIdempotencyKey,
         parse_idempotency_key,
     )
     from src.db.models import WorkerJob
     from src.db.session import get_db
+
+    resolved = bind_request_scope(http_request, request.scope)
 
     try:
         parsed_key = parse_idempotency_key(idempotency_key)
@@ -461,7 +546,7 @@ def create_ingestion(
     callback_meta = _callback_meta_from_request(http_request)
 
     with get_db() as db:
-        replayed = _replay_if_active(db, parsed_key)
+        replayed = _replay_if_active(db, parsed_key, resolved)
         if replayed is not None:
             return replayed
 
@@ -481,6 +566,7 @@ def create_ingestion(
                 if response.ingestion_job_id
                 else None,
                 mode="tail",
+                scope=resolved,
             )
             if race is not None:
                 from src.db.models import IngestionJob
@@ -513,6 +599,7 @@ def create_ingestion(
             worker_job_id=job.id,
             ingestion_job_id=None,
             mode="batch",
+            scope=resolved,
         )
         if race is not None:
             db.delete(job)
@@ -523,21 +610,27 @@ def create_ingestion(
 
 
 @router.get("", response_model=IngestionListResponse)
-def list_ingestions():
+def list_ingestions(http_request: Request, scope: Optional[str] = None):
     """List recent completed ingestion jobs, newest first. Used by the web UI's ingestion picker."""
     from sqlalchemy import desc, select
 
+    from src.api.auth.scope import bind_request_scope
     from src.db.models import IngestionJob, Source
+    from src.db.scope_filter import filter_ingestion_jobs_by_scope
     from src.db.session import get_db
 
+    resolved = bind_request_scope(http_request, scope)
+
     with get_db() as db:
-        rows = db.execute(
+        stmt = (
             select(IngestionJob, Source.name)
             .join(Source, Source.id == IngestionJob.source_id)
             .where(IngestionJob.status == "completed")
             .order_by(desc(IngestionJob.finished_at))
             .limit(25)
-        ).all()
+        )
+        stmt = filter_ingestion_jobs_by_scope(stmt, resolved)
+        rows = db.execute(stmt).all()
 
         return IngestionListResponse(
             ingestions=[
@@ -555,13 +648,16 @@ def list_ingestions():
 
 
 @router.get("/jobs/{worker_job_id}", response_model=WorkerJobStatus)
-def get_worker_job_status(worker_job_id: str):
+def get_worker_job_status(worker_job_id: str, http_request: Request):
     """
     Poll the status of an enqueued ingest job.
     When status == 'done', result.ingestion_job_id is ready for /query/explain.
     """
+    from src.api.auth.scope import bind_request_scope
     from src.db.models import WorkerJob
     from src.db.session import get_db
+
+    resolved = bind_request_scope(http_request, None)
 
     try:
         wj_uuid = uuid.UUID(worker_job_id)
@@ -571,6 +667,8 @@ def get_worker_job_status(worker_job_id: str):
     with get_db() as db:
         job = db.query(WorkerJob).filter(WorkerJob.id == wj_uuid).first()
         if not job:
+            raise HTTPException(status_code=404, detail="Worker job not found")
+        if _payload_scope(getattr(job, "payload_json", None)) != resolved:
             raise HTTPException(status_code=404, detail="Worker job not found")
 
         return WorkerJobStatus(
@@ -588,7 +686,7 @@ def get_worker_job_status(worker_job_id: str):
 
 
 @router.get("/latest", response_model=LatestIngestionResponse)
-def get_latest_ingestion():
+def get_latest_ingestion(http_request: Request, scope: Optional[str] = None):
     """
     Return the ID of the most recently completed ingestion job, or null if
     none exists yet — the same default the CLI and GET /ingestions apply
@@ -599,11 +697,14 @@ def get_latest_ingestion():
     Registered before /{ingestion_job_id} so "latest" isn't swallowed by
     that path param.
     """
+    from src.api.auth.scope import bind_request_scope
     from src.core.explain.summarizer import get_latest_ingestion_job_id
     from src.db.session import get_db
 
+    resolved = bind_request_scope(http_request, scope)
+
     with get_db() as db:
-        job_id = get_latest_ingestion_job_id(db)
+        job_id = get_latest_ingestion_job_id(db, scope=resolved)
 
     return LatestIngestionResponse(ingestion_job_id=str(job_id) if job_id else None)
 
@@ -625,10 +726,13 @@ def get_latest_ingestion():
 )
 async def push_ingestion_lines(request: Request) -> PushLinesResponse:
     """Push NDJSON of raw or pre-parsed log lines. Persisted synchronously."""
+    from src.api.auth.scope import bind_request_scope
     from src.config import get_settings
     from src.core.ingestion.push import NdjsonParseError, parse_ndjson_payload
     from src.core.ingestion.service import ingest_push_lines
     from src.db.session import get_db
+
+    bind_request_scope(request, None)
 
     settings = get_settings()
     body = (await request.body()).decode("utf-8", errors="replace")
@@ -662,30 +766,45 @@ def push_lines_get_not_allowed() -> None:
 
 
 @router.post("/{ingestion_job_id}:pause", response_model=TailLifecycleResponse)
-def pause_tail_job(ingestion_job_id: str) -> TailLifecycleResponse:
-    return _apply_tail_action(ingestion_job_id, "pause")
+def pause_tail_job(ingestion_job_id: str, http_request: Request) -> TailLifecycleResponse:
+    from src.api.auth.scope import bind_request_scope
+
+    scope = bind_request_scope(http_request, None)
+    return _apply_tail_action(ingestion_job_id, "pause", scope=scope)
 
 
 @router.post("/{ingestion_job_id}:resume", response_model=TailLifecycleResponse)
-def resume_tail_job(ingestion_job_id: str) -> TailLifecycleResponse:
-    return _apply_tail_action(ingestion_job_id, "resume")
+def resume_tail_job(ingestion_job_id: str, http_request: Request) -> TailLifecycleResponse:
+    from src.api.auth.scope import bind_request_scope
+
+    scope = bind_request_scope(http_request, None)
+    return _apply_tail_action(ingestion_job_id, "resume", scope=scope)
 
 
 @router.post("/{ingestion_job_id}:stop", response_model=TailLifecycleResponse)
-def stop_tail_job(ingestion_job_id: str) -> TailLifecycleResponse:
-    return _apply_tail_action(ingestion_job_id, "stop")
+def stop_tail_job(ingestion_job_id: str, http_request: Request) -> TailLifecycleResponse:
+    from src.api.auth.scope import bind_request_scope
+
+    scope = bind_request_scope(http_request, None)
+    return _apply_tail_action(ingestion_job_id, "stop", scope=scope)
 
 
 @router.get("/{ingestion_job_id}", response_model=IngestionJobDetail)
-def get_ingestion_detail(ingestion_job_id: str):
+def get_ingestion_detail(ingestion_job_id: str, http_request: Request):
     """Fetch an IngestionJob record by its ID."""
+    from src.api.auth.scope import bind_request_scope
     from src.db.models import IngestionJob
     from src.db.session import get_db
 
+    scope = bind_request_scope(http_request, None)
     ij_uuid = _parse_ingestion_job_id(ingestion_job_id)
 
     with get_db() as db:
-        job = db.query(IngestionJob).filter(IngestionJob.id == ij_uuid).first()
+        job = (
+            db.query(IngestionJob)
+            .filter(IngestionJob.id == ij_uuid, IngestionJob.scope == scope)
+            .first()
+        )
         if not job:
             raise HTTPException(status_code=404, detail="Ingestion job not found")
 

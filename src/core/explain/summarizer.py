@@ -7,12 +7,12 @@ from sqlalchemy.orm import Session
 
 from src.config import get_settings
 from src.core.clustering.clusterer import run_clustering
-from src.db.models import IngestionJob
 from src.core.explain.confidence import compute_confidence
 from src.core.explain.evidence import EvidencePacket, assemble_evidence
 from src.core.explain.templates import render_insufficient_evidence, render_text_summary
 from src.core.llm.provider import NoopLLMProvider, build_llm_provider
-from src.utils.time import resolve_baseline_window
+from src.db.models import DEFAULT_LOG_SCOPE, IngestionJob
+from src.db.scope_filter import filter_ingestion_jobs_by_scope
 
 
 @dataclass
@@ -30,12 +30,21 @@ class ExplainResult:
     mode: str = "rules"
 
 
-def get_latest_ingestion_job_id(db: Session) -> Optional[uuid.UUID]:
-    """Return the ID of the most recently completed ingestion job."""
-    from sqlalchemy import select, desc
-    job = db.execute(
-        select(IngestionJob).where(IngestionJob.status == "completed").order_by(desc(IngestionJob.finished_at)).limit(1)
-    ).scalar_one_or_none()
+def get_latest_ingestion_job_id(
+    db: Session,
+    scope: str = DEFAULT_LOG_SCOPE,
+) -> Optional[uuid.UUID]:
+    """Return the ID of the most recently completed ingestion job in ``scope``."""
+    from sqlalchemy import desc, select
+
+    stmt = (
+        select(IngestionJob)
+        .where(IngestionJob.status == "completed")
+        .order_by(desc(IngestionJob.finished_at))
+        .limit(1)
+    )
+    stmt = filter_ingestion_jobs_by_scope(stmt, scope)
+    job = db.execute(stmt).scalar_one_or_none()
     return job.id if job else None
 
 
@@ -49,6 +58,7 @@ def explain_window(
     max_clusters: int = 10,
     baseline_window_str: Optional[str] = None,
     ingestion_job_id: Optional[uuid.UUID] = None,
+    scope: str = DEFAULT_LOG_SCOPE,
 ) -> ExplainResult:
     """
     Full explain pipeline for a time window.
@@ -67,6 +77,7 @@ def explain_window(
         max_clusters=max_clusters,
         save_to_db=True,
         ingestion_job_id=ingestion_job_id,
+        scope=scope,
     )
 
     # 2. Assemble evidence
@@ -79,6 +90,7 @@ def explain_window(
         environment_filter=environment,
         max_evidence_items=settings.max_evidence_items,
         ingestion_job_id=ingestion_job_id,
+        scope=scope,
     )
 
     # 3. Confidence
@@ -110,7 +122,7 @@ def explain_window(
                 if llm_text:
                     summary_text = llm_text
                     mode = "llm"
-        except Exception as e:
+        except Exception:
             # Degrade gracefully
             pass
 

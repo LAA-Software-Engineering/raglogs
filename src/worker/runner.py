@@ -102,6 +102,16 @@ def run_ingest_job(db, worker_job) -> dict:
                 raise ValueError(
                     f"No ingestion job found with id {payload['resume_ingestion_job_id']}"
                 )
+            payload_scope = str(payload.get("scope") or "default")
+            prior_scope = getattr(prior, "scope", None)
+            if (
+                isinstance(prior_scope, str)
+                and prior_scope.strip()
+                and prior_scope.strip() != payload_scope
+            ):
+                raise ValueError(
+                    "resume_ingestion_job_id is in a different scope than this ingest"
+                )
             resume_cursors = (prior.metadata_json or {}).get("cursors")
             resume_completed_streams = (prior.metadata_json or {}).get(
                 "completed_streams"

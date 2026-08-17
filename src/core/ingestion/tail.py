@@ -226,6 +226,12 @@ def tick_one_tail_job(
     source_name = meta.get("source_name")
     with_embeddings = bool(meta.get("with_embeddings") or False)
 
+    column_scope = getattr(job, "scope", None)
+    if isinstance(column_scope, str) and column_scope.strip():
+        tick_scope = column_scope.strip()
+    else:
+        tick_scope = str(meta.get("scope") or "default")
+
     try:
         _, _stats = ingest_from_source(
             db=db,
@@ -238,7 +244,7 @@ def tick_one_tail_job(
             with_embeddings=with_embeddings,
             existing_job=job,
             finalize=False,
-            scope=str(meta.get("scope") or "default"),
+            scope=tick_scope,
         )
     except Exception as exc:
         new_count, should_pause = consecutive_errors_after_failure(

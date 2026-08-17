@@ -13,7 +13,6 @@ from src.api.schemas.v1 import (
     TimelineEventModel,
     TimelineResponse,
     llm_rules_only,
-    scope_from_request,
     window_from_bounds,
 )
 from src.core.timeline.plain_text import format_timeline_plain
@@ -30,6 +29,7 @@ class TimelineRequest(BaseModel):
     all_ingestions: bool = False
     ingestion_job_id: Optional[str] = None
     format: Literal["json", "text"] = "json"
+    scope: Optional[str] = None
 
 
 def _events_to_models(events) -> list[TimelineEventModel]:
@@ -54,12 +54,15 @@ def _events_to_models(events) -> list[TimelineEventModel]:
     response_model_by_alias=True,
 )
 def timeline_endpoint(request: TimelineRequest, http_request: Request) -> TimelineResponse:
+    from src.api.auth.scope import bind_request_scope
     from src.core.clustering.clusterer import run_clustering
     from src.core.explain.evidence import assemble_evidence
     from src.core.explain.summarizer import get_latest_ingestion_job_id
     from src.core.timeline.builder import build_timeline
     from src.db.session import get_db
     from src.utils.time import resolve_window
+
+    scope = bind_request_scope(http_request, request.scope)
 
     try:
         window_start, window_end = resolve_window(
@@ -83,7 +86,7 @@ def timeline_endpoint(request: TimelineRequest, http_request: Request) -> Timeli
             if ingestion_job_id is not None:
                 job_id = ingestion_job_id
             elif not request.all_ingestions:
-                job_id = get_latest_ingestion_job_id(db)
+                job_id = get_latest_ingestion_job_id(db, scope=scope)
 
             _, clusters = run_clustering(
                 db=db,
@@ -93,6 +96,7 @@ def timeline_endpoint(request: TimelineRequest, http_request: Request) -> Timeli
                 environment=request.env,
                 save_to_db=False,
                 ingestion_job_id=job_id,
+                scope=scope,
             )
 
             packet = assemble_evidence(
@@ -103,6 +107,7 @@ def timeline_endpoint(request: TimelineRequest, http_request: Request) -> Timeli
                 service_filter=request.service,
                 environment_filter=request.env,
                 ingestion_job_id=job_id,
+                scope=scope,
             )
 
             events = build_timeline(packet)
@@ -112,7 +117,7 @@ def timeline_endpoint(request: TimelineRequest, http_request: Request) -> Timeli
 
     body = TimelineResponse(
         schema_version=SCHEMA_VERSION,
-        scope=scope_from_request(http_request),
+        scope=scope,
         window=window_from_bounds(window_start, window_end),
         events=_events_to_models(events),
         llm=llm_rules_only(),

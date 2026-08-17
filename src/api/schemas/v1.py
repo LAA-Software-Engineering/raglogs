@@ -196,12 +196,12 @@ class ClustersResponse(BaseModel):
 
 
 def scope_from_request(http_request: Optional[Request] = None) -> str:
-    """Principal scope when auth attached a principal; otherwise ``default``.
-
-    Does not filter logs (G8). Exposed so consumers can pin the response.
-    """
+    """Resolved G8 scope when ``bind_request_scope`` ran; else principal or ``default``."""
     if http_request is None:
         return "default"
+    resolved = getattr(http_request.state, "resolved_scope", None)
+    if isinstance(resolved, str) and resolved.strip():
+        return resolved.strip()
     principal = getattr(http_request.state, "auth_principal", None)
     if principal is None:
         return "default"

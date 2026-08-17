@@ -15,6 +15,11 @@ def ask_cmd(
     since: Optional[str] = typer.Option(None, "--since", help="Time window e.g. 2h"),
     service: Optional[str] = typer.Option(None, "--service", help="Filter by service"),
     fmt: str = typer.Option("text", "--format", help="Output format: text|json"),
+    scope: str = typer.Option(
+        "default",
+        "--scope",
+        help="Isolation scope (CLI default: default)",
+    ),
 ):
     """Ask a natural language question about your logs."""
     if ctx.invoked_subcommand is not None:
@@ -46,6 +51,7 @@ def ask_cmd(
                     window_start=window_start,
                     window_end=window_end,
                     service=service,
+                    scope=scope,
                 )
         except Exception as e:
             console.print(f"[red]Error:[/red] {e}")

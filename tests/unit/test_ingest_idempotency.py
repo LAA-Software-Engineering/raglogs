@@ -296,3 +296,106 @@ class TestCreateIngestionIdempotency:
             if isinstance(obj, IngestIdempotencyKey)
         ]
         assert added_keys == []
+
+    def test_cross_scope_key_reuse_does_not_return_other_scopes_job(self) -> None:
+        stored: dict[str, IngestIdempotencyKey | None] = {"row": None}
+        jobs: dict[str, WorkerJob | None] = {"job": None}
+        mock_db = _ctx_db()
+
+        def query_side_effect(model: object) -> MagicMock:
+            q = MagicMock()
+            name = getattr(model, "__name__", "")
+            if name == "IngestIdempotencyKey":
+                q.filter.return_value.first.return_value = stored["row"]
+            elif name == "WorkerJob":
+                q.filter.return_value.first.return_value = jobs["job"]
+            else:
+                q.filter.return_value.first.return_value = None
+            return q
+
+        def capture_add(obj: object) -> None:
+            if isinstance(obj, WorkerJob):
+                obj.id = uuid.uuid4()
+                jobs["job"] = obj
+            if isinstance(obj, IngestIdempotencyKey):
+                stored["row"] = obj
+                if getattr(obj, "expires_at", None) is None:
+                    obj.expires_at = datetime.now(tz=timezone.utc) + timedelta(hours=1)
+
+        mock_db.query.side_effect = query_side_effect
+        mock_db.add.side_effect = capture_add
+
+        with (
+            patch("src.adapters.file.adapter.discover_files", return_value=["f.log"]),
+            patch("src.db.session.get_db", side_effect=lambda: mock_db),
+        ):
+            first = client.post(
+                "/v1/ingestions",
+                json={"paths": ["/logs"], "scope": "incident:A"},
+                headers={"Idempotency-Key": "shared-across-tenants"},
+            )
+            second = client.post(
+                "/v1/ingestions",
+                json={"paths": ["/logs"], "scope": "incident:B"},
+                headers={"Idempotency-Key": "shared-across-tenants"},
+            )
+
+        assert first.status_code == 202
+        first_id = first.json()["worker_job_id"]
+        assert first_id
+        assert jobs["job"] is not None
+        assert jobs["job"].payload_json["scope"] == "incident:A"
+
+        assert second.status_code == 409
+        body = second.json()
+        assert body["error_code"] == "IDEMPOTENCY_SCOPE_CONFLICT"
+        assert "worker_job_id" not in body
+        assert "ingestion_job_id" not in body
+        assert first_id not in str(body)
+
+    def test_same_explicit_scope_still_replays(self) -> None:
+        stored: dict[str, IngestIdempotencyKey | None] = {"row": None}
+        jobs: dict[str, WorkerJob | None] = {"job": None}
+        mock_db = _ctx_db()
+
+        def query_side_effect(model: object) -> MagicMock:
+            q = MagicMock()
+            name = getattr(model, "__name__", "")
+            if name == "IngestIdempotencyKey":
+                q.filter.return_value.first.return_value = stored["row"]
+            elif name == "WorkerJob":
+                q.filter.return_value.first.return_value = jobs["job"]
+            else:
+                q.filter.return_value.first.return_value = None
+            return q
+
+        def capture_add(obj: object) -> None:
+            if isinstance(obj, WorkerJob):
+                obj.id = uuid.uuid4()
+                jobs["job"] = obj
+            if isinstance(obj, IngestIdempotencyKey):
+                stored["row"] = obj
+                if getattr(obj, "expires_at", None) is None:
+                    obj.expires_at = datetime.now(tz=timezone.utc) + timedelta(hours=1)
+
+        mock_db.query.side_effect = query_side_effect
+        mock_db.add.side_effect = capture_add
+
+        with (
+            patch("src.adapters.file.adapter.discover_files", return_value=["f.log"]),
+            patch("src.db.session.get_db", side_effect=lambda: mock_db),
+        ):
+            first = client.post(
+                "/v1/ingestions",
+                json={"paths": ["/logs"], "scope": "incident:A"},
+                headers={"Idempotency-Key": "same-scope"},
+            )
+            second = client.post(
+                "/v1/ingestions",
+                json={"paths": ["/logs"], "scope": "incident:A"},
+                headers={"Idempotency-Key": "same-scope"},
+            )
+
+        assert first.status_code == 202
+        assert second.status_code == 202
+        assert first.json()["worker_job_id"] == second.json()["worker_job_id"]
