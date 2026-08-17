@@ -212,15 +212,15 @@ def _rules_answer(question: str, clusters: list[dict], total: int) -> str:
     svc = ", ".join(top["services"]) if top["services"] else "unknown service"
     lines = [
         f"The most likely related issue: {top['message']}",
-        f"",
+        "",
         f"Observed {top['count']} times in {svc}.",
-        f"",
-        f"Supporting evidence:",
+        "",
+        "Supporting evidence:",
     ]
     for c in clusters:
         svc_label = ", ".join(c["services"]) if c["services"] else "unknown"
         lines.append(f"- {c['count']}x '{c['message'][:80]}' in {svc_label}")
-    lines.append(f"")
+    lines.append("")
     lines.append(f"Total matching log events: {total}")
     return "\n".join(lines)
 
@@ -260,8 +260,10 @@ def answer_question(
     if not matching:
         return AskResult(
             question=question,
-            answer_text=f"No log activity found in the requested window. "
-                        f"Try a wider time range with --since.",
+            answer_text=(
+                "No log activity found in the requested window. "
+                "Try a wider time range with --since."
+            ),
             evidence_items=["No logs found in window"],
             clusters_used=[],
             total_matches=0,
@@ -297,14 +299,6 @@ def answer_question(
     llm = build_llm_provider(settings)
     if not isinstance(llm, NoopLLMProvider):
         try:
-            import json
-            import httpx
-            user_msg = (
-                f"Question: {question}\n\n"
-                f"Log evidence:\n{json.dumps(evidence_packet, default=str, indent=2)}"
-            )
-            # Re-use the provider's HTTP client but with the ask-specific system prompt
-            # by calling the provider directly with a custom prompt structure
             answer_text = _call_llm_ask(llm, question, evidence_packet)
             if answer_text:
                 mode = "llm"

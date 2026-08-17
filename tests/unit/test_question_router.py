@@ -152,8 +152,9 @@ class TestSearchLogsSemanticSQL:
         )
 
         sql = _compiled_sql(db).lower()
+        where = _where_clause(db).lower()
         assert "log_embeddings" in sql
-        assert "ingestion_job_id" not in sql
+        assert "ingestion_job_id" not in where
         assert "timestamp" in sql
 
     def test_skips_db_when_vector_dimension_mismatches(self):

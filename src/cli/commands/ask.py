@@ -64,6 +64,6 @@ def ask_cmd(
         console.print_json(json.dumps(output))
     else:
         console.print()
-        console.print(Panel(result.answer_text, title=f"[bold cyan]raglogs ask[/bold cyan]", expand=False))
+        console.print(Panel(result.answer_text, title="[bold cyan]raglogs ask[/bold cyan]", expand=False))
         console.print(f"[dim]retrieval: {result.retrieval_mode}[/dim]")
         console.print()
