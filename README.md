@@ -338,6 +338,7 @@ raglogs explain --from 2026-03-12T22:00:00Z --to 2026-03-12T22:30:00Z
 raglogs explain --since 1h --no-llm
 raglogs explain --since 1h --format json
 raglogs explain --since 1h --format markdown
+raglogs explain --since 1h --format markdown > postmortem.md
 raglogs explain --since 1h --baseline-window 7d
 ```
 
@@ -353,7 +354,27 @@ raglogs explain --since 1h --baseline-window 7d
 | `--baseline-window` | How far back to compare (default: `24h`) |
 | `--format` | `text`, `json`, or `markdown` |
 
-**Output structure**
+**Markdown incident report**
+
+`--format markdown` writes a paste-ready GitHub-flavored markdown file for tickets and postmortems. Redirect stdout to save it:
+
+```bash
+raglogs explain --since 1h --format markdown > postmortem.md
+```
+
+The report includes:
+
+- Title (from the primary cluster message, or the first useful summary line)
+- Metadata: window (ISO start/end + duration), services, environment (if filtered), total logs, confidence, mode (`rules` / `llm`)
+- Summary (the same explanation text as `text` / JSON — not re-parsed)
+- Primary cluster (fingerprint, count, importance, representative message) when present
+- Secondary clusters and trigger candidates when present
+- Evidence bullets
+- A Reproduce footer with the exact `raglogs explain ... --format markdown` invocation
+
+Output is written as raw markdown on stdout (Rich markup is not applied), so shell redirection stays valid GFM. Progress and errors go to stderr.
+
+**Output structure** (default `--format text`)
 
 ```
 Incident summary
@@ -862,6 +883,8 @@ curl -X POST http://localhost:8000/query/explain \
 }
 ```
 
+**Explain** — `POST /query/explain` accepts the same window filters as the CLI. Optional `"format": "markdown"` adds a paste-ready `markdown` incident report field alongside the JSON payload (same shape as `raglogs explain --format markdown`).
+
 **Timeline** — `POST /query/timeline` accepts the same window filters as the CLI (`since` or `from_time`/`to_time`, optional `service`, `env`, `all_ingestions`, `ingestion_job_id`). Set `"format": "text"` to include a plain-text `text` field alongside `events`.
 
 ```bash
@@ -982,10 +1005,7 @@ New source adapters go in `src/adapters/` and implement `SourceAdapter` (`discov
 
 ## Roadmap
 
-## Roadmap
-
 - Semantic cluster merging via pgvector
-- Markdown incident report export (`raglogs explain --format markdown > postmortem.md`)
 
 ---
 

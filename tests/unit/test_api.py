@@ -517,6 +517,23 @@ class TestExplainEndpoint:
         assert "summary" in data
         assert data["confidence"] == "high"
         assert data["cached"] is False
+        assert "markdown" not in data
+
+    def test_format_markdown_includes_rendered_field(self):
+        mock_db = _ctx_db()
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db), \
+             patch("src.core.explain.summarizer.explain_window", return_value=self._mock_result()), \
+             patch("src.api.routes.explain._load_from_cache", return_value=None), \
+             patch("src.api.routes.explain._save_to_cache"):
+            resp = client.post("/query/explain", json={"since": "1h", "format": "markdown"})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "markdown" in data
+        assert data["markdown"].startswith("# Incident report")
+        assert "## Summary" in data["markdown"]
+        assert "## Evidence" in data["markdown"]
+        assert "- 184 similar failures in billing-worker" in data["markdown"]
 
     def test_cache_hit_returns_cached_true(self):
         cached_payload = {
@@ -538,7 +555,37 @@ class TestExplainEndpoint:
             resp = client.post("/query/explain", json={"since": "1h"})
 
         assert resp.status_code == 200
-        assert resp.json()["cached"] is True
+        data = resp.json()
+        assert data["cached"] is True
+        assert "markdown" not in data
+
+    def test_cache_hit_markdown_is_derived_not_stored(self):
+        cached_payload = {
+            "window": {"start": "2026-03-12T13:00:00+00:00", "end": "2026-03-12T14:00:00+00:00"},
+            "summary": "Incident summary...",
+            "confidence": "high",
+            "mode": "rules",
+            "total_logs": 404,
+            "services_affected": ["api"],
+            "primary_cluster": None,
+            "secondary_clusters": [],
+            "trigger_candidates": [],
+            "evidence": ["cached evidence item"],
+            "cached": True,
+        }
+        mock_db = _ctx_db()
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db), \
+             patch("src.api.routes.explain._load_from_cache", return_value=cached_payload):
+            resp = client.post(
+                "/query/explain",
+                json={"since": "1h", "format": "markdown"},
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["cached"] is True
+        assert data["markdown"].startswith("# Incident report")
+        assert "- cached evidence item" in data["markdown"]
 
     def test_force_refresh_bypasses_cache(self):
         mock_db = _ctx_db()

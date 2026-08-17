@@ -131,6 +131,8 @@ def explain_window(
             "message": pc.representative_message,
             "count": pc.count,
             "services": list(pc.services.keys()),
+            "fingerprint": pc.fingerprint,
+            "importance_score": round(pc.importance_score, 2),
             "first_seen": pc.first_seen.isoformat() if pc.first_seen else None,
             "last_seen": pc.last_seen.isoformat() if pc.last_seen else None,
             "baseline_count": pc.baseline_count,
@@ -141,6 +143,8 @@ def explain_window(
                 "message": c.representative_message,
                 "count": c.count,
                 "services": list(c.services.keys()),
+                "fingerprint": c.fingerprint,
+                "importance_score": round(c.importance_score, 2),
             }
             for c in packet.secondary_clusters
         ],
