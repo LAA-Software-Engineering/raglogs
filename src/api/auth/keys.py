@@ -33,6 +33,7 @@ class ApiKeyInfo:
     created_at: datetime | None
     webhook_secret_preview: str | None = None
     allow_scope_override: bool = False
+    config_json: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ class ApiKeyRecord:
     revoked_at: datetime | None
     created_at: datetime | None = None
     allow_scope_override: bool = False
+    config_json: dict[str, Any] | None = None
 
 
 def generate_api_key() -> str:
@@ -130,6 +132,7 @@ def lookup_api_key(token: str) -> ApiKeyRecord | None:
                 revoked_at=row.revoked_at,
                 created_at=row.created_at,
                 allow_scope_override=bool(getattr(row, "allow_scope_override", False)),
+                config_json=_row_config_json(row),
             )
             for row in rows
         ]
@@ -142,6 +145,7 @@ def create_api_key(
     scope: str = DEFAULT_SCOPE,
     name: str | None = None,
     allow_scope_override: bool = False,
+    config_json: dict[str, Any] | None = None,
 ) -> tuple[str, str, ApiKeyInfo]:
     """Persist a hashed key and return (api_key, webhook_secret, metadata).
 
@@ -163,8 +167,14 @@ def create_api_key(
         scope=scope,
         name=name,
         allow_scope_override=allow_scope_override,
+        config_json=config_json,
     )
     return plaintext, webhook_secret, record
+
+
+def _row_config_json(row: Any) -> dict[str, Any] | None:
+    raw = getattr(row, "config_json", None)
+    return raw if isinstance(raw, dict) else None
 
 
 def _key_info(row: Any) -> ApiKeyInfo:
@@ -180,6 +190,7 @@ def _key_info(row: Any) -> ApiKeyInfo:
             getattr(row, "webhook_secret", None)
         ),
         allow_scope_override=bool(getattr(row, "allow_scope_override", False)),
+        config_json=_row_config_json(row),
     )
 
 
@@ -191,6 +202,7 @@ def _persist_key(
     scope: str,
     name: str | None,
     allow_scope_override: bool = False,
+    config_json: dict[str, Any] | None = None,
 ) -> ApiKeyInfo:
     from src.db.models import ApiKey
     from src.db.session import get_db
@@ -203,6 +215,7 @@ def _persist_key(
         scope=scope,
         webhook_secret=webhook_secret,
         allow_scope_override=allow_scope_override,
+        config_json=config_json,
     )
     with get_db() as db:
         db.add(row)
@@ -239,4 +252,35 @@ def revoke_api_key(key_id: uuid.UUID) -> ApiKeyInfo | None:
             return None
         if row.revoked_at is None:
             row.revoked_at = datetime.now(timezone.utc)
+        return _key_info(row)
+
+
+def set_api_key_defaults(
+    key_id: uuid.UUID,
+    *,
+    baseline_window: str | None = None,
+    max_clusters: int | None = None,
+    max_evidence_items: int | None = None,
+    llm_provider: str | None = None,
+    llm_enabled: bool | None = None,
+    clear: bool = False,
+) -> ApiKeyInfo | None:
+    """Merge G14 query defaults onto ``api_keys.config_json``. None if unknown id."""
+    from src.api.overrides import merge_key_config
+    from src.db.models import ApiKey
+    from src.db.session import get_db
+
+    with get_db() as db:
+        row = db.get(ApiKey, key_id)
+        if row is None:
+            return None
+        row.config_json = merge_key_config(
+            getattr(row, "config_json", None),
+            baseline_window=baseline_window,
+            max_clusters=max_clusters,
+            max_evidence_items=max_evidence_items,
+            llm_provider=llm_provider,
+            llm_enabled=llm_enabled,
+            clear=clear,
+        )
         return _key_info(row)

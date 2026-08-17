@@ -4,25 +4,25 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
 
+from src.api.overrides import QueryOverrideFields, override_input_from_request
 from src.api.schemas.v1 import (
     SCHEMA_VERSION,
     ClustersResponse,
-    llm_rules_only,
+    llm_from_overrides,
     window_from_bounds,
 )
 
 router = APIRouter()
 
 
-class ClustersRequest(BaseModel):
+class ClustersRequest(QueryOverrideFields):
     since: Optional[str] = None
     from_time: Optional[datetime] = None
     to_time: Optional[datetime] = None
     service: Optional[str] = None
     env: Optional[str] = None
-    top: int = 15
+    top: Optional[int] = None
     ingestion_job_id: Optional[str] = None
     scope: Optional[str] = None
 
@@ -34,12 +34,30 @@ class ClustersRequest(BaseModel):
     response_model_by_alias=True,
 )
 def clusters_endpoint(request: ClustersRequest, http_request: Request) -> ClustersResponse:
+    from dataclasses import replace
+
+    from src.api.auth.middleware import AuthPrincipal
     from src.api.auth.scope import bind_request_scope
+    from src.api.overrides import resolve_query_overrides
+    from src.config import get_settings
     from src.core.clustering.clusterer import run_clustering
     from src.db.session import get_db
     from src.utils.time import resolve_window
 
     scope = bind_request_scope(http_request, request.scope)
+    settings = get_settings()
+    principal = getattr(http_request.state, "auth_principal", None)
+    if not isinstance(principal, AuthPrincipal):
+        principal = None
+    fields = override_input_from_request(request)
+    if fields.max_clusters is None and request.top is not None:
+        fields = replace(fields, max_clusters=request.top)
+    overrides = resolve_query_overrides(
+        fields,
+        principal if settings.auth_enabled else None,
+        settings,
+        auth_enabled=bool(settings.auth_enabled),
+    )
 
     try:
         window_start, window_end = resolve_window(
@@ -65,7 +83,8 @@ def clusters_endpoint(request: ClustersRequest, http_request: Request) -> Cluste
                 window_end=window_end,
                 service=request.service,
                 environment=request.env,
-                max_clusters=request.top,
+                baseline_window_str=overrides.baseline_window,
+                max_clusters=overrides.max_clusters,
                 save_to_db=False,
                 ingestion_job_id=ingestion_job_id,
                 scope=scope,
@@ -78,7 +97,11 @@ def clusters_endpoint(request: ClustersRequest, http_request: Request) -> Cluste
         scope=scope,
         window=window_from_bounds(window_start, window_end),
         ingestion_job_id=request.ingestion_job_id,
-        llm=llm_rules_only(),
+        llm=llm_from_overrides(
+            mode="rules",
+            llm_provider=overrides.llm_provider,
+            llm_enabled=False,
+        ),
         clusters=[
             {
                 "fingerprint": c.fingerprint,

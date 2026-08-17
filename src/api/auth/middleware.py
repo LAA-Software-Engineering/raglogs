@@ -25,6 +25,7 @@ class AuthPrincipal:
     key_id: str | None = None
     subject: str | None = None
     allow_scope_override: bool = False
+    config_json: dict[str, Any] | None = None
 
 
 def _auth_error(status_code: int, error_code: str, message: str) -> JSONResponse:
@@ -73,12 +74,15 @@ def _authenticate_token(token: str, settings: Any) -> AuthPrincipal | None:
     record = lookup_api_key(token)
     if record is None:
         return None
+    raw_config = getattr(record, "config_json", None)
+    config_json = raw_config if isinstance(raw_config, dict) else None
     return AuthPrincipal(
         role=record.role,
         scope=record.scope,
         auth_method="api_key",
         key_id=str(record.id),
         allow_scope_override=getattr(record, "allow_scope_override", False) is True,
+        config_json=config_json,
     )
 
 

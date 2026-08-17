@@ -6,15 +6,15 @@ from datetime import datetime, timezone
 from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
 
+from src.api.overrides import QueryOverrideFields
 from src.api.schemas.v1 import CompareResponse
 from src.core.compare.differ import CompareResult
 
 router = APIRouter()
 
 
-class CompareRequest(BaseModel):
+class CompareRequest(QueryOverrideFields):
     since: Optional[str] = None
     baseline: Optional[str] = None
     window_a_from: Optional[datetime] = None
@@ -67,11 +67,13 @@ def _resolve_compare_windows(request: CompareRequest) -> tuple[datetime, datetim
     )
 
 
-def _compare_result_to_response(result: CompareResult, *, scope: str) -> CompareResponse:
+def _compare_result_to_response(
+    result: CompareResult, *, scope: str, llm_provider: str
+) -> CompareResponse:
     from src.api.schemas.v1 import (
         SCHEMA_VERSION,
         cluster_diff_model,
-        llm_rules_only,
+        llm_from_overrides,
         trigger_diff_model,
         window_from_bounds,
     )
@@ -88,7 +90,7 @@ def _compare_result_to_response(result: CompareResult, *, scope: str) -> Compare
         decreased_clusters=[cluster_diff_model(d, "decreased") for d in result.decreased_clusters],
         new_triggers=[trigger_diff_model(t) for t in result.new_triggers],
         dropped_triggers=[trigger_diff_model(t) for t in result.dropped_triggers],
-        llm=llm_rules_only(),
+        llm=llm_from_overrides(mode="rules", llm_provider=llm_provider, llm_enabled=False),
     )
 
 
@@ -180,6 +182,7 @@ def format_compare_plain(result: CompareResult) -> str:
 )
 def compare_endpoint(request: CompareRequest, http_request: Request) -> CompareResponse:
     from src.api.auth.scope import bind_request_scope
+    from src.api.overrides import resolve_overrides_from_http
     from src.core.clustering.clusterer import run_clustering
     from src.core.compare.differ import compare_windows as run_compare_windows
     from src.core.explain.evidence import assemble_evidence
@@ -187,6 +190,7 @@ def compare_endpoint(request: CompareRequest, http_request: Request) -> CompareR
     from src.db.session import get_db
 
     scope = bind_request_scope(http_request, request.scope)
+    overrides = resolve_overrides_from_http(http_request, request)
 
     try:
         a_start, a_end, b_start, b_end = _resolve_compare_windows(request)
@@ -214,9 +218,10 @@ def compare_endpoint(request: CompareRequest, http_request: Request) -> CompareR
                 window_end=a_end,
                 service=request.service,
                 environment=request.env,
+                baseline_window_str=overrides.baseline_window,
                 save_to_db=False,
                 ingestion_job_id=job_id,
-                max_clusters=50,
+                max_clusters=overrides.max_clusters,
                 scope=scope,
             )
             _, clusters_b = run_clustering(
@@ -225,9 +230,10 @@ def compare_endpoint(request: CompareRequest, http_request: Request) -> CompareR
                 window_end=b_end,
                 service=request.service,
                 environment=request.env,
+                baseline_window_str=overrides.baseline_window,
                 save_to_db=False,
                 ingestion_job_id=job_id,
-                max_clusters=50,
+                max_clusters=overrides.max_clusters,
                 scope=scope,
             )
 
@@ -238,6 +244,7 @@ def compare_endpoint(request: CompareRequest, http_request: Request) -> CompareR
                 clusters=clusters_a,
                 service_filter=request.service,
                 environment_filter=request.env,
+                max_evidence_items=overrides.max_evidence_items,
                 ingestion_job_id=job_id,
                 scope=scope,
             )
@@ -248,6 +255,7 @@ def compare_endpoint(request: CompareRequest, http_request: Request) -> CompareR
                 clusters=clusters_b,
                 service_filter=request.service,
                 environment_filter=request.env,
+                max_evidence_items=overrides.max_evidence_items,
                 ingestion_job_id=job_id,
                 scope=scope,
             )
@@ -266,7 +274,9 @@ def compare_endpoint(request: CompareRequest, http_request: Request) -> CompareR
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    body = _compare_result_to_response(result, scope=scope)
+    body = _compare_result_to_response(
+        result, scope=scope, llm_provider=overrides.llm_provider
+    )
     if request.format == "text":
         rendered = format_compare_plain(result)
         body = body.model_copy(update={"rendered_text": rendered, "text": rendered})

@@ -62,6 +62,8 @@ def explain_window(
     baseline_window_str: Optional[str] = None,
     ingestion_job_id: Optional[uuid.UUID] = None,
     scope: str = DEFAULT_LOG_SCOPE,
+    max_evidence_items: Optional[int] = None,
+    llm_provider: Optional[str] = None,
 ) -> ExplainResult:
     """
     Full explain pipeline for a time window.
@@ -80,6 +82,8 @@ def explain_window(
             baseline_window_str=baseline_window_str,
             ingestion_job_id=ingestion_job_id,
             scope=scope,
+            max_evidence_items=max_evidence_items,
+            llm_provider=llm_provider,
         )
 
 
@@ -94,12 +98,24 @@ def _explain_window(
     baseline_window_str: Optional[str] = None,
     ingestion_job_id: Optional[uuid.UUID] = None,
     scope: str = DEFAULT_LOG_SCOPE,
+    max_evidence_items: Optional[int] = None,
+    llm_provider: Optional[str] = None,
 ) -> ExplainResult:
     """
     Full explain pipeline for a time window.
     """
     settings = get_settings()
+    if llm_provider is not None or max_evidence_items is not None:
+        update: dict[str, object] = {}
+        if llm_provider is not None:
+            update["llm_provider"] = llm_provider
+        if max_evidence_items is not None:
+            update["max_evidence_items"] = max_evidence_items
+        settings = settings.model_copy(update=update)
     baseline_window = baseline_window_str or settings.default_baseline_window
+    evidence_cap = (
+        max_evidence_items if max_evidence_items is not None else settings.max_evidence_items
+    )
 
     # 1. Cluster
     _, clusters = run_clustering(
@@ -123,7 +139,7 @@ def _explain_window(
         clusters=clusters,
         service_filter=service,
         environment_filter=environment,
-        max_evidence_items=settings.max_evidence_items,
+        max_evidence_items=evidence_cap,
         ingestion_job_id=ingestion_job_id,
         scope=scope,
     )

@@ -174,9 +174,11 @@ class RaglogsClient:
         to_time: Optional[str] = None,
         service: Optional[str] = None,
         env: Optional[str] = None,
-        no_llm: bool = False,
-        max_clusters: int = 10,
+        no_llm: Optional[bool] = None,
+        max_clusters: Optional[int] = None,
+        max_evidence_items: Optional[int] = None,
         baseline_window: Optional[str] = None,
+        llm: Optional[dict[str, Any]] = None,
         ingestion_job_id: Optional[str] = None,
         force_refresh: bool = False,
         format: str = "json",
@@ -192,7 +194,9 @@ class RaglogsClient:
                 "env": env,
                 "no_llm": no_llm,
                 "max_clusters": max_clusters,
+                "max_evidence_items": max_evidence_items,
                 "baseline_window": baseline_window,
+                "llm": llm,
                 "ingestion_job_id": ingestion_job_id,
                 "force_refresh": force_refresh,
                 "format": format,
@@ -208,6 +212,11 @@ class RaglogsClient:
         to_time: Optional[str] = None,
         service: Optional[str] = None,
         ingestion_job_id: Optional[str] = None,
+        max_clusters: Optional[int] = None,
+        max_evidence_items: Optional[int] = None,
+        baseline_window: Optional[str] = None,
+        llm: Optional[dict[str, Any]] = None,
+        no_llm: Optional[bool] = None,
     ) -> dict[str, Any]:
         """POST /v1/query/ask."""
         return self._post(
@@ -219,6 +228,11 @@ class RaglogsClient:
                 "to_time": to_time,
                 "service": service,
                 "ingestion_job_id": ingestion_job_id,
+                "max_clusters": max_clusters,
+                "max_evidence_items": max_evidence_items,
+                "baseline_window": baseline_window,
+                "llm": llm,
+                "no_llm": no_llm,
             },
         )
 
@@ -230,7 +244,11 @@ class RaglogsClient:
         to_time: Optional[str] = None,
         service: Optional[str] = None,
         env: Optional[str] = None,
-        top: int = 15,
+        top: Optional[int] = None,
+        max_clusters: Optional[int] = None,
+        max_evidence_items: Optional[int] = None,
+        baseline_window: Optional[str] = None,
+        llm: Optional[dict[str, Any]] = None,
         ingestion_job_id: Optional[str] = None,
     ) -> dict[str, Any]:
         """POST /v1/query/clusters."""
@@ -243,6 +261,10 @@ class RaglogsClient:
                 "service": service,
                 "env": env,
                 "top": top,
+                "max_clusters": max_clusters,
+                "max_evidence_items": max_evidence_items,
+                "baseline_window": baseline_window,
+                "llm": llm,
                 "ingestion_job_id": ingestion_job_id,
             },
         )
@@ -258,6 +280,10 @@ class RaglogsClient:
         all_ingestions: bool = False,
         ingestion_job_id: Optional[str] = None,
         format: str = "json",
+        max_clusters: Optional[int] = None,
+        max_evidence_items: Optional[int] = None,
+        baseline_window: Optional[str] = None,
+        llm: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """POST /v1/query/timeline."""
         return self._post(
@@ -271,6 +297,10 @@ class RaglogsClient:
                 "all_ingestions": all_ingestions,
                 "ingestion_job_id": ingestion_job_id,
                 "format": format,
+                "max_clusters": max_clusters,
+                "max_evidence_items": max_evidence_items,
+                "baseline_window": baseline_window,
+                "llm": llm,
             },
         )
 
@@ -288,6 +318,10 @@ class RaglogsClient:
         all_ingestions: bool = False,
         ingestion_job_id: Optional[str] = None,
         format: str = "json",
+        max_clusters: Optional[int] = None,
+        max_evidence_items: Optional[int] = None,
+        baseline_window: Optional[str] = None,
+        llm: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """POST /v1/query/compare."""
         return self._post(
@@ -304,6 +338,10 @@ class RaglogsClient:
                 "all_ingestions": all_ingestions,
                 "ingestion_job_id": ingestion_job_id,
                 "format": format,
+                "max_clusters": max_clusters,
+                "max_evidence_items": max_evidence_items,
+                "baseline_window": baseline_window,
+                "llm": llm,
             },
         )
 
@@ -319,6 +357,10 @@ class RaglogsClient:
         fingerprint: Optional[str] = None,
         fingerprints: Optional[list[str]] = None,
         top: int = 10,
+        max_clusters: Optional[int] = None,
+        max_evidence_items: Optional[int] = None,
+        baseline_window: Optional[str] = None,
+        llm: Optional[dict[str, Any]] = None,
         cross_scope: Optional[bool] = None,
         scope: Optional[str] = None,
     ) -> dict[str, Any]:
@@ -335,6 +377,10 @@ class RaglogsClient:
                 "fingerprint": fingerprint,
                 "fingerprints": fingerprints,
                 "top": top,
+                "max_clusters": max_clusters,
+                "max_evidence_items": max_evidence_items,
+                "baseline_window": baseline_window,
+                "llm": llm,
                 "cross_scope": cross_scope,
                 "scope": scope,
             },
