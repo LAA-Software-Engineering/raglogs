@@ -261,6 +261,39 @@ function evidenceDetail(item) {
   return item;
 }
 
+function triggerCandidatesFrom(data) {
+  const raw = data && data.trigger_candidates;
+  if (Array.isArray(raw) && raw.length) {
+    return raw;
+  }
+  const trigger = data && data.trigger;
+  if (trigger && typeof trigger === "object" && trigger.detected) {
+    return [trigger];
+  }
+  return [];
+}
+
+function renderTriggerCandidate(trigger) {
+  const message = trigger.message || trigger.detail || trigger.type || "";
+  const ts = fmtTime(trigger.timestamp || trigger.at);
+  const extras = [];
+  if (trigger.service) extras.push(escapeHtml(trigger.service));
+  if (ts) extras.push(escapeHtml(ts));
+  if (trigger.type && trigger.message) extras.push(escapeHtml(trigger.type));
+  if (trigger.correlation) extras.push(escapeHtml(trigger.correlation));
+  return `
+    <div class="cluster-card">
+      <div class="cluster-message">${escapeHtml(message)}</div>
+      ${extras.length ? `<div class="cluster-meta">${extras.join(" · ")}</div>` : ""}
+    </div>`;
+}
+
+function renderTriggerSection(data) {
+  const candidates = triggerCandidatesFrom(data);
+  if (!candidates.length) return "";
+  return `<div class="section-title">Likely trigger</div>${candidates.map(renderTriggerCandidate).join("")}`;
+}
+
 function renderExplain(el, data) {
   const evidence = (data.evidence || [])
     .map((item) => `<li>${escapeHtml(evidenceDetail(item))}</li>`)
@@ -275,6 +308,8 @@ function renderExplain(el, data) {
       ${data.cached ? '<span class="badge badge-ok">cached</span>' : ""}
     </div>
     <p class="summary-text">${escapeHtml(data.summary)}</p>`;
+
+  html += renderTriggerSection(data);
 
   if (evidence) {
     html += `<div class="section-title">Evidence</div><ul class="evidence-list">${evidence}</ul>`;
@@ -292,22 +327,45 @@ function renderExplain(el, data) {
   el.innerHTML = html;
 }
 
+function timelineEventMeta(event) {
+  const parts = [];
+  if (event.label && event.label !== event.category) {
+    parts.push(escapeHtml(event.label));
+  }
+  if (event.count != null && event.count !== "") {
+    const n = Number(event.count);
+    parts.push(`${n} event${n === 1 ? "" : "s"}`);
+  }
+  const services = (event.services || []).filter(Boolean).map(escapeHtml);
+  if (services.length) {
+    parts.push(services.join(", "));
+  }
+  if (event.duration_minutes != null && event.duration_minutes !== "") {
+    parts.push(`${escapeHtml(event.duration_minutes)} min span`);
+  }
+  return parts.join(" · ");
+}
+
+function renderTimelineEvent(event) {
+  const meta = timelineEventMeta(event);
+  return `
+    <div class="timeline-event">
+      <span class="timeline-ts">${escapeHtml(fmtTime(event.timestamp))}</span>
+      <span class="timeline-category">${escapeHtml(event.category)}</span>
+      <div class="timeline-body">
+        <span class="timeline-desc">${escapeHtml(event.description)}</span>
+        ${meta ? `<div class="timeline-meta">${meta}</div>` : ""}
+      </div>
+    </div>`;
+}
+
 function renderTimeline(el, data) {
   const events = data.events || [];
   if (!events.length) {
     el.innerHTML = '<p class="empty-state">No events in this window.</p>';
     return;
   }
-  el.innerHTML = events
-    .map(
-      (e) => `
-    <div class="timeline-event">
-      <span class="timeline-ts">${escapeHtml(fmtTime(e.timestamp))}</span>
-      <span class="timeline-category">${escapeHtml(e.category)}</span>
-      <span class="timeline-desc">${escapeHtml(e.description)}</span>
-    </div>`
-    )
-    .join("");
+  el.innerHTML = events.map(renderTimelineEvent).join("");
 }
 
 function renderDiffList(title, items, cssClass) {
@@ -326,24 +384,64 @@ function renderDiffList(title, items, cssClass) {
   return `<div class="section-title">${escapeHtml(title)}</div><ul class="plain-list">${rows}</ul>`;
 }
 
+function windowStart(w) {
+  if (!w || typeof w !== "object") return "";
+  return w.from || w.from_ || w.start || "";
+}
+
+function windowEnd(w) {
+  if (!w || typeof w !== "object") return "";
+  return w.to || w.end || "";
+}
+
+function formatWindowBounds(w) {
+  const start = windowStart(w);
+  const end = windowEnd(w);
+  if (!start && !end) return "";
+  if (start && end) return `${fmtTime(start)} → ${fmtTime(end)}`;
+  return fmtTime(start || end);
+}
+
+function renderCompareWindows(data) {
+  const a = formatWindowBounds(data.window_a);
+  const b = formatWindowBounds(data.window_b);
+  if (!a && !b) return "";
+  let html = `<div class="meta-row window-bounds">`;
+  if (a) html += `<span>Window A (now): ${escapeHtml(a)}</span>`;
+  if (b) html += `<span>Window B (baseline): ${escapeHtml(b)}</span>`;
+  html += `</div>`;
+  return html;
+}
+
+function renderTriggerDiffList(title, items, cssClass) {
+  if (!items || !items.length) return "";
+  const rows = items
+    .map((t) => {
+      const service = t.service
+        ? ` <span class="cluster-meta">(${escapeHtml(t.service)})</span>`
+        : "";
+      return `<li class="${cssClass}">${escapeHtml(t.message)}${service}</li>`;
+    })
+    .join("");
+  return `<div class="section-title">${escapeHtml(title)}</div><ul class="plain-list">${rows}</ul>`;
+}
+
 function renderCompare(el, data) {
+  let html = renderCompareWindows(data);
+
   if (!data.has_changes) {
-    el.innerHTML = '<p class="empty-state">No significant changes between windows.</p>';
+    html += '<p class="empty-state">No significant changes between windows.</p>';
+    html += renderTriggerDiffList("Dropped triggers", data.dropped_triggers, "diff-dropped");
+    el.innerHTML = html;
     return;
   }
-  let html = "";
+
   html += renderDiffList("New error clusters", data.new_clusters, "diff-new");
   html += renderDiffList("Errors that disappeared", data.disappeared_clusters, "diff-disappeared");
   html += renderDiffList("Errors that increased", data.increased_clusters, "diff-increased");
   html += renderDiffList("Errors that decreased", data.decreased_clusters, "diff-decreased");
-
-  if (data.new_triggers && data.new_triggers.length) {
-    html += `<div class="section-title">New triggers</div><ul class="plain-list">`;
-    html += data.new_triggers
-      .map((t) => `<li>${escapeHtml(t.message)} <span class="cluster-meta">(${escapeHtml(t.service)})</span></li>`)
-      .join("");
-    html += "</ul>";
-  }
+  html += renderTriggerDiffList("New triggers", data.new_triggers, "diff-new");
+  html += renderTriggerDiffList("Dropped triggers", data.dropped_triggers, "diff-dropped");
 
   el.innerHTML = html || '<p class="empty-state">No significant changes between windows.</p>';
 }
