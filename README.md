@@ -564,7 +564,19 @@ raglogs ask "why did login fail?"
 raglogs ask "what changed before latency increased?" --since 2h
 raglogs ask "what happened in billing?" --since 1h
 raglogs ask "why are checkouts failing?" --format json
+raglogs ask "why did login fail?" --ingestion-job <uuid>
+raglogs ask "why did login fail?" --all-ingestions
 ```
+
+Like `explain` / `timeline` / `compare`, `ask` defaults to the latest completed ingestion. Pass `--ingestion-job` to target a specific job, or `--all-ingestions` to search every ingested log.
+
+| Flag | Description |
+|---|---|
+| `--since` | Relative window: `30m`, `1h`, `24h` |
+| `--service` | Filter to one service |
+| `--format` | `text` or `json` |
+| `--ingestion-job` | Scope to a specific ingestion job UUID |
+| `--all-ingestions` | Search all historical ingestions, not just the latest |
 
 **How retrieval works**
 
