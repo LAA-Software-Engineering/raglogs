@@ -604,6 +604,34 @@ class TestListIngestions:
         assert resp.status_code == 200
         assert resp.json()["ingestions"] == []
 
+    def _executed_limit(self, mock_db) -> int:
+        stmt = mock_db.execute.call_args[0][0]
+        return int(stmt._limit_clause.value)
+
+    def test_default_limit_is_25(self):
+        mock_db = self._ctx_db_with_rows([])
+
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db):
+            resp = client.get("/v1/ingestions")
+
+        assert resp.status_code == 200
+        assert self._executed_limit(mock_db) == 25
+
+    def test_custom_limit_is_passed_to_query(self):
+        mock_db = self._ctx_db_with_rows([])
+
+        with patch("src.db.session.get_db", side_effect=lambda: mock_db):
+            resp = client.get("/v1/ingestions", params={"limit": 100})
+
+        assert resp.status_code == 200
+        assert self._executed_limit(mock_db) == 100
+
+    def test_invalid_limit_returns_400(self):
+        for value in (0, -1, 501):
+            resp = client.get("/v1/ingestions", params={"limit": value})
+            assert resp.status_code == 400, value
+            assert "limit" in resp.json()["detail"]
+
 
 # ── GET /ingestions/latest ────────────────────────────────────────────────────
 

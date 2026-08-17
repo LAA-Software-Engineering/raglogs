@@ -14,13 +14,16 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator, model_validator
 
 from src.core.ingestion.tail import TAIL_ADAPTERS
 
 router = APIRouter()
+
+LIST_INGESTIONS_DEFAULT_LIMIT = 25
+LIST_INGESTIONS_MAX_LIMIT = 500
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────────
@@ -610,7 +613,17 @@ def create_ingestion(
 
 
 @router.get("", response_model=IngestionListResponse)
-def list_ingestions(http_request: Request, scope: Optional[str] = None):
+def list_ingestions(
+    http_request: Request,
+    scope: Optional[str] = None,
+    limit: int = Query(
+        LIST_INGESTIONS_DEFAULT_LIMIT,
+        description=(
+            "Maximum number of completed ingestions to return "
+            f"(1–{LIST_INGESTIONS_MAX_LIMIT}). Default {LIST_INGESTIONS_DEFAULT_LIMIT}."
+        ),
+    ),
+) -> IngestionListResponse:
     """List recent completed ingestion jobs, newest first. Used by the web UI's ingestion picker."""
     from sqlalchemy import desc, select
 
@@ -618,6 +631,12 @@ def list_ingestions(http_request: Request, scope: Optional[str] = None):
     from src.db.models import IngestionJob, Source
     from src.db.scope_filter import filter_ingestion_jobs_by_scope
     from src.db.session import get_db
+
+    if limit < 1 or limit > LIST_INGESTIONS_MAX_LIMIT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"limit must be between 1 and {LIST_INGESTIONS_MAX_LIMIT}",
+        )
 
     resolved = bind_request_scope(http_request, scope)
 
@@ -627,7 +646,7 @@ def list_ingestions(http_request: Request, scope: Optional[str] = None):
             .join(Source, Source.id == IngestionJob.source_id)
             .where(IngestionJob.status == "completed")
             .order_by(desc(IngestionJob.finished_at))
-            .limit(25)
+            .limit(limit)
         )
         stmt = filter_ingestion_jobs_by_scope(stmt, resolved)
         rows = db.execute(stmt).all()
