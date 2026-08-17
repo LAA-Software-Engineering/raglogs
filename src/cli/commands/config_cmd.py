@@ -30,6 +30,8 @@ def config_cmd(
             "EMBEDDINGS_MODEL": settings.embeddings_model,
             "CLUSTER_MERGE_SIMILARITY_THRESHOLD": str(settings.cluster_merge_similarity_threshold),
             "CLUSTER_MERGE_MIN_COUNT": str(settings.cluster_merge_min_count),
+            "ASK_SEMANTIC_TOP_K": str(settings.ask_semantic_top_k),
+            "ASK_SEMANTIC_MIN_SIMILARITY": str(settings.ask_semantic_min_similarity),
             "DEFAULT_BASELINE_WINDOW": settings.default_baseline_window,
             "MAX_CLUSTERS_FOR_EXPLAIN": str(settings.max_clusters_for_explain),
             "MAX_EVIDENCE_ITEMS": str(settings.max_evidence_items),

@@ -1,4 +1,6 @@
 """Tests for unprefixed environment variable names on Settings."""
+import pytest
+
 from src.config.settings import Settings
 
 
@@ -28,6 +30,16 @@ def test_cluster_merge_settings_from_env(monkeypatch):
     assert settings.cluster_merge_similarity_threshold == 0.95
     assert settings.cluster_merge_min_count == 2
     assert settings.embeddings_provider == "openai"
+
+
+def test_ask_semantic_settings_from_env(monkeypatch):
+    monkeypatch.setenv("ASK_SEMANTIC_TOP_K", "50")
+    monkeypatch.setenv("ASK_SEMANTIC_MIN_SIMILARITY", "0.6")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.ask_semantic_top_k == 50
+    assert settings.ask_semantic_min_similarity == pytest.approx(0.6)
 
 
 def test_ignores_legacy_raglogs_prefix(monkeypatch):

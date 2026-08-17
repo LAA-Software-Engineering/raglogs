@@ -649,6 +649,7 @@ class TestAskEndpoint:
         data = resp.json()
         assert data["answer"] == "Stripe signature verification failed for /webhooks/stripe."
         assert data["total_matches"] == 184
+        assert data["retrieval_mode"] == "keyword"
 
     def test_ingestion_job_id_passed_through(self):
         """

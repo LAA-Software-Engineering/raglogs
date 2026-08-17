@@ -60,4 +60,5 @@ def ask_endpoint(request: AskRequest):
         "evidence": result.evidence_items,
         "clusters": result.clusters_used,
         "total_matches": result.total_matches,
+        "retrieval_mode": result.retrieval_mode,
     }
