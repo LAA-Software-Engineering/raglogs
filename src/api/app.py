@@ -19,7 +19,8 @@ Canonical query, ingest, and config routes live under `/v1/`. Unversioned
 release and include a `Deprecation: true` header.
 
 Compatibility: additive changes stay in `v1`; breaking changes require `v2`.
-JSON response bodies are unchanged in this release.
+`/v1/query/*` JSON bodies use `schema_version` `1.0` with an `llm` provenance
+block (`used`, `provider`, `model`, `fell_back`). Prose is `rendered_text`.
 """
 
 

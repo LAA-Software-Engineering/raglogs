@@ -42,7 +42,9 @@ def test_explain_targets_v1_and_returns_body() -> None:
         payload = client.explain(since="1h", no_llm=True)
 
     assert payload["summary"] == "ok"
-    assert payload["confidence"] == "low"
+    assert payload["confidence"]["label"] == "low"
+    assert payload["schema_version"] == "1.0"
+    assert payload["llm"]["used"] is False
 
 
 def test_health_uses_unversioned_path() -> None:

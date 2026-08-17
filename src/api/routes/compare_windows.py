@@ -5,9 +5,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Literal, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from src.api.schemas.v1 import CompareResponse
 from src.core.compare.differ import CompareResult
 
 router = APIRouter()
@@ -65,40 +66,29 @@ def _resolve_compare_windows(request: CompareRequest) -> tuple[datetime, datetim
     )
 
 
-def _diff_to_dict(d) -> dict:
-    return {
-        "fingerprint": d.fingerprint,
-        "message": d.message,
-        "services": d.services,
-        "count_a": d.count_a,
-        "count_b": d.count_b,
-    }
+def _compare_result_to_response(result: CompareResult, *, scope: str) -> CompareResponse:
+    from src.api.schemas.v1 import (
+        SCHEMA_VERSION,
+        cluster_diff_model,
+        llm_rules_only,
+        trigger_diff_model,
+        window_from_bounds,
+    )
 
-
-def _compare_result_to_payload(result: CompareResult) -> dict:
-    return {
-        "window_a": {
-            "start": result.window_a_start.isoformat(),
-            "end": result.window_a_end.isoformat(),
-        },
-        "window_b": {
-            "start": result.window_b_start.isoformat(),
-            "end": result.window_b_end.isoformat(),
-        },
-        "has_changes": result.has_changes,
-        "new_clusters": [_diff_to_dict(d) for d in result.new_clusters],
-        "disappeared_clusters": [_diff_to_dict(d) for d in result.disappeared_clusters],
-        "increased_clusters": [_diff_to_dict(d) for d in result.increased_clusters],
-        "decreased_clusters": [_diff_to_dict(d) for d in result.decreased_clusters],
-        "new_triggers": [
-            {"message": t.message, "service": t.service, "only_in": t.only_in}
-            for t in result.new_triggers
-        ],
-        "dropped_triggers": [
-            {"message": t.message, "service": t.service, "only_in": t.only_in}
-            for t in result.dropped_triggers
-        ],
-    }
+    return CompareResponse(
+        schema_version=SCHEMA_VERSION,
+        scope=scope,
+        window_a=window_from_bounds(result.window_a_start, result.window_a_end),
+        window_b=window_from_bounds(result.window_b_start, result.window_b_end),
+        has_changes=result.has_changes,
+        new_clusters=[cluster_diff_model(d, "new") for d in result.new_clusters],
+        disappeared_clusters=[cluster_diff_model(d, "disappeared") for d in result.disappeared_clusters],
+        increased_clusters=[cluster_diff_model(d, "increased") for d in result.increased_clusters],
+        decreased_clusters=[cluster_diff_model(d, "decreased") for d in result.decreased_clusters],
+        new_triggers=[trigger_diff_model(t) for t in result.new_triggers],
+        dropped_triggers=[trigger_diff_model(t) for t in result.dropped_triggers],
+        llm=llm_rules_only(),
+    )
 
 
 def _trunc(text: str, n: int = 72) -> str:
@@ -181,8 +171,14 @@ def format_compare_plain(result: CompareResult) -> str:
     return "\n".join(lines)
 
 
-@router.post("/compare")
-def compare_endpoint(request: CompareRequest):
+@router.post(
+    "/compare",
+    response_model=CompareResponse,
+    response_model_exclude_unset=True,
+    response_model_by_alias=True,
+)
+def compare_endpoint(request: CompareRequest, http_request: Request) -> CompareResponse:
+    from src.api.schemas.v1 import scope_from_request
     from src.core.clustering.clusterer import run_clustering
     from src.core.compare.differ import compare_windows as run_compare_windows
     from src.core.explain.evidence import assemble_evidence
@@ -263,7 +259,8 @@ def compare_endpoint(request: CompareRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    payload = _compare_result_to_payload(result)
+    body = _compare_result_to_response(result, scope=scope_from_request(http_request))
     if request.format == "text":
-        payload["text"] = format_compare_plain(result)
-    return payload
+        rendered = format_compare_plain(result)
+        body = body.model_copy(update={"rendered_text": rendered, "text": rendered})
+    return body

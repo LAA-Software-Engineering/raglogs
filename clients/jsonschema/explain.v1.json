@@ -1,0 +1,391 @@
+{
+  "$defs": {
+    "ClusterEvidence": {
+      "properties": {
+        "fingerprint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fingerprint"
+        },
+        "template": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Template"
+        },
+        "count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Count"
+        },
+        "baseline_count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Baseline Count"
+        },
+        "change_ratio": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Change Ratio"
+        },
+        "services": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Services",
+          "type": "array"
+        },
+        "levels": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Levels",
+          "type": "array"
+        },
+        "first_seen": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "First Seen"
+        },
+        "last_seen": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Seen"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Message"
+        }
+      },
+      "title": "ClusterEvidence",
+      "type": "object"
+    },
+    "Confidence": {
+      "properties": {
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "score": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Score",
+          "type": "number"
+        }
+      },
+      "required": [
+        "label",
+        "score"
+      ],
+      "title": "Confidence",
+      "type": "object"
+    },
+    "EvidenceItem": {
+      "properties": {
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "detail": {
+          "title": "Detail",
+          "type": "string"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        },
+        "source_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Ref"
+        }
+      },
+      "required": [
+        "kind",
+        "detail"
+      ],
+      "title": "EvidenceItem",
+      "type": "object"
+    },
+    "LlmProvenance": {
+      "properties": {
+        "used": {
+          "title": "Used",
+          "type": "boolean"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "fell_back": {
+          "title": "Fell Back",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "used",
+        "provider",
+        "model",
+        "fell_back"
+      ],
+      "title": "LlmProvenance",
+      "type": "object"
+    },
+    "TimeWindow": {
+      "description": "Inclusive analysis window. Serialized as ``from`` / ``to`` (ISO-8601).",
+      "properties": {
+        "from": {
+          "title": "From",
+          "type": "string"
+        },
+        "to": {
+          "title": "To",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "title": "TimeWindow",
+      "type": "object"
+    },
+    "TriggerInfo": {
+      "properties": {
+        "detected": {
+          "title": "Detected",
+          "type": "boolean"
+        },
+        "type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Type"
+        },
+        "service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service"
+        },
+        "at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "At"
+        },
+        "correlation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Correlation"
+        }
+      },
+      "required": [
+        "detected"
+      ],
+      "title": "TriggerInfo",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "schema_version": {
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "scope": {
+      "default": "default",
+      "title": "Scope",
+      "type": "string"
+    },
+    "window": {
+      "$ref": "#/$defs/TimeWindow"
+    },
+    "confidence": {
+      "$ref": "#/$defs/Confidence"
+    },
+    "summary": {
+      "title": "Summary",
+      "type": "string"
+    },
+    "trigger": {
+      "$ref": "#/$defs/TriggerInfo"
+    },
+    "primary_cluster": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ClusterEvidence"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "secondary_clusters": {
+      "items": {
+        "$ref": "#/$defs/ClusterEvidence"
+      },
+      "title": "Secondary Clusters",
+      "type": "array"
+    },
+    "evidence": {
+      "items": {
+        "$ref": "#/$defs/EvidenceItem"
+      },
+      "title": "Evidence",
+      "type": "array"
+    },
+    "llm": {
+      "$ref": "#/$defs/LlmProvenance"
+    },
+    "rendered_text": {
+      "default": "",
+      "title": "Rendered Text",
+      "type": "string"
+    },
+    "markdown": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Markdown"
+    },
+    "cached": {
+      "default": false,
+      "title": "Cached",
+      "type": "boolean"
+    },
+    "total_logs": {
+      "default": 0,
+      "title": "Total Logs",
+      "type": "integer"
+    },
+    "mode": {
+      "default": "rules",
+      "title": "Mode",
+      "type": "string"
+    },
+    "services_affected": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Services Affected",
+      "type": "array"
+    }
+  },
+  "required": [
+    "window",
+    "confidence",
+    "summary",
+    "trigger",
+    "llm"
+  ],
+  "title": "ExplainResponse",
+  "type": "object"
+}

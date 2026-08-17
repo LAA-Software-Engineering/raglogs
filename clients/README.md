@@ -10,6 +10,15 @@ make openapi
 `clients/openapi.json` is the published contract. CI uploads it as a workflow
 artifact on every push/PR and attaches it to GitHub Releases on tags.
 
+## JSON Schema (`/v1/query/*`)
+
+Versioned response bodies (`schema_version` 1.0) are published as JSON Schema:
+
+```bash
+make jsonschema
+# writes clients/jsonschema/explain.v1.json (and timeline/compare/ask/clusters)
+```
+
 ## Python
 
 A thin typed httpx client ships in-tree:

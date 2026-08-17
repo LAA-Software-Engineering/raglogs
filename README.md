@@ -1052,7 +1052,7 @@ Overlapping tail poll windows can **double-count** the same physical lines until
 
 Unversioned `/ingestions`, `/query/*`, and `/config` remain as **deprecated aliases** for one release. They behave the same as the `/v1` paths and send `Deprecation: true` plus a `Link: </v1/...>; rel="successor-version"` header. `/health`, the web UI (`/`), and `/static` stay unversioned.
 
-**Compatibility policy.** Additive changes stay in `v1`. Breaking path or method removals require `v2`. JSON response bodies are unchanged in this release (a stable evidence schema is tracked separately as G7).
+**Compatibility policy.** Additive changes stay in `v1`. Breaking path or method removals require `v2`. `/v1/query/*` JSON bodies are **schema_version 1.0**: structured fields plus an `llm` provenance block (`used`, `provider`, `model`, `fell_back`). Prose is `rendered_text` (and `format: text` still adds a `text` alias; `format: markdown` still adds `markdown`). Additive fields may appear in 1.x; a breaking body change requires `schema_version` 2.0 / `v2`.
 
 **OpenAPI and clients.** Export the spec with `make openapi` (`clients/openapi.json`). CI uploads that file as a workflow artifact and attaches it to GitHub Releases on tags. A thin typed Python client ships as `src.clients.v1.RaglogsClient` (targets `/v1`). `make client-go` runs [oapi-codegen](https://github.com/oapi-codegen/oapi-codegen) into `clients/go/` when the binary is installed; otherwise it prints the install command and exits 0. See `clients/README.md`.
 
@@ -1066,25 +1066,34 @@ curl -X POST http://localhost:8000/v1/query/explain \
 
 ```json
 {
-  "window": {"start": "2026-03-12T22:00:00Z", "end": "2026-03-12T22:30:00Z"},
-  "summary": "Incident summary\n\nWindow: ...",
-  "confidence": "medium-high",
-  "mode": "rules",
-  "total_logs": 464,
-  "services_affected": ["api", "billing-worker"],
+  "schema_version": "1.0",
+  "scope": "default",
+  "window": {"from": "2026-03-12T22:00:00+00:00", "to": "2026-03-12T22:30:00+00:00"},
+  "confidence": {"label": "medium-high", "score": 0.72},
+  "summary": "Stripe signature verification failed for endpoint /webhooks/stripe",
+  "trigger": {"detected": false, "type": null, "service": null, "at": null, "correlation": null},
   "primary_cluster": {
-    "message": "Stripe signature verification failed for endpoint /webhooks/stripe",
+    "fingerprint": "a1b2c3d4",
+    "template": "Stripe signature verification failed for endpoint /webhooks/stripe",
     "count": 184,
     "baseline_count": 0,
-    "change_ratio": 185.0
+    "change_ratio": 185.0,
+    "services": ["billing-worker"],
+    "levels": ["error"]
   },
-  "evidence": ["184 similar errors in billing-worker", "..."]
+  "evidence": [
+    {"kind": "log", "detail": "184 similar errors in billing-worker"}
+  ],
+  "llm": {"used": false, "provider": "disabled", "model": "gpt-4.1-mini", "fell_back": false},
+  "rendered_text": "Incident summary\n\nWindow: ...",
+  "cached": false,
+  "total_logs": 464
 }
 ```
 
 **Explain** — `POST /v1/query/explain` accepts the same window filters as the CLI. Optional `"format": "markdown"` adds a paste-ready `markdown` incident report field alongside the JSON payload (same shape as `raglogs explain --format markdown`).
 
-**Timeline** — `POST /v1/query/timeline` accepts the same window filters as the CLI (`since` or `from_time`/`to_time`, optional `service`, `env`, `all_ingestions`, `ingestion_job_id`). Set `"format": "text"` to include a plain-text `text` field alongside `events`.
+**Timeline** — `POST /v1/query/timeline` accepts the same window filters as the CLI (`since` or `from_time`/`to_time`, optional `service`, `env`, `all_ingestions`, `ingestion_job_id`). Set `"format": "text"` to include plain-text `rendered_text` (and a `text` alias) alongside `events`. Timeline is rules-only (`llm.used` is always false).
 
 ```bash
 curl -X POST http://localhost:8000/v1/query/timeline \
@@ -1092,7 +1101,9 @@ curl -X POST http://localhost:8000/v1/query/timeline \
   -d '{"since": "2h", "format": "json"}'
 ```
 
-**Compare** — `POST /v1/query/compare` matches `raglogs compare`: either `"since"` + `"baseline"` (durations, window A ends at request time) or explicit `window_a_from` / `window_a_to` / `window_b_from` / `window_b_to`. Optional `"format": "text"` adds a rendered `text` field.
+**Compare** — `POST /v1/query/compare` matches `raglogs compare`: either `"since"` + `"baseline"` (durations, window A ends at request time) or explicit `window_a_from` / `window_a_to` / `window_b_from` / `window_b_to`. Optional `"format": "text"` adds `rendered_text` (and a `text` alias). Cluster diffs include a `marker` (`+` / `-` / `↑` / `↓`; triggers use `+⚡` / `-⚡`). Compare is rules-only.
+
+Published JSON Schema files live in `clients/jsonschema/` (`explain.v1.json`, `timeline.v1.json`, `compare.v1.json`, `ask.v1.json`). Export with `make jsonschema`.
 
 ```bash
 curl -X POST http://localhost:8000/v1/query/compare \

@@ -1,0 +1,95 @@
+{
+  "$defs": {
+    "LlmProvenance": {
+      "properties": {
+        "used": {
+          "title": "Used",
+          "type": "boolean"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "fell_back": {
+          "title": "Fell Back",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "used",
+        "provider",
+        "model",
+        "fell_back"
+      ],
+      "title": "LlmProvenance",
+      "type": "object"
+    },
+    "TimeWindow": {
+      "description": "Inclusive analysis window. Serialized as ``from`` / ``to`` (ISO-8601).",
+      "properties": {
+        "from": {
+          "title": "From",
+          "type": "string"
+        },
+        "to": {
+          "title": "To",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "title": "TimeWindow",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "schema_version": {
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "scope": {
+      "default": "default",
+      "title": "Scope",
+      "type": "string"
+    },
+    "window": {
+      "$ref": "#/$defs/TimeWindow"
+    },
+    "clusters": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Clusters",
+      "type": "array"
+    },
+    "llm": {
+      "$ref": "#/$defs/LlmProvenance"
+    },
+    "ingestion_job_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Ingestion Job Id"
+    }
+  },
+  "required": [
+    "window",
+    "llm"
+  ],
+  "title": "ClustersResponse",
+  "type": "object"
+}

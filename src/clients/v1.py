@@ -1,7 +1,7 @@
 """Thin typed httpx client targeting the canonical ``/v1`` HTTP API.
 
-JSON response shapes are unchanged from the unversioned aliases; this client
-only pins the URL prefix. Generate a fuller client with ``make client-go`` /
+JSON response shapes are versioned (`schema_version` 1.0 on `/v1/query/*`).
+This client pins the URL prefix. Generate a fuller client with ``make client-go`` /
 ``make client-python`` from ``clients/openapi.json``.
 """
 

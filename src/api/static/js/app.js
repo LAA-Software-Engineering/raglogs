@@ -18,8 +18,9 @@ function fmtTime(iso) {
 }
 
 function confidenceBadge(confidence) {
-  const cls = confidence === "high" ? "badge-high" : confidence === "medium" ? "badge-medium" : "badge-low";
-  return `<span class="badge ${cls}">${escapeHtml(confidence)}</span>`;
+  const label = confidence && typeof confidence === "object" ? confidence.label : confidence;
+  const cls = label === "high" ? "badge-high" : label === "medium" || label === "medium-high" ? "badge-medium" : "badge-low";
+  return `<span class="badge ${cls}">${escapeHtml(label || "")}</span>`;
 }
 
 // FastAPI error bodies are either {"detail": "message"} (HTTPException) or
@@ -169,16 +170,24 @@ function initForms() {
 
 function renderClusterCard(cluster) {
   const services = (cluster.services || []).map(escapeHtml).join(", ");
+  const message = cluster.template || cluster.message || "";
   return `
     <div class="cluster-card">
-      <div class="cluster-message">${escapeHtml(cluster.message)}</div>
+      <div class="cluster-message">${escapeHtml(message)}</div>
       <div class="cluster-meta">${escapeHtml(cluster.count)} events${services ? " · " + services : ""}</div>
     </div>`;
 }
 
+function evidenceDetail(item) {
+  if (item && typeof item === "object") {
+    return item.detail || "";
+  }
+  return item;
+}
+
 function renderExplain(el, data) {
   const evidence = (data.evidence || [])
-    .map((item) => `<li>${escapeHtml(item)}</li>`)
+    .map((item) => `<li>${escapeHtml(evidenceDetail(item))}</li>`)
     .join("");
 
   let html = `

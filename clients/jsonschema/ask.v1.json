@@ -1,0 +1,106 @@
+{
+  "$defs": {
+    "LlmProvenance": {
+      "properties": {
+        "used": {
+          "title": "Used",
+          "type": "boolean"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "fell_back": {
+          "title": "Fell Back",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "used",
+        "provider",
+        "model",
+        "fell_back"
+      ],
+      "title": "LlmProvenance",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "schema_version": {
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "question": {
+      "title": "Question",
+      "type": "string"
+    },
+    "answer": {
+      "title": "Answer",
+      "type": "string"
+    },
+    "evidence": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence",
+      "type": "array"
+    },
+    "clusters": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Clusters",
+      "type": "array"
+    },
+    "total_matches": {
+      "default": 0,
+      "title": "Total Matches",
+      "type": "integer"
+    },
+    "retrieval_mode": {
+      "default": "keyword",
+      "title": "Retrieval Mode",
+      "type": "string"
+    },
+    "llm": {
+      "$ref": "#/$defs/LlmProvenance"
+    },
+    "rendered_text": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Rendered Text"
+    },
+    "mode": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Mode"
+    }
+  },
+  "required": [
+    "question",
+    "answer",
+    "llm"
+  ],
+  "title": "AskResponse",
+  "type": "object"
+}

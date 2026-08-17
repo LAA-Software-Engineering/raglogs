@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "raglogs",
-    "description": "Incident explanation API \u2014 ask your logs what happened.\n\nCanonical query, ingest, and config routes live under `/v1/`. Unversioned\n`/ingestions`, `/query`, and `/config` paths are deprecated aliases for one\nrelease and include a `Deprecation: true` header.\n\nCompatibility: additive changes stay in `v1`; breaking changes require `v2`.\nJSON response bodies are unchanged in this release.\n",
+    "description": "Incident explanation API \u2014 ask your logs what happened.\n\nCanonical query, ingest, and config routes live under `/v1/`. Unversioned\n`/ingestions`, `/query`, and `/config` paths are deprecated aliases for one\nrelease and include a `Deprecation: true` header.\n\nCompatibility: additive changes stay in `v1`; breaking changes require `v2`.\n`/v1/query/*` JSON bodies use `schema_version` `1.0` with an `llm` provenance\nblock (`used`, `provider`, `model`, `fell_back`). Prose is `rendered_text`.\n",
     "version": "0.1.0"
   },
   "paths": {
@@ -774,7 +774,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ExplainResponse"
+                }
               }
             }
           },
@@ -813,7 +815,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ExplainResponse"
+                }
               }
             }
           },
@@ -853,7 +857,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AskResponse"
+                }
               }
             }
           },
@@ -892,7 +898,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AskResponse"
+                }
               }
             }
           },
@@ -932,7 +940,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ClustersResponse"
+                }
               }
             }
           },
@@ -971,7 +981,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ClustersResponse"
+                }
               }
             }
           },
@@ -1011,7 +1023,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TimelineResponse"
+                }
               }
             }
           },
@@ -1050,7 +1064,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TimelineResponse"
+                }
               }
             }
           },
@@ -1090,7 +1106,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CompareResponse"
+                }
               }
             }
           },
@@ -1129,7 +1147,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CompareResponse"
+                }
               }
             }
           },
@@ -1259,6 +1279,240 @@
         ],
         "title": "AskRequest"
       },
+      "AskResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "question": {
+            "type": "string",
+            "title": "Question"
+          },
+          "answer": {
+            "type": "string",
+            "title": "Answer"
+          },
+          "evidence": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Evidence"
+          },
+          "clusters": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Clusters"
+          },
+          "total_matches": {
+            "type": "integer",
+            "title": "Total Matches",
+            "default": 0
+          },
+          "retrieval_mode": {
+            "type": "string",
+            "title": "Retrieval Mode",
+            "default": "keyword"
+          },
+          "llm": {
+            "$ref": "#/components/schemas/LlmProvenance"
+          },
+          "rendered_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rendered Text"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          }
+        },
+        "type": "object",
+        "required": [
+          "question",
+          "answer",
+          "llm"
+        ],
+        "title": "AskResponse"
+      },
+      "ClusterDiffModel": {
+        "properties": {
+          "fingerprint": {
+            "type": "string",
+            "title": "Fingerprint"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "services": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Services"
+          },
+          "count_a": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Count A"
+          },
+          "count_b": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Count B"
+          },
+          "marker": {
+            "type": "string",
+            "title": "Marker"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fingerprint",
+          "message",
+          "marker"
+        ],
+        "title": "ClusterDiffModel"
+      },
+      "ClusterEvidence": {
+        "properties": {
+          "fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fingerprint"
+          },
+          "template": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template"
+          },
+          "count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Count"
+          },
+          "baseline_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Count"
+          },
+          "change_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Ratio"
+          },
+          "services": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Services"
+          },
+          "levels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Levels"
+          },
+          "first_seen": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Seen"
+          },
+          "last_seen": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "title": "ClusterEvidence"
+      },
       "ClustersRequest": {
         "properties": {
           "since": {
@@ -1337,6 +1591,51 @@
         },
         "type": "object",
         "title": "ClustersRequest"
+      },
+      "ClustersResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "scope": {
+            "type": "string",
+            "title": "Scope",
+            "default": "default"
+          },
+          "window": {
+            "$ref": "#/components/schemas/TimeWindow"
+          },
+          "clusters": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Clusters"
+          },
+          "llm": {
+            "$ref": "#/components/schemas/LlmProvenance"
+          },
+          "ingestion_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ingestion Job Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "window",
+          "llm"
+        ],
+        "title": "ClustersResponse"
       },
       "CompareRequest": {
         "properties": {
@@ -1461,6 +1760,125 @@
         "type": "object",
         "title": "CompareRequest"
       },
+      "CompareResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "scope": {
+            "type": "string",
+            "title": "Scope",
+            "default": "default"
+          },
+          "window_a": {
+            "$ref": "#/components/schemas/TimeWindow"
+          },
+          "window_b": {
+            "$ref": "#/components/schemas/TimeWindow"
+          },
+          "has_changes": {
+            "type": "boolean",
+            "title": "Has Changes"
+          },
+          "new_clusters": {
+            "items": {
+              "$ref": "#/components/schemas/ClusterDiffModel"
+            },
+            "type": "array",
+            "title": "New Clusters"
+          },
+          "disappeared_clusters": {
+            "items": {
+              "$ref": "#/components/schemas/ClusterDiffModel"
+            },
+            "type": "array",
+            "title": "Disappeared Clusters"
+          },
+          "increased_clusters": {
+            "items": {
+              "$ref": "#/components/schemas/ClusterDiffModel"
+            },
+            "type": "array",
+            "title": "Increased Clusters"
+          },
+          "decreased_clusters": {
+            "items": {
+              "$ref": "#/components/schemas/ClusterDiffModel"
+            },
+            "type": "array",
+            "title": "Decreased Clusters"
+          },
+          "new_triggers": {
+            "items": {
+              "$ref": "#/components/schemas/TriggerDiffModel"
+            },
+            "type": "array",
+            "title": "New Triggers"
+          },
+          "dropped_triggers": {
+            "items": {
+              "$ref": "#/components/schemas/TriggerDiffModel"
+            },
+            "type": "array",
+            "title": "Dropped Triggers"
+          },
+          "llm": {
+            "$ref": "#/components/schemas/LlmProvenance"
+          },
+          "rendered_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rendered Text"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "window_a",
+          "window_b",
+          "has_changes",
+          "llm"
+        ],
+        "title": "CompareResponse"
+      },
+      "Confidence": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "score": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Score"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label",
+          "score"
+        ],
+        "title": "Confidence"
+      },
       "EnqueuedResponse": {
         "properties": {
           "worker_job_id": {
@@ -1500,6 +1918,46 @@
           "status"
         ],
         "title": "EnqueuedResponse"
+      },
+      "EvidenceItem": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref"
+          },
+          "source_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Ref"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "detail"
+        ],
+        "title": "EvidenceItem"
       },
       "ExplainRequest": {
         "properties": {
@@ -1609,6 +2067,107 @@
         },
         "type": "object",
         "title": "ExplainRequest"
+      },
+      "ExplainResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "scope": {
+            "type": "string",
+            "title": "Scope",
+            "default": "default"
+          },
+          "window": {
+            "$ref": "#/components/schemas/TimeWindow"
+          },
+          "confidence": {
+            "$ref": "#/components/schemas/Confidence"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/TriggerInfo"
+          },
+          "primary_cluster": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClusterEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "secondary_clusters": {
+            "items": {
+              "$ref": "#/components/schemas/ClusterEvidence"
+            },
+            "type": "array",
+            "title": "Secondary Clusters"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceItem"
+            },
+            "type": "array",
+            "title": "Evidence"
+          },
+          "llm": {
+            "$ref": "#/components/schemas/LlmProvenance"
+          },
+          "rendered_text": {
+            "type": "string",
+            "title": "Rendered Text",
+            "default": ""
+          },
+          "markdown": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Markdown"
+          },
+          "cached": {
+            "type": "boolean",
+            "title": "Cached",
+            "default": false
+          },
+          "total_logs": {
+            "type": "integer",
+            "title": "Total Logs",
+            "default": 0
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode",
+            "default": "rules"
+          },
+          "services_affected": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Services Affected"
+          }
+        },
+        "type": "object",
+        "required": [
+          "window",
+          "confidence",
+          "summary",
+          "trigger",
+          "llm"
+        ],
+        "title": "ExplainResponse"
       },
       "HTTPValidationError": {
         "properties": {
@@ -2002,6 +2561,34 @@
         ],
         "title": "LatestIngestionResponse"
       },
+      "LlmProvenance": {
+        "properties": {
+          "used": {
+            "type": "boolean",
+            "title": "Used"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "fell_back": {
+            "type": "boolean",
+            "title": "Fell Back"
+          }
+        },
+        "type": "object",
+        "required": [
+          "used",
+          "provider",
+          "model",
+          "fell_back"
+        ],
+        "title": "LlmProvenance"
+      },
       "PushLinesResponse": {
         "properties": {
           "ingestion_job_id": {
@@ -2062,6 +2649,82 @@
           "status"
         ],
         "title": "TailLifecycleResponse"
+      },
+      "TimeWindow": {
+        "properties": {
+          "from": {
+            "type": "string",
+            "title": "From"
+          },
+          "to": {
+            "type": "string",
+            "title": "To"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from",
+          "to"
+        ],
+        "title": "TimeWindow",
+        "description": "Inclusive analysis window. Serialized as ``from`` / ``to`` (ISO-8601)."
+      },
+      "TimelineEventModel": {
+        "properties": {
+          "timestamp": {
+            "type": "string",
+            "title": "Timestamp"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Count"
+          },
+          "services": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Services"
+          },
+          "duration_minutes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Minutes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "timestamp",
+          "category",
+          "label",
+          "description"
+        ],
+        "title": "TimelineEventModel"
       },
       "TimelineRequest": {
         "properties": {
@@ -2150,6 +2813,168 @@
         },
         "type": "object",
         "title": "TimelineRequest"
+      },
+      "TimelineResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "scope": {
+            "type": "string",
+            "title": "Scope",
+            "default": "default"
+          },
+          "window": {
+            "$ref": "#/components/schemas/TimeWindow"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/TimelineEventModel"
+            },
+            "type": "array",
+            "title": "Events"
+          },
+          "llm": {
+            "$ref": "#/components/schemas/LlmProvenance"
+          },
+          "rendered_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rendered Text"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "ingestion_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ingestion Job Id"
+          },
+          "all_ingestions": {
+            "type": "boolean",
+            "title": "All Ingestions",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "window",
+          "llm"
+        ],
+        "title": "TimelineResponse"
+      },
+      "TriggerDiffModel": {
+        "properties": {
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service"
+          },
+          "only_in": {
+            "type": "string",
+            "title": "Only In"
+          },
+          "marker": {
+            "type": "string",
+            "title": "Marker"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message",
+          "only_in",
+          "marker"
+        ],
+        "title": "TriggerDiffModel"
+      },
+      "TriggerInfo": {
+        "properties": {
+          "detected": {
+            "type": "boolean",
+            "title": "Detected"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type"
+          },
+          "service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service"
+          },
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At"
+          },
+          "correlation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correlation"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detected"
+        ],
+        "title": "TriggerInfo"
       },
       "ValidationError": {
         "properties": {

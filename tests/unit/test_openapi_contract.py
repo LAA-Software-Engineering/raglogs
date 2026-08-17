@@ -1,7 +1,7 @@
 """OpenAPI contract tests — fail CI if a canonical /v1 path is removed.
 
-Loads the schema from ``app.openapi()`` (no live server). JSON response
-shapes are not asserted here; that is G7.
+Loads the schema from ``app.openapi()`` (no live server). JSON response shapes are asserted in ``tests/unit/test_query_schema.py`` against
+``schema_version`` 1.0.
 """
 
 from __future__ import annotations
