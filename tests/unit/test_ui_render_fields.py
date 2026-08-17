@@ -53,7 +53,9 @@ def trigger_candidates_from(data: dict[str, Any]) -> list[Any]:
 
 def render_trigger_candidate(trigger: dict[str, Any]) -> str:
     """Mirror of ``renderTriggerCandidate`` in app.js."""
-    message = trigger.get("message") or trigger.get("detail") or trigger.get("type") or ""
+    message = (
+        trigger.get("message") or trigger.get("detail") or trigger.get("type") or ""
+    )
     ts = _fmt_time(trigger.get("timestamp") or trigger.get("at"))
     extras: list[str] = []
     if trigger.get("service"):
@@ -64,7 +66,9 @@ def render_trigger_candidate(trigger: dict[str, Any]) -> str:
         extras.append(_escape(trigger["type"]))
     if trigger.get("correlation"):
         extras.append(_escape(trigger["correlation"]))
-    extras_html = f'<div class="cluster-meta">{" · ".join(extras)}</div>' if extras else ""
+    extras_html = (
+        f'<div class="cluster-meta">{" · ".join(extras)}</div>' if extras else ""
+    )
     return (
         f'<div class="cluster-card">'
         f'<div class="cluster-message">{_escape(message)}</div>'
@@ -134,7 +138,9 @@ def render_trigger_diff_list(title: str, items: Any, css_class: str) -> str:
             if t.get("service")
             else ""
         )
-        rows.append(f'<li class="{css_class}">{_escape(t.get("message"))}{service}</li>')
+        rows.append(
+            f'<li class="{css_class}">{_escape(t.get("message"))}{service}</li>'
+        )
     return (
         f'<div class="section-title">{_escape(title)}</div>'
         f'<ul class="plain-list">{"".join(rows)}</ul>'
@@ -165,7 +171,11 @@ def timeline_event_meta(event: dict[str, Any]) -> str:
 def render_timeline_event(event: dict[str, Any]) -> str:
     """Mirror of ``renderTimelineEvent`` in app.js."""
     meta = timeline_event_meta(event)
-    title_bits = [b for b in (event.get("label"), event.get("category"), event.get("description")) if b]
+    title_bits = [
+        b
+        for b in (event.get("label"), event.get("category"), event.get("description"))
+        if b
+    ]
     title_attr = f' title="{_escape(" · ".join(title_bits))}"' if title_bits else ""
     meta_html = f'<div class="timeline-meta">{meta}</div>' if meta else ""
     return (
