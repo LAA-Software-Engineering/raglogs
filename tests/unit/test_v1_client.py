@@ -47,6 +47,32 @@ def test_explain_targets_v1_and_returns_body() -> None:
     assert payload["llm"]["used"] is False
 
 
+def test_similar_targets_v1() -> None:
+    from src.core.retrieval.similar import QueryCluster, SimilarResult
+
+    start = datetime(2026, 3, 12, 13, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 3, 12, 14, 0, 0, tzinfo=timezone.utc)
+    result = SimilarResult(
+        query_clusters=[QueryCluster(fingerprint="abc123", template="x")],
+        matches=[],
+        retrieval_mode="fingerprint",
+        window_start=start,
+        window_end=end,
+    )
+    mock_db = MagicMock()
+    mock_db.__enter__ = MagicMock(return_value=mock_db)
+    mock_db.__exit__ = MagicMock(return_value=False)
+    http = TestClient(app, raise_server_exceptions=False)
+    with patch("src.db.session.get_db", side_effect=lambda: mock_db), \
+         patch("src.core.retrieval.similar.find_similar_incidents", return_value=result):
+        client = RaglogsClient(base_url="http://testserver", client=http)
+        payload = client.similar(fingerprint="abc123", since="1h")
+
+    assert payload["schema_version"] == "1.0"
+    assert payload["retrieval_mode"] == "fingerprint"
+    assert payload["llm"]["used"] is False
+
+
 def test_health_uses_unversioned_path() -> None:
     http = TestClient(app, raise_server_exceptions=False)
     with patch("src.db.session.check_connection", return_value=False):

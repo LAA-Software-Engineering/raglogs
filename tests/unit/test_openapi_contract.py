@@ -25,6 +25,7 @@ REQUIRED_POST: tuple[str, ...] = (
     "/v1/query/timeline",
     "/v1/query/compare",
     "/v1/query/clusters",
+    "/v1/query/similar",
     "/v1/ingestions",
     "/v1/ingestions/lines",
     "/v1/ingestions/{ingestion_job_id}:pause",
@@ -59,6 +60,8 @@ def test_unversioned_aliases_are_deprecated_in_schema() -> None:
     paths = app.openapi()["paths"]
     assert "/query/explain" in paths
     assert paths["/query/explain"]["post"].get("deprecated") is True
+    assert "/query/similar" in paths
+    assert paths["/query/similar"]["post"].get("deprecated") is True
     assert paths["/ingestions"]["post"].get("deprecated") is True
     assert paths["/config"]["get"].get("deprecated") is True
 

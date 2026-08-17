@@ -11,7 +11,13 @@ from src.core.clustering.baseline import compute_change_ratio, get_baseline_coun
 from src.core.clustering.scoring import compute_importance_score
 from src.core.embeddings.provider import EmbeddingsProvider
 from src.core.normalization.patterns import is_trigger_message
-from src.db.models import DEFAULT_LOG_SCOPE, Cluster, ClusterMember, ClusterRun, LogEntry
+from src.db.models import (
+    DEFAULT_LOG_SCOPE,
+    Cluster,
+    ClusterMember,
+    ClusterRun,
+    LogEntry,
+)
 from src.db.scope_filter import filter_log_entries_by_scope
 from src.utils.time import resolve_baseline_window
 
@@ -74,17 +80,21 @@ def run_clustering(
     rows = db.execute(q).all()
 
     if not rows:
-        cluster_run = _create_cluster_run(db, window_start, window_end, service, environment, save=save_to_db)
+        cluster_run = _create_cluster_run(
+            db, window_start, window_end, service, environment, save=save_to_db
+        )
         return cluster_run, []
 
     # 2. Group by fingerprint
-    groups: dict[str, dict] = defaultdict(lambda: {
-        "messages": [],
-        "services": defaultdict(int),
-        "levels": defaultdict(int),
-        "timestamps": [],
-        "ids": [],
-    })
+    groups: dict[str, dict] = defaultdict(
+        lambda: {
+            "messages": [],
+            "services": defaultdict(int),
+            "levels": defaultdict(int),
+            "timestamps": [],
+            "ids": [],
+        }
+    )
 
     for row in rows:
         fp = row.fingerprint
@@ -106,7 +116,9 @@ def run_clustering(
     if ingestion_job_id:
         baseline_counts: dict[str, int] = {}
     else:
-        baseline_start, baseline_end = resolve_baseline_window(window_start, window_end, baseline_window_str)
+        baseline_start, baseline_end = resolve_baseline_window(
+            window_start, window_end, baseline_window_str
+        )
         baseline_counts = get_baseline_counts(
             db,
             baseline_start,
@@ -132,6 +144,7 @@ def run_clustering(
         rep_msg = ""
         if g["messages"]:
             from collections import Counter
+
             rep_msg = Counter(g["messages"]).most_common(1)[0][0]
 
         is_trigger = is_trigger_message(rep_msg)
@@ -144,20 +157,22 @@ def run_clustering(
             is_trigger_correlated=False,  # refined below after sorting
         )
 
-        clusters.append(ClusterData(
-            fingerprint=fp,
-            representative_message=rep_msg,
-            count=count,
-            services=services,
-            levels=levels,
-            first_seen=timestamps[0] if timestamps else None,
-            last_seen=timestamps[-1] if timestamps else None,
-            baseline_count=baseline_count,
-            change_ratio=change_ratio,
-            importance_score=importance,
-            is_trigger=is_trigger,
-            log_entry_ids=g["ids"],
-        ))
+        clusters.append(
+            ClusterData(
+                fingerprint=fp,
+                representative_message=rep_msg,
+                count=count,
+                services=services,
+                levels=levels,
+                first_seen=timestamps[0] if timestamps else None,
+                last_seen=timestamps[-1] if timestamps else None,
+                baseline_count=baseline_count,
+                change_ratio=change_ratio,
+                importance_score=importance,
+                is_trigger=is_trigger,
+                log_entry_ids=g["ids"],
+            )
+        )
 
     # 5. Optional semantic merge, then rank and cap
     top_clusters, algorithm = rank_and_merge_clusters(clusters, max_clusters)
@@ -175,6 +190,8 @@ def run_clustering(
 
     if save_to_db:
         _persist_clusters(db, cluster_run, top_clusters)
+
+    _maybe_persist_cluster_embeddings(db, top_clusters, scope)
 
     return cluster_run, top_clusters
 
@@ -222,13 +239,17 @@ def _create_cluster_run(
     return run
 
 
-def _persist_clusters(db: Session, cluster_run: ClusterRun, clusters: list[ClusterData]) -> None:
+def _persist_clusters(
+    db: Session, cluster_run: ClusterRun, clusters: list[ClusterData]
+) -> None:
     for cd in clusters:
         cluster = Cluster(
             id=uuid.uuid4(),
             cluster_run_id=cluster_run.id,
             cluster_key=cd.fingerprint,
-            representative_message=cd.representative_message[:2048] if cd.representative_message else None,
+            representative_message=cd.representative_message[:2048]
+            if cd.representative_message
+            else None,
             fingerprint=cd.fingerprint,
             count=cd.count,
             services_json=list(cd.services.keys()),
@@ -253,3 +274,25 @@ def _persist_clusters(db: Session, cluster_run: ClusterRun, clusters: list[Clust
             db.add(member)
 
     db.flush()
+
+
+def _maybe_persist_cluster_embeddings(
+    db: Session,
+    clusters: list[ClusterData],
+    scope: str,
+) -> None:
+    """Upsert cluster template vectors. Fail-open so clustering never raises."""
+    if not clusters:
+        return
+    try:
+        from src.core.embeddings.store import persist_cluster_embeddings
+
+        persist_cluster_embeddings(db, clusters, scope=scope)
+    except Exception:
+        import structlog
+
+        structlog.get_logger().warning(
+            "cluster_embeddings_hook_failed",
+            count=len(clusters),
+            exc_info=True,
+        )

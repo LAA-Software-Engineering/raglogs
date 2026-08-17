@@ -665,13 +665,14 @@ All settings are read from `.env`, environment variables, or CLI flags. Priority
 | `OPENAI_API_KEY` | _(empty)_ | API key for OpenAI or compatible endpoint |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Base URL for OpenAI-compatible API |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
-| `EMBEDDINGS_PROVIDER` | `disabled` | `disabled`, `openai`, `local`. Cluster merge and semantic `ask` are skipped when `disabled` |
+| `EMBEDDINGS_PROVIDER` | `disabled` | `disabled`, `openai`, `local`. Cluster merge, semantic `ask`, and `/similar` ANN skip when `disabled` |
 | `EMBEDDINGS_MODEL` | `text-embedding-3-small` | Embeddings model name |
 | `EMBEDDINGS_DIMENSIONS` | `1536` | Vector size passed to the OpenAI embeddings API. Persist/ask skip unless this is 1536 (stored column width) |
 | `CLUSTER_MERGE_SIMILARITY_THRESHOLD` | `0.92` | Cosine similarity at or above which fingerprint clusters merge. High on purpose so distinct errors stay separate |
 | `CLUSTER_MERGE_MIN_COUNT` | `1` | Minimum `count` for a cluster to participate in a merge |
 | `ASK_SEMANTIC_TOP_K` | `100` | Max log lines returned by semantic `ask` |
 | `ASK_SEMANTIC_MIN_SIMILARITY` | `0.75` | Minimum cosine similarity for a semantic `ask` hit. Looser than cluster-merge because questions paraphrase |
+| `SIMILAR_SEMANTIC_MIN_SIMILARITY` | `0.80` | Minimum cosine similarity for `POST /v1/query/similar`. Falls back to fingerprint equality when embeddings are down |
 | `DEFAULT_BASELINE_WINDOW` | `24h` | How far back to compare for baseline |
 | `MAX_CLUSTERS_FOR_EXPLAIN` | `10` | Max clusters sent to the explain pipeline |
 | `MAX_EVIDENCE_ITEMS` | `8` | Max evidence lines in output |
@@ -855,8 +856,9 @@ Fingerprinting can still split one incident across multiple clusters when wordin
 
 - **Disabled (default).** `EMBEDDINGS_PROVIDER=disabled` skips the merge pass entirely. Clustering is fingerprint-only and deterministic — the same logs always produce the same clusters.
 - **Enabled.** With `openai` or `local`, representatives are embedded at analysis time (in memory; not written to pgvector). Pairs with cosine similarity ≥ `CLUSTER_MERGE_SIMILARITY_THRESHOLD` (default **0.92**) are merged via connected components. Merged `count` is the sum of member counts; services and levels are summed; `first_seen` is the earliest timestamp and `last_seen` the latest; importance is recomputed. The canonical fingerprint is the member with the highest importance score. `ClusterRun.algorithm` is `fingerprint+semantic` when embeddings were used, even if no pair crossed the threshold.
-- **Fail open.** If the embeddings backend is missing, raises, or returns unusable vectors, clustering continues with the fingerprint-only set.
-- **Ask vs merge.** Semantic `ask` uses the *stored* `log_embeddings` table (populated by `raglogs ingest --with-embeddings`) and `ASK_SEMANTIC_MIN_SIMILARITY` (default **0.75**). Cluster merge still uses its own in-memory pass and threshold. Similar-incident search (`POST /v1/query/similar` / historical cluster ANN) is not in this release. Compare still applies its own heuristic collapse for webhook retries / queue growth after clustering.
+- **Fail open.** If the embeddings backend is missing, raises, or returns unusable vectors, clustering continues with the fingerprint-only set. The same fail-open applies when upserting `cluster_embeddings` for similar-incident search: a provider outage never fails the cluster run.
+- **Cluster template persist.** After clustering, raglogs upserts each cluster's representative template into `cluster_embeddings` keyed by `(scope, fingerprint)` when the embeddings provider is available. Similar-incident search queries those rows (not raw `log_embeddings`). Skip happens automatically when `EMBEDDINGS_PROVIDER=disabled`.
+- **Ask vs merge vs similar.** Semantic `ask` uses the *stored* `log_embeddings` table (populated by `raglogs ingest --with-embeddings`) and `ASK_SEMANTIC_MIN_SIMILARITY` (default **0.75**). Cluster merge still uses its own in-memory pass and threshold. Similar-incident search (`POST /v1/query/similar`) uses the `cluster_embeddings` table (upserted at analysis time when an embeddings provider is available) and `SIMILAR_SEMANTIC_MIN_SIMILARITY` (default **0.80**). Compare still applies its own heuristic collapse for webhook retries / queue growth after clustering.
 
 Local embeddings require the optional extra: `pip install 'raglogs[local-embeddings]'` (`sentence-transformers`). If that import fails, merge is skipped.
 
@@ -972,6 +974,15 @@ Keys are stored argon2-hashed with a short indexed prefix. Each key is **pinned*
 
 A pinned key that sends a different non-empty scope returns **403** `SCOPE_MISMATCH`. The CLI is scope-optional and defaults to `default` (`raglogs ingest --scope incident:INC-9`, `raglogs explain --scope …`). Each new key also gets a `whsec_…` webhook signing secret (shown once; `keys list` shows `whsec_****` only).
 
+**`POST /v1/query/similar` cross-scope permissions.** Similar-incident search can look across isolation scopes ("we saw this in INC-1188") when the caller is allowed to see those scopes. Matches from a scope the caller cannot see are never returned.
+
+| Caller | Cross-scope similar |
+|---|---|
+| `admin` keys | Yes by default. Pass `"cross_scope": false` to pin to the resolved scope. |
+| `query` keys that are pinned | Same-scope only. `"cross_scope": true` is ignored. |
+| `query` keys minted with `--allow-scope-override` | Same-scope unless the body sets `"cross_scope": true`. |
+| `AUTH_ENABLED=false` (local CLI / demo) | Cross-scope allowed by default. Pass `"cross_scope": false` to pin. |
+
 Optional OIDC: set `AUTH_MODE=oidc` or `both` and `OIDC_ISSUER`. A JWT (three dotted segments) is validated via JWKS (`iss`, `exp`, and `aud` when `OIDC_AUDIENCE` is set). Role comes from claim `raglogs_role` or `roles`, defaulting to `query`. When `AUTH_MODE=api_key`, JWTs are rejected.
 
 If auth is disabled and the process binds a non-loopback address (`0.0.0.0`, `::`, a public IP), raglogs logs a warning. Set `AUTH_REFUSE_INSECURE_BIND=true` to refuse startup instead.
@@ -992,6 +1003,7 @@ If auth is disabled and the process binds a non-loopback address (`0.0.0.0`, `::
 | `POST` | `/v1/query/clusters` | List top clusters |
 | `POST` | `/v1/query/timeline` | Reconstruct incident timeline for a window |
 | `POST` | `/v1/query/compare` | Diff two time windows (same semantics as `raglogs compare`) |
+| `POST` | `/v1/query/similar` | Prior incidents with nearby fingerprints ("we saw this in INC-1188") |
 | `GET` | `/v1/config` | Read effective configuration |
 
 **Push NDJSON.** `POST /v1/ingestions/lines` accepts newline-delimited lines (`Content-Type: application/x-ndjson`, `application/jsonl`, or `text/plain`). Each line is a raw log string or a JSON object with at least `message` / `raw` / `text` (optional `timestamp`, `service`, `level`, `host`, `env`). Cap is `INGEST_PUSH_MAX_LINES` (default 5000); over the cap returns 400.
@@ -1133,7 +1145,15 @@ curl -X POST http://localhost:8000/v1/query/timeline \
 
 **Compare** — `POST /v1/query/compare` matches `raglogs compare`: either `"since"` + `"baseline"` (durations, window A ends at request time) or explicit `window_a_from` / `window_a_to` / `window_b_from` / `window_b_to`. Optional `"format": "text"` adds `rendered_text` (and a `text` alias). Cluster diffs include a `marker` (`+` / `-` / `↑` / `↓`; triggers use `+⚡` / `-⚡`). Compare is rules-only.
 
-Published JSON Schema files live in `clients/jsonschema/` (`explain.v1.json`, `timeline.v1.json`, `compare.v1.json`, `ask.v1.json`). Export with `make jsonschema`.
+**Similar** — `POST /v1/query/similar` finds prior incidents whose cluster templates are near the current window's primary fingerprint(s). Pass `since` / `from_time` / `to_time` or `ingestion_job_id` to cluster the current incident, or skip clustering with `"fingerprint"` / `"fingerprints"`. Optional `"top"` (default 10) and `"cross_scope"` (see permissions above). Response `retrieval_mode` is `"semantic"` when pgvector ANN over `cluster_embeddings` hits, otherwise `"fingerprint"` (exact fingerprint equality, never HTTP 500 when embeddings are down). Rules-only (`llm.used` is always false).
+
+```bash
+curl -X POST http://localhost:8000/v1/query/similar \
+  -H "Content-Type: application/json" \
+  -d '{"since": "1h", "cross_scope": true}'
+```
+
+Published JSON Schema files live in `clients/jsonschema/` (`explain.v1.json`, `timeline.v1.json`, `compare.v1.json`, `ask.v1.json`, `clusters.v1.json`, `similar.v1.json`). Export with `make jsonschema`.
 
 ```bash
 curl -X POST http://localhost:8000/v1/query/compare \

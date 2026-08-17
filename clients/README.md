@@ -16,7 +16,7 @@ Versioned response bodies (`schema_version` 1.0) are published as JSON Schema:
 
 ```bash
 make jsonschema
-# writes clients/jsonschema/explain.v1.json (and timeline/compare/ask/clusters)
+# writes clients/jsonschema/explain.v1.json (and timeline/compare/ask/clusters/similar)
 ```
 
 ## Python

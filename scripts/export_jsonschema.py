@@ -19,6 +19,7 @@ from src.api.schemas.v1 import (  # noqa: E402
     ClustersResponse,
     CompareResponse,
     ExplainResponse,
+    SimilarResponse,
     TimelineResponse,
 )
 
@@ -28,6 +29,7 @@ MODELS: tuple[tuple[str, type], ...] = (
     ("compare.v1.json", CompareResponse),
     ("ask.v1.json", AskResponse),
     ("clusters.v1.json", ClustersResponse),
+    ("similar.v1.json", SimilarResponse),
 )
 
 

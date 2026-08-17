@@ -1,0 +1,195 @@
+{
+  "$defs": {
+    "LlmProvenance": {
+      "properties": {
+        "used": {
+          "title": "Used",
+          "type": "boolean"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "fell_back": {
+          "title": "Fell Back",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "used",
+        "provider",
+        "model",
+        "fell_back"
+      ],
+      "title": "LlmProvenance",
+      "type": "object"
+    },
+    "SimilarMatchModel": {
+      "properties": {
+        "scope": {
+          "title": "Scope",
+          "type": "string"
+        },
+        "fingerprint": {
+          "title": "Fingerprint",
+          "type": "string"
+        },
+        "template": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Template"
+        },
+        "similarity": {
+          "title": "Similarity",
+          "type": "number"
+        },
+        "first_seen": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "First Seen"
+        },
+        "last_seen": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Seen"
+        },
+        "count": {
+          "default": 0,
+          "title": "Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "scope",
+        "fingerprint",
+        "similarity"
+      ],
+      "title": "SimilarMatchModel",
+      "type": "object"
+    },
+    "SimilarQueryCluster": {
+      "properties": {
+        "fingerprint": {
+          "title": "Fingerprint",
+          "type": "string"
+        },
+        "template": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Template"
+        }
+      },
+      "required": [
+        "fingerprint"
+      ],
+      "title": "SimilarQueryCluster",
+      "type": "object"
+    },
+    "TimeWindow": {
+      "description": "Inclusive analysis window. Serialized as ``from`` / ``to`` (ISO-8601).",
+      "properties": {
+        "from": {
+          "title": "From",
+          "type": "string"
+        },
+        "to": {
+          "title": "To",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "title": "TimeWindow",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "schema_version": {
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "scope": {
+      "default": "default",
+      "title": "Scope",
+      "type": "string"
+    },
+    "window": {
+      "$ref": "#/$defs/TimeWindow"
+    },
+    "query_clusters": {
+      "items": {
+        "$ref": "#/$defs/SimilarQueryCluster"
+      },
+      "title": "Query Clusters",
+      "type": "array"
+    },
+    "matches": {
+      "items": {
+        "$ref": "#/$defs/SimilarMatchModel"
+      },
+      "title": "Matches",
+      "type": "array"
+    },
+    "retrieval_mode": {
+      "default": "fingerprint",
+      "title": "Retrieval Mode",
+      "type": "string"
+    },
+    "llm": {
+      "$ref": "#/$defs/LlmProvenance"
+    },
+    "rendered_text": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Rendered Text"
+    }
+  },
+  "required": [
+    "window",
+    "llm"
+  ],
+  "title": "SimilarResponse",
+  "type": "object"
+}

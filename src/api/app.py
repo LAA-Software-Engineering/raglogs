@@ -12,7 +12,7 @@ from src.api.auth.middleware import AuthMiddleware
 from src.api.auth.scope import ScopeResolutionError, scope_error_response
 from src.api.deprecation import DeprecationHeaderMiddleware
 from src.api.ratelimit import RateLimitMiddleware
-from src.api.routes import ask, clusters, compare_windows, config, explain, health, ingestions, timeline, ui
+from src.api.routes import ask, clusters, compare_windows, config, explain, health, ingestions, similar, timeline, ui
 
 _OPENAPI_DESCRIPTION = """Incident explanation API — ask your logs what happened.
 
@@ -101,6 +101,7 @@ _include_v1_and_alias(ask.router, suffix="/query", tags=["query"])
 _include_v1_and_alias(clusters.router, suffix="/query", tags=["query"])
 _include_v1_and_alias(timeline.router, suffix="/query", tags=["query"])
 _include_v1_and_alias(compare_windows.router, suffix="/query", tags=["query"])
+_include_v1_and_alias(similar.router, suffix="/query", tags=["query"])
 _include_v1_and_alias(config.router, suffix="/config", tags=["config"])
 
 app.mount(
