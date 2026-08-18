@@ -51,7 +51,7 @@ jobs:
       run: |
         PYTHONPATH=. python scripts/export_openapi.py
     - name: Upload OpenAPI artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: openapi.json
         path: clients/openapi.json
