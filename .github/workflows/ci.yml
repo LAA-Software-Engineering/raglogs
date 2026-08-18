@@ -69,7 +69,7 @@ jobs:
         name: openapi.json
         path: artifacts
     - name: Attach openapi.json to GitHub Release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       with:
         files: artifacts/openapi.json
       env:
