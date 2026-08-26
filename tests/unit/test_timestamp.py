@@ -1,0 +1,53 @@
+"""parse_timestamp_field must treat numeric strings the same as numbers.
+
+Millisecond-epoch timestamps encoded as strings (as many JSON log sources
+emit them) previously fell through dateutil, then the Unix-timestamp regex
+in extract_timestamp - which requires an exact 10-digit match - and came
+out as None. Log lines with a None timestamp are silently dropped from
+every windowed query (clustering, explain, timeline, compare).
+"""
+
+from datetime import datetime, timezone
+
+from src.core.parsing.timestamp import parse_timestamp_field
+
+MS_EPOCH = 1710280870123
+SEC_EPOCH = 1710280870
+EXPECTED_MS = datetime(2024, 3, 12, 22, 1, 10, 123000, tzinfo=timezone.utc)
+EXPECTED_SEC = datetime(2024, 3, 12, 22, 1, 10, tzinfo=timezone.utc)
+
+
+def test_string_millisecond_epoch_matches_numeric_millisecond_epoch():
+    assert (
+        parse_timestamp_field(str(MS_EPOCH))
+        == parse_timestamp_field(MS_EPOCH)
+        == EXPECTED_MS
+    )
+
+
+def test_string_second_epoch_matches_numeric_second_epoch():
+    assert (
+        parse_timestamp_field(str(SEC_EPOCH))
+        == parse_timestamp_field(SEC_EPOCH)
+        == EXPECTED_SEC
+    )
+
+
+def test_string_epoch_with_surrounding_whitespace_still_parses():
+    assert parse_timestamp_field(f" {MS_EPOCH} ") == EXPECTED_MS
+
+
+def test_string_fractional_epoch_parses():
+    assert parse_timestamp_field(f"{SEC_EPOCH}.5") == datetime(
+        2024, 3, 12, 22, 1, 10, 500000, tzinfo=timezone.utc
+    )
+
+
+def test_iso_string_still_parses_via_dateutil():
+    assert parse_timestamp_field("2026-03-12T22:01:10Z") == datetime(
+        2026, 3, 12, 22, 1, 10, tzinfo=timezone.utc
+    )
+
+
+def test_unparseable_string_returns_none():
+    assert parse_timestamp_field("not a timestamp") is None

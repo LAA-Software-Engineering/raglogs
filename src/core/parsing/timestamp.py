@@ -50,6 +50,12 @@ def parse_timestamp_field(value: str | int | float) -> Optional[datetime]:
             return None
 
     if isinstance(value, str):
+        stripped = value.strip()
+        if re.fullmatch(r"-?\d+(?:\.\d+)?", stripped):
+            # A bare numeric string is a Unix epoch, not a calendar date -
+            # route it through the (already millisecond-aware) numeric branch
+            # instead of dateutil, which misreads long digit runs as years.
+            return parse_timestamp_field(float(stripped))
         try:
             dt = dateutil_parser.parse(value)
             if dt.tzinfo is None:
