@@ -14,6 +14,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from src.core.explain.confidence import score_from_label
 from src.core.normalization.patterns import infer_trigger_type
+from src.utils.time import rewrite_iso_z
 
 if TYPE_CHECKING:
     from src.core.explain.summarizer import ExplainResult
@@ -387,10 +388,15 @@ def evidence_from_items(items: Any) -> list[EvidenceItem]:
 
 
 def _parse_iso(value: Optional[str]) -> Optional[datetime]:
+    """Optional ISO parse for API payloads; shares only the Z-rewrite helper.
+
+    Unlike ``src.utils.time.parse_iso``, this returns ``None`` for empty/invalid
+    input and leaves naive datetimes naive.
+    """
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return datetime.fromisoformat(rewrite_iso_z(value))
     except ValueError:
         return None
 

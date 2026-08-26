@@ -7,6 +7,7 @@ from src.utils.time import (
     parse_iso,
     resolve_baseline_window,
     resolve_window,
+    rewrite_iso_z,
 )
 
 
@@ -94,6 +95,21 @@ def _simulate_py310_fromisoformat(monkeypatch):
     monkeypatch.setattr(time_mod, "datetime", Py310DateTime)
 
 
+class TestRewriteIsoZ:
+    """Shared trailing-Z rewrite used by CLI parse_iso and API _parse_iso."""
+
+    def test_trailing_z_to_offset(self):
+        assert rewrite_iso_z("2026-03-12T22:00:00Z") == "2026-03-12T22:00:00+00:00"
+
+    def test_non_z_unchanged(self):
+        assert rewrite_iso_z("2026-03-12T22:00:00+05:00") == "2026-03-12T22:00:00+05:00"
+        assert rewrite_iso_z("2026-03-12T22:00:00") == "2026-03-12T22:00:00"
+
+    def test_only_terminal_z(self):
+        # Global replace would mangle this; trailing-only rewrite must not.
+        assert rewrite_iso_z("Z2026-03-12T22:00:00") == "Z2026-03-12T22:00:00"
+
+
 class TestParseIso:
     """CLI ISO parsing must work on Python 3.10, which rejects trailing Z."""
 
@@ -122,3 +138,53 @@ class TestParseIso:
     def test_invalid_raises(self):
         with pytest.raises(ValueError):
             parse_iso("not-a-timestamp")
+
+
+class TestApiParseIsoWrapper:
+    """API _parse_iso wraps rewrite_iso_z; keeps Optional/swallow/leave-naive."""
+
+    def test_accepts_trailing_z(self):
+        from src.api.schemas.v1 import _parse_iso
+
+        dt = _parse_iso("2026-03-12T22:00:00Z")
+        assert dt == datetime(2026, 3, 12, 22, 0, 0, tzinfo=timezone.utc)
+
+    def test_accepts_z_when_fromisoformat_rejects_it(self, monkeypatch):
+        import src.api.schemas.v1 as v1_mod
+        import src.utils.time as time_mod
+
+        real_fromisoformat = time_mod.datetime.fromisoformat
+
+        class Py310DateTime(time_mod.datetime):
+            @classmethod
+            def fromisoformat(cls, date_string):
+                if isinstance(date_string, str) and date_string.endswith("Z"):
+                    raise ValueError(f"Invalid isoformat string: '{date_string}'")
+                return real_fromisoformat(date_string)
+
+        monkeypatch.setattr(v1_mod, "datetime", Py310DateTime)
+        monkeypatch.setattr(time_mod, "datetime", Py310DateTime)
+
+        from src.api.schemas.v1 import _parse_iso
+
+        dt = _parse_iso("2026-03-12T22:00:00Z")
+        assert dt == datetime(2026, 3, 12, 22, 0, 0, tzinfo=timezone.utc)
+
+    def test_invalid_returns_none(self):
+        from src.api.schemas.v1 import _parse_iso
+
+        assert _parse_iso("not-a-timestamp") is None
+
+    def test_empty_and_none_return_none(self):
+        from src.api.schemas.v1 import _parse_iso
+
+        assert _parse_iso(None) is None
+        assert _parse_iso("") is None
+
+    def test_naive_left_naive(self):
+        from src.api.schemas.v1 import _parse_iso
+
+        dt = _parse_iso("2026-03-12T22:00:00")
+        assert dt == datetime(2026, 3, 12, 22, 0, 0)
+        assert dt.tzinfo is None
+
