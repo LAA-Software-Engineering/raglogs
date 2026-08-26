@@ -1,20 +1,22 @@
 import math
-from typing import Optional
 
 from src.config import get_settings
 
 
-SEVERITY_WEIGHTS = {
-    "fatal": 5.0,
-    "critical": 5.0,
-    "error": 4.0,
-    "err": 4.0,
-    "warn": 3.0,
-    "warning": 3.0,
-    "info": 1.0,
-    "debug": 0.5,
-    "trace": 0.5,
-}
+def _severity_weights() -> dict[str, float]:
+    """Build the level-name -> weight table from the configured severity_weight_* settings."""
+    settings = get_settings()
+    return {
+        "fatal": settings.severity_weight_fatal,
+        "critical": settings.severity_weight_fatal,
+        "error": settings.severity_weight_error,
+        "err": settings.severity_weight_error,
+        "warn": settings.severity_weight_warn,
+        "warning": settings.severity_weight_warn,
+        "info": settings.severity_weight_info,
+        "debug": settings.severity_weight_debug,
+        "trace": settings.severity_weight_debug,
+    }
 
 
 def get_severity_weight(levels_distribution: dict[str, int]) -> float:
@@ -26,9 +28,10 @@ def get_severity_weight(levels_distribution: dict[str, int]) -> float:
     if total == 0:
         return 1.0
 
+    weights = _severity_weights()
     weighted = 0.0
     for level, count in levels_distribution.items():
-        weight = SEVERITY_WEIGHTS.get(level.lower(), 1.0)
+        weight = weights.get(level.lower(), 1.0)
         weighted += weight * (count / total)
 
     return weighted
