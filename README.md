@@ -1382,10 +1382,6 @@ New source adapters go in `src/adapters/` and implement `SourceAdapter` (`discov
 
 ---
 
-## Roadmap
-
----
-
 ## License
 
 MIT
