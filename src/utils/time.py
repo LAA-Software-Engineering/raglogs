@@ -3,6 +3,34 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 
+def rewrite_iso_z(value: str) -> str:
+    """Rewrite a trailing ISO 8601 ``Z`` designator to ``+00:00``.
+
+    Python 3.10's ``datetime.fromisoformat`` rejects ``Z``. Only a terminal
+    ``Z`` is rewritten; this is the shared rewrite used by ``parse_iso`` and
+    the API's ``_parse_iso`` wrapper.
+    """
+    return value[:-1] + "+00:00" if value.endswith("Z") else value
+
+
+def parse_iso(value: str) -> datetime:
+    """Parse an ISO 8601 datetime, including a trailing Z (UTC).
+
+    Python 3.10's ``datetime.fromisoformat`` rejects ``Z``. Applies the shared
+    trailing-``Z`` → ``+00:00`` rewrite first. Naive values are treated as UTC
+    so CLI windows stay timezone-aware without ``.replace(tzinfo=...)``
+    clobbering a real offset.
+
+    Contract differs from the API ``_parse_iso`` wrapper, which is Optional,
+    swallows ``ValueError``, and leaves naive datetimes naive; only the
+    Z-rewrite is shared.
+    """
+    dt = datetime.fromisoformat(rewrite_iso_z(value))
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def parse_duration(duration_str: str) -> timedelta:
     """
     Parse a duration string like '30m', '1h', '24h', '7d' into a timedelta.

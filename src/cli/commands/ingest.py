@@ -93,17 +93,16 @@ def ingest_cmd(
                     )
                 else:
                     import uuid
-                    from datetime import datetime
 
                     from src.adapters.base import SourceSpec, TimeWindow
                     from src.core.ingestion.service import ingest_from_source
                     from src.db.models import IngestionJob
-                    from src.utils.time import resolve_window
+                    from src.utils.time import parse_iso, resolve_window
 
                     window = None
                     if since or from_time or to_time:
-                        from_dt = datetime.fromisoformat(from_time) if from_time else None
-                        to_dt = datetime.fromisoformat(to_time) if to_time else None
+                        from_dt = parse_iso(from_time) if from_time else None
+                        to_dt = parse_iso(to_time) if to_time else None
                         w_start, w_end = resolve_window(since=since, from_time=from_dt, to_time=to_dt)
                         window = TimeWindow(start=w_start, end=w_end)
 

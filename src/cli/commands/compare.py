@@ -72,7 +72,7 @@ def compare_cmd(
     from src.core.explain.evidence import assemble_evidence
     from src.core.explain.summarizer import get_latest_ingestion_job_id
     from src.db.session import get_db
-    from src.utils.time import parse_duration
+    from src.utils.time import parse_duration, parse_iso
 
     now = datetime.now(tz=timezone.utc)
 
@@ -91,10 +91,10 @@ def compare_cmd(
 
         elif window_a_from and window_a_to and window_b_from and window_b_to:
             # Explicit ISO windows
-            a_start = datetime.fromisoformat(window_a_from).replace(tzinfo=timezone.utc)
-            a_end   = datetime.fromisoformat(window_a_to).replace(tzinfo=timezone.utc)
-            b_start = datetime.fromisoformat(window_b_from).replace(tzinfo=timezone.utc)
-            b_end   = datetime.fromisoformat(window_b_to).replace(tzinfo=timezone.utc)
+            a_start = parse_iso(window_a_from)
+            a_end   = parse_iso(window_a_to)
+            b_start = parse_iso(window_b_from)
+            b_end   = parse_iso(window_b_to)
 
         else:
             console.print("[red]Error:[/red] Provide either --since + --baseline, "
