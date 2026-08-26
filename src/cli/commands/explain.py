@@ -27,19 +27,18 @@ def explain_cmd(
 ):
     """Explain what happened in a time window. This is the core command."""
     import uuid
-    from datetime import datetime
 
     from src.core.explain.summarizer import explain_window, get_latest_ingestion_job_id
     from src.db.session import get_db
-    from src.utils.time import resolve_window
+    from src.utils.time import parse_iso, resolve_window
 
     # Status/errors go to stderr for markdown so `> postmortem.md` stays clean.
     ui = Console(stderr=True) if fmt == "markdown" else console
 
     # Resolve window
     try:
-        from_dt = datetime.fromisoformat(from_time) if from_time else None
-        to_dt = datetime.fromisoformat(to_time) if to_time else None
+        from_dt = parse_iso(from_time) if from_time else None
+        to_dt = parse_iso(to_time) if to_time else None
         window_start, window_end = resolve_window(since=since, from_time=from_dt, to_time=to_dt)
     except ValueError as e:
         ui.print(f"[red]Error:[/red] {e}")

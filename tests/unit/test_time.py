@@ -1,7 +1,13 @@
 import pytest
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
-from src.utils.time import parse_duration, resolve_window, resolve_baseline_window, format_window
+from src.utils.time import (
+    format_window,
+    parse_duration,
+    parse_iso,
+    resolve_baseline_window,
+    resolve_window,
+)
 
 
 class TestParseDuration:
@@ -70,3 +76,49 @@ class TestBaselineWindow:
         assert "22:00:00" in result
         assert "22:30:00" in result
         assert "→" in result
+
+
+def _simulate_py310_fromisoformat(monkeypatch):
+    """Python 3.10 rejects a trailing Z; datetime.fromisoformat cannot be patched."""
+    import src.utils.time as time_mod
+
+    real_fromisoformat = time_mod.datetime.fromisoformat
+
+    class Py310DateTime(time_mod.datetime):
+        @classmethod
+        def fromisoformat(cls, date_string):
+            if isinstance(date_string, str) and date_string.endswith("Z"):
+                raise ValueError(f"Invalid isoformat string: '{date_string}'")
+            return real_fromisoformat(date_string)
+
+    monkeypatch.setattr(time_mod, "datetime", Py310DateTime)
+
+
+class TestParseIso:
+    """CLI ISO parsing must work on Python 3.10, which rejects trailing Z."""
+
+    def test_accepts_trailing_z(self):
+        dt = parse_iso("2026-03-12T22:00:00Z")
+        assert dt == datetime(2026, 3, 12, 22, 0, 0, tzinfo=timezone.utc)
+
+    def test_accepts_z_when_fromisoformat_rejects_it(self, monkeypatch):
+        _simulate_py310_fromisoformat(monkeypatch)
+        dt = parse_iso("2026-03-12T22:00:00Z")
+        assert dt == datetime(2026, 3, 12, 22, 0, 0, tzinfo=timezone.utc)
+
+    def test_preserves_numeric_offset(self):
+        dt = parse_iso("2026-03-12T22:00:00+05:00")
+        assert dt.utcoffset() == timedelta(hours=5)
+        assert dt.replace(tzinfo=None) == datetime(2026, 3, 12, 22, 0, 0)
+
+    def test_naive_assumed_utc(self):
+        dt = parse_iso("2026-03-12T22:00:00")
+        assert dt == datetime(2026, 3, 12, 22, 0, 0, tzinfo=timezone.utc)
+
+    def test_plus_00_00(self):
+        dt = parse_iso("2026-03-12T22:00:00+00:00")
+        assert dt == datetime(2026, 3, 12, 22, 0, 0, tzinfo=timezone.utc)
+
+    def test_invalid_raises(self):
+        with pytest.raises(ValueError):
+            parse_iso("not-a-timestamp")

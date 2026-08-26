@@ -25,16 +25,15 @@ def clusters_cmd(
 ):
     """List top log clusters in a time window."""
     import uuid
-    from datetime import datetime
 
     from src.core.clustering.clusterer import run_clustering
     from src.core.explain.summarizer import get_latest_ingestion_job_id
     from src.db.session import get_db
-    from src.utils.time import format_window, resolve_window
+    from src.utils.time import format_window, parse_iso, resolve_window
 
     try:
-        from_dt = datetime.fromisoformat(from_time) if from_time else None
-        to_dt = datetime.fromisoformat(to_time) if to_time else None
+        from_dt = parse_iso(from_time) if from_time else None
+        to_dt = parse_iso(to_time) if to_time else None
         window_start, window_end = resolve_window(since=since, from_time=from_dt, to_time=to_dt)
     except ValueError as e:
         console.print(f"[red]Error:[/red] {e}")
