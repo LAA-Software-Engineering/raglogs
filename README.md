@@ -37,7 +37,6 @@ raglogs explains incidents.
 - [HTTP API](#http-api)
 - [Web UI](#web-ui)
 - [Development](#development)
-- [Roadmap](#roadmap)
 
 ---
 
