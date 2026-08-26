@@ -39,6 +39,51 @@ class ClusterData:
     merged_fingerprints: list[str] = field(default_factory=list)
 
 
+def _build_cluster_data(
+    fingerprint: str, group: dict, baseline_counts: dict[str, int]
+) -> ClusterData:
+    """Build a ClusterData from one fingerprint's grouped log rows."""
+    count = len(group["ids"])
+    services = dict(group["services"])
+    levels = dict(group["levels"])
+    timestamps = sorted([t for t in group["timestamps"] if t is not None])
+
+    baseline_count = baseline_counts.get(fingerprint, 0)
+    change_ratio = compute_change_ratio(count, baseline_count)
+
+    # Representative message: most common
+    rep_msg = ""
+    if group["messages"]:
+        from collections import Counter
+
+        rep_msg = Counter(group["messages"]).most_common(1)[0][0]
+
+    is_trigger = is_trigger_message(rep_msg)
+
+    importance = compute_importance_score(
+        count=count,
+        levels_distribution=levels,
+        change_ratio=change_ratio,
+        services_count=len(services),
+        is_trigger_correlated=is_trigger,
+    )
+
+    return ClusterData(
+        fingerprint=fingerprint,
+        representative_message=rep_msg,
+        count=count,
+        services=services,
+        levels=levels,
+        first_seen=timestamps[0] if timestamps else None,
+        last_seen=timestamps[-1] if timestamps else None,
+        baseline_count=baseline_count,
+        change_ratio=change_ratio,
+        importance_score=importance,
+        is_trigger=is_trigger,
+        log_entry_ids=group["ids"],
+    )
+
+
 def run_clustering(
     db: Session,
     window_start: datetime,
@@ -171,50 +216,9 @@ def _run_clustering(
         )
 
     # 4. Build cluster data
-    clusters: list[ClusterData] = []
-
-    for fp, g in groups.items():
-        count = len(g["ids"])
-        services = dict(g["services"])
-        levels = dict(g["levels"])
-        timestamps = sorted([t for t in g["timestamps"] if t is not None])
-
-        baseline_count = baseline_counts.get(fp, 0)
-        change_ratio = compute_change_ratio(count, baseline_count)
-
-        # Representative message: most common
-        rep_msg = ""
-        if g["messages"]:
-            from collections import Counter
-
-            rep_msg = Counter(g["messages"]).most_common(1)[0][0]
-
-        is_trigger = is_trigger_message(rep_msg)
-
-        importance = compute_importance_score(
-            count=count,
-            levels_distribution=levels,
-            change_ratio=change_ratio,
-            services_count=len(services),
-            is_trigger_correlated=False,  # refined below after sorting
-        )
-
-        clusters.append(
-            ClusterData(
-                fingerprint=fp,
-                representative_message=rep_msg,
-                count=count,
-                services=services,
-                levels=levels,
-                first_seen=timestamps[0] if timestamps else None,
-                last_seen=timestamps[-1] if timestamps else None,
-                baseline_count=baseline_count,
-                change_ratio=change_ratio,
-                importance_score=importance,
-                is_trigger=is_trigger,
-                log_entry_ids=g["ids"],
-            )
-        )
+    clusters: list[ClusterData] = [
+        _build_cluster_data(fp, g, baseline_counts) for fp, g in groups.items()
+    ]
 
     # 5. Optional semantic merge, then rank and cap
     top_clusters, algorithm = rank_and_merge_clusters(clusters, max_clusters)
