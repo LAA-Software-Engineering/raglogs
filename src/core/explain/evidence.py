@@ -3,13 +3,30 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import and_, not_, or_, select
 from sqlalchemy.orm import Session
 
+from src.config import get_settings
 from src.core.clustering.clusterer import ClusterData
-from src.core.normalization.patterns import is_trigger_message
+from src.core.normalization.patterns import TRIGGER_PATTERNS, is_trigger_message
 from src.db.models import DEFAULT_LOG_SCOPE, LogEntry
 from src.db.scope_filter import filter_log_entries_by_scope
+
+# TRIGGER_PATTERNS translated to Postgres's case-insensitive regex operator so
+# trigger matching happens in the WHERE clause instead of after a row cap has
+# already discarded everything past the first N log lines in range (#76 review:
+# ordering by timestamp before LIMIT makes *which* rows are examined
+# deterministic, but on a busy scope the earliest N rows can all be non-trigger
+# noise, silently excluding a real trigger that occurs later in range). None of
+# the patterns use \b, lookaround, or other constructs where Python's `re` and
+# Postgres's ARE dialect diverge — verified match-for-match against a live
+# Postgres for every pattern in tests/integration/test_trigger_search.py.
+_TRIGGER_SQL_PATTERNS = [p.pattern for p in TRIGGER_PATTERNS]
+
+# Safety valve, not the primary recall mechanism now that the WHERE clause
+# already narrows to trigger-shaped rows: real trigger phrasing is rare, so
+# this should only ever bind on pathological/adversarial log content.
+_TRIGGER_ROW_CAP = 5000
 
 
 def _trunc(text: str, max_len: int) -> str:
@@ -49,44 +66,99 @@ def find_trigger_candidates(
     db: Session,
     window_start: datetime,
     window_end: datetime,
-    lookback_minutes: int = 10,
+    lookback_minutes: Optional[int] = None,
     ingestion_job_id: Optional[uuid.UUID] = None,
     scope: str = DEFAULT_LOG_SCOPE,
 ) -> list[TriggerCandidate]:
     """
     Find likely trigger events in a window slightly before the main window.
+
+    The WHERE clause filters to rows the Python extraction below would
+    actually evaluate a trigger match against, before ordering/capping, so the
+    row cap bounds trigger-shaped candidates rather than arbitrary log volume:
+      - normalized_message, when it's populated (the common case) — this is
+        the only text the Python fallback reads in that case.
+      - raw_message, only when normalized_message is empty/null — matching
+        the Python fallback exactly, which never reads raw_message otherwise.
+    Matching raw_message unconditionally would let a row with a benign
+    normalized_message but a raw JSON blob that incidentally contains
+    trigger-shaped text in some other field (an error/detail field, a stack
+    trace) consume a cap slot as a false positive: is_trigger_message() would
+    correctly reject it since it never sees raw_message in that case, but by
+    then the cap has already spent the slot, reopening the same starvation
+    this filter exists to close — just triggered by raw-JSON noise instead of
+    log volume (#76 review round 2).
+
+    Without any of this, ORDER BY timestamp LIMIT N alone is deterministic but
+    still silently drops a real trigger whenever more than N unrelated log
+    lines occur earlier in the search range than it does (#76 review round 1).
+    is_trigger_message() re-checks every SQL match in Python as a final
+    arbiter — cheap here since the SQL filter has already narrowed the result
+    set to a small candidate set, and it stays authoritative for the rare
+    raw-JSON-fallback rows where the SQL side can still be an imprecise
+    superset (e.g. a trigger phrase in a non-"message" JSON field on a line
+    whose "message" field happens to be missing or unparseable).
+
+    lookback_minutes defaults to settings.trigger_lookback_minutes when not
+    given explicitly, so TRIGGER_LOOKBACK_MINUTES has one source of truth
+    rather than a second hardcoded default here that callers could silently
+    diverge from.
     """
     from datetime import timedelta
 
+    if lookback_minutes is None:
+        lookback_minutes = get_settings().trigger_lookback_minutes
+
     search_start = window_start - timedelta(minutes=lookback_minutes)
 
-    q = select(LogEntry).where(
+    normalized_populated = and_(
+        LogEntry.normalized_message.isnot(None),
+        LogEntry.normalized_message != "",
+    )
+    trigger_match = or_(
+        and_(
+            normalized_populated,
+            or_(*(LogEntry.normalized_message.op("~*")(p) for p in _TRIGGER_SQL_PATTERNS)),
+        ),
+        and_(
+            not_(normalized_populated),
+            or_(*(LogEntry.raw_message.op("~*")(p) for p in _TRIGGER_SQL_PATTERNS)),
+        ),
+    )
+
+    q = select(
+        LogEntry.normalized_message,
+        LogEntry.raw_message,
+        LogEntry.timestamp,
+        LogEntry.service,
+    ).where(
         LogEntry.timestamp >= search_start,
         LogEntry.timestamp <= window_end,
+        trigger_match,
     )
     q = filter_log_entries_by_scope(q, scope)
     if ingestion_job_id:
         q = q.where(LogEntry.ingestion_job_id == ingestion_job_id)
-    q = q.limit(5000)
+    q = q.order_by(LogEntry.timestamp, LogEntry.id).limit(_TRIGGER_ROW_CAP)
 
-    rows = db.execute(q).scalars().all()
+    rows = db.execute(q).all()
 
     candidates = []
-    for entry in rows:
+    for row in rows:
         # Prefer normalized_message; fall back to extracting message from raw JSON
-        msg = entry.normalized_message or ""
-        if not msg and entry.raw_message:
+        msg = row.normalized_message or ""
+        if not msg and row.raw_message:
             try:
                 import orjson
-                parsed = orjson.loads(entry.raw_message)
-                msg = parsed.get("message") or entry.raw_message
+                parsed = orjson.loads(row.raw_message)
+                msg = parsed.get("message") or row.raw_message
             except Exception:
-                msg = entry.raw_message
+                msg = row.raw_message
         if is_trigger_message(msg):
             candidates.append(TriggerCandidate(
                 message=msg[:500],
-                timestamp=entry.timestamp,
-                service=entry.service,
+                timestamp=row.timestamp,
+                service=row.service,
             ))
 
     # Sort by timestamp, deduplicate by message text
@@ -160,12 +232,13 @@ def assemble_evidence(
     # Take from all remaining significant clusters, not just top-5 by importance
     secondary = sorted(significant_clusters[1:], key=lambda c: c.count, reverse=True)[:4] if len(significant_clusters) > 1 else []
 
-    # Trigger candidates (look back up to 10 min before window start)
+    # Trigger candidates (lookback defaults to settings.trigger_lookback_minutes
+    # inside find_trigger_candidates — not repeated here to avoid a second
+    # source of truth for the default).
     triggers = find_trigger_candidates(
         db,
         window_start,
         window_end,
-        lookback_minutes=10,
         ingestion_job_id=ingestion_job_id,
         scope=scope,
     )

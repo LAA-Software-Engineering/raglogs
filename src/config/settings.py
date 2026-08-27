@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     max_evidence_items: int = 8
     max_clusters_for_explain: int = 10
 
+    # How far before window_start to search for trigger candidates (#76).
+    trigger_lookback_minutes: int = 10
+
     # HTTP API authentication (G2). Default off so local demo and existing
     # TestClient tests stay unauthenticated. Production/Docker should set
     # AUTH_ENABLED=true. Keys are pinned to a scope (G8) unless minted with

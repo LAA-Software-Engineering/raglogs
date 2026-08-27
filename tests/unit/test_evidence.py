@@ -1,18 +1,26 @@
 """
-Tests for src.core.explain.evidence._build_evidence_items
+Tests for src.core.explain.evidence._build_evidence_items and
+find_trigger_candidates's query construction.
 
 Focused on the derived-text logic: queue-growth reformat, secondary
 ordering and phrasing, trigger timing correlation, baseline messaging,
-and the no-primary fallback. Does not require a database.
+and the no-primary fallback. Does not require a database — the query-shape
+tests inspect the compiled Select against a mocked session (ordering,
+row cap, the SQL-side TRIGGER_PATTERNS filter, column scoping, lookback
+resolution); tests/integration/test_trigger_search.py covers the actual
+determinism and cap-vs-recall behavior against a live Postgres.
 """
 import pytest
+from collections import namedtuple
 from datetime import datetime, timezone, timedelta
+from unittest.mock import MagicMock
 
 from src.core.clustering.clusterer import ClusterData
 from src.core.explain.evidence import (
     TriggerCandidate,
     _build_evidence_items,
     _services_str,
+    find_trigger_candidates,
 )
 
 
@@ -279,3 +287,209 @@ class TestServicesStr:
     def test_no_services(self):
         c = _cluster("x", services={})
         assert _services_str(c) == "unknown service"
+
+
+# ── find_trigger_candidates query construction (#76) ───────────────────────────
+#
+# select(LogEntry).limit(5000) with no ORDER BY let Postgres return an
+# arbitrary subset of matching rows on any window with more than 5000
+# candidates, so the same explain call could return different trigger
+# candidates — and a different confidence label — from one run to the next.
+#
+# Ordering by (timestamp, id) alone fixes *which* subset is examined
+# deterministically, but not recall: the row cap still applied to every log
+# line in range, not to trigger-shaped lines, so on a busy scope the earliest
+# N rows in range can all be non-trigger noise, silently dropping a real
+# trigger occurring later in range every single time (reviewed and confirmed
+# against a live Postgres — see tests/integration/test_trigger_search.py).
+# The fix pushes TRIGGER_PATTERNS matching into the WHERE clause so the cap
+# bounds trigger candidates, not log volume. These tests check the query
+# shape without a database; the row-cap-vs-recall behavior against real data
+# lives in tests/integration.
+
+_TriggerRow = namedtuple("_TriggerRow", "normalized_message raw_message timestamp service")
+
+
+def _mock_db_returning_rows(rows: list) -> MagicMock:
+    db = MagicMock()
+    db.execute.return_value.all.return_value = rows
+    return db
+
+
+class TestFindTriggerCandidatesQuery:
+    def test_query_is_ordered_by_timestamp_then_id(self):
+        db = _mock_db_returning_rows([])
+        find_trigger_candidates(db, _now() - timedelta(hours=1), _now())
+
+        query = db.execute.call_args[0][0]
+        assert "ORDER BY log_entries.timestamp, log_entries.id" in str(query)
+
+    def test_query_row_cap_is_5000(self):
+        db = _mock_db_returning_rows([])
+        find_trigger_candidates(db, _now() - timedelta(hours=1), _now())
+
+        query = db.execute.call_args[0][0]
+        compiled = str(query.compile(compile_kwargs={"literal_binds": True}))
+        assert "LIMIT 5000" in compiled
+
+    def test_query_filters_to_trigger_pattern_matches_in_sql(self):
+        """The cap must bound trigger-shaped rows, not arbitrary log volume —
+        otherwise a busy scope can push a real trigger past the cap before
+        Python ever gets to look at it (#76 review)."""
+        db = _mock_db_returning_rows([])
+        find_trigger_candidates(db, _now() - timedelta(hours=1), _now())
+
+        query = db.execute.call_args[0][0]
+        unbound = str(query)
+        # One TRIGGER_PATTERNS regex, translated for Postgres's ~* operator,
+        # against both columns the extraction logic reads from.
+        assert "log_entries.normalized_message ~*" in unbound
+        assert "log_entries.raw_message ~*" in unbound
+
+        bound = str(query.compile(compile_kwargs={"literal_binds": True}))
+        assert "deploy" in bound  # a pattern's literal text made it into the SQL
+
+    def test_raw_message_match_is_gated_on_normalized_message_being_empty(self):
+        """#76 review round 2: matching raw_message unconditionally lets a row
+        with a benign normalized_message but trigger-shaped text somewhere
+        else in the raw JSON blob (an error/detail field) consume a cap slot
+        as a false positive — is_trigger_message() only ever reads raw_message
+        when normalized_message is empty, so the SQL side must mirror that or
+        the cap is contestable by the same kind of noise this filter exists to
+        exclude. Structural check only; the behavioral proof (false positives
+        don't starve a real trigger) is in tests/integration."""
+        db = _mock_db_returning_rows([])
+        find_trigger_candidates(db, _now() - timedelta(hours=1), _now())
+
+        query = db.execute.call_args[0][0]
+        bound = str(query.compile(compile_kwargs={"literal_binds": True}))
+
+        # The raw_message branch must be reachable only through a "normalized
+        # is empty" guard: normalized_populated AND normalized_matches, OR
+        # NOT(normalized_populated) AND raw_matches — not a bare OR between
+        # the two match groups.
+        normalized_branch_end = bound.index("~* 'rollout")
+        or_not_idx = bound.index("OR NOT", normalized_branch_end)
+        raw_branch_start = bound.index("log_entries.raw_message ~*")
+        assert or_not_idx < raw_branch_start, (
+            "raw_message matching must be gated behind the empty-normalized_message "
+            "guard, not OR'd in unconditionally"
+        )
+        assert "normalized_message IS NOT NULL" in bound[or_not_idx:raw_branch_start]
+
+    def test_every_trigger_pattern_is_represented_in_the_where_clause(self):
+        from src.core.normalization.patterns import TRIGGER_PATTERNS
+
+        db = _mock_db_returning_rows([])
+        find_trigger_candidates(db, _now() - timedelta(hours=1), _now())
+
+        query = db.execute.call_args[0][0]
+        bound = str(query.compile(compile_kwargs={"literal_binds": True}))
+        for pattern in TRIGGER_PATTERNS:
+            assert pattern.pattern in bound
+
+    def test_query_selects_only_the_columns_trigger_matching_needs(self):
+        """Regression guard against re-widening to select(LogEntry) full ORM
+        objects, which pulls host/extra_json/trace_id/request_id/parser_type/
+        source_adapter for every row and gains nothing — trigger matching only
+        reads these four columns. (raw_message *is* still needed: it
+        participates in the SQL match condition above and in the JSON-fallback
+        extraction below, for rows with no normalized_message.)"""
+        db = _mock_db_returning_rows([])
+        find_trigger_candidates(db, _now() - timedelta(hours=1), _now())
+
+        query = db.execute.call_args[0][0]
+        assert list(query.selected_columns.keys()) == [
+            "normalized_message",
+            "raw_message",
+            "timestamp",
+            "service",
+        ]
+
+    def test_lookback_minutes_shifts_the_search_start(self):
+        db = _mock_db_returning_rows([])
+        window_start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        find_trigger_candidates(db, window_start, window_start + timedelta(hours=1), lookback_minutes=45)
+
+        query = db.execute.call_args[0][0]
+        compiled = str(query.compile(compile_kwargs={"literal_binds": True}))
+        expected_search_start = window_start - timedelta(minutes=45)
+        assert str(expected_search_start) in compiled
+
+    def test_default_lookback_minutes_comes_from_settings_not_a_second_default(self, monkeypatch):
+        """find_trigger_candidates must have exactly one source of truth for
+        the default lookback. Previously the function signature defaulted to
+        a hardcoded 10 *and* assemble_evidence separately read
+        settings.trigger_lookback_minutes — reverting either one back to a
+        bare 10 would pass every other test. Calling with no lookback_minutes
+        override must reflect a changed setting, proving there's only one
+        default left to revert."""
+        from src.config import get_settings, reload_settings
+
+        monkeypatch.setenv("TRIGGER_LOOKBACK_MINUTES", "37")
+        reload_settings()
+        try:
+            db = _mock_db_returning_rows([])
+            window_start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+            find_trigger_candidates(db, window_start, window_start + timedelta(hours=1))
+
+            query = db.execute.call_args[0][0]
+            compiled = str(query.compile(compile_kwargs={"literal_binds": True}))
+            expected_search_start = window_start - timedelta(minutes=37)
+            assert str(expected_search_start) in compiled
+        finally:
+            monkeypatch.delenv("TRIGGER_LOOKBACK_MINUTES", raising=False)
+            reload_settings()
+            get_settings()  # re-warm the module-level cache for later tests
+
+
+class TestFindTriggerCandidatesExtraction:
+    def test_row_matching_trigger_pattern_becomes_a_candidate(self):
+        t = _now() - timedelta(minutes=5)
+        rows = [_TriggerRow("Deploy completed for billing-worker v2.4.1", None, t, "deployment-controller")]
+        db = _mock_db_returning_rows(rows)
+
+        candidates = find_trigger_candidates(db, _now() - timedelta(hours=1), _now())
+
+        assert len(candidates) == 1
+        assert candidates[0].message.startswith("Deploy completed")
+        assert candidates[0].service == "deployment-controller"
+        assert candidates[0].timestamp == t
+
+    def test_row_not_matching_trigger_pattern_is_skipped(self):
+        """The SQL filter should already exclude this row; is_trigger_message
+        here is the Python-side safety net (see module docstring) — this test
+        exercises that net directly given a mocked row, regardless of what
+        the (mocked, not-really-filtering) SQL layer would have done."""
+        t = _now() - timedelta(minutes=5)
+        rows = [_TriggerRow("GET /health 200 OK", None, t, "api")]
+        db = _mock_db_returning_rows(rows)
+
+        candidates = find_trigger_candidates(db, _now() - timedelta(hours=1), _now())
+
+        assert candidates == []
+
+    def test_falls_back_to_raw_message_json_when_normalized_is_empty(self):
+        t = _now() - timedelta(minutes=5)
+        rows = [_TriggerRow("", '{"message": "pod restarted after eviction"}', t, "worker")]
+        db = _mock_db_returning_rows(rows)
+
+        candidates = find_trigger_candidates(db, _now() - timedelta(hours=1), _now())
+
+        assert len(candidates) == 1
+        assert "pod restarted" in candidates[0].message
+
+    def test_output_is_a_pure_function_of_the_input_rows(self):
+        """Confirms find_trigger_candidates has no hidden state across calls —
+        NOT a proof that the SQL layer is deterministic. That claim needs a
+        real database and is covered in tests/integration."""
+        base = _now() - timedelta(minutes=8)
+        rows = [
+            _TriggerRow("Deploy completed for api v3.0.0", None, base, "deploy"),
+            _TriggerRow("pod restarted", None, base + timedelta(minutes=1), "api"),
+        ]
+
+        first = find_trigger_candidates(_mock_db_returning_rows(rows), _now() - timedelta(hours=1), _now())
+        second = find_trigger_candidates(_mock_db_returning_rows(rows), _now() - timedelta(hours=1), _now())
+
+        assert [c.message for c in first] == [c.message for c in second]
