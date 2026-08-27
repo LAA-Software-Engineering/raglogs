@@ -145,6 +145,7 @@ class CompareResult:
             or self.increased_clusters
             or self.decreased_clusters
             or self.new_triggers
+            or self.dropped_triggers
         )
 
 

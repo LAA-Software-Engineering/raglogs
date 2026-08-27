@@ -523,13 +523,21 @@ class TestHasChanges:
         )
         assert r.has_changes is True
 
+    def test_true_when_dropped_triggers_only(self):
+        """Dropped triggers alone must count as changes so text renderers show them."""
+        r = CompareResult(
+            window_a_start=_dt(0), window_a_end=_dt(30),
+            window_b_start=_dt(-1440), window_b_end=_dt(-1410),
+            dropped_triggers=[TriggerDiff("Deploy completed for billing v2.4.1", "svc", "b")],
+        )
+        assert r.has_changes is True
+
     def test_false_when_only_stable_clusters(self):
-        """Stable + dropped_triggers alone should not set has_changes."""
+        """Stable clusters alone should not set has_changes."""
         r = CompareResult(
             window_a_start=_dt(0), window_a_end=_dt(30),
             window_b_start=_dt(-1440), window_b_end=_dt(-1410),
             stable_clusters=[ClusterDiff("fp", "msg", [], 10, 10)],
-            dropped_triggers=[TriggerDiff("old deploy", "svc", "b")],
         )
         assert r.has_changes is False
 
