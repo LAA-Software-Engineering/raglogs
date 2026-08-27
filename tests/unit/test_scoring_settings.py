@@ -11,13 +11,30 @@ from unittest.mock import patch
 from src.config.settings import Settings
 from src.core.clustering.scoring import get_severity_weight
 
+# The declared defaults from Settings, pinned explicitly rather than relied on
+# implicitly: passing these as constructor kwargs takes precedence over
+# whatever SEVERITY_WEIGHT_* vars happen to be set in the environment a test
+# runs in (_env_file=None only disables the .env *file* source, not
+# os.environ), so "default" here always means the value in settings.py, not
+# ambient process state.
+_DEFAULT_WEIGHTS = {
+    "severity_weight_fatal": 5.0,
+    "severity_weight_error": 4.0,
+    "severity_weight_warn": 3.0,
+    "severity_weight_info": 1.0,
+    "severity_weight_debug": 0.5,
+}
+
 
 def _settings_with(**overrides) -> Settings:
-    return Settings(_env_file=None, **overrides)
+    return Settings(_env_file=None, **{**_DEFAULT_WEIGHTS, **overrides})
 
 
 def test_severity_weight_error_setting_changes_score():
-    default = get_severity_weight({"error": 10})
+    with patch(
+        "src.core.clustering.scoring.get_settings", return_value=_settings_with()
+    ):
+        default = get_severity_weight({"error": 10})
 
     custom = _settings_with(severity_weight_error=99.0)
     with patch("src.core.clustering.scoring.get_settings", return_value=custom):
