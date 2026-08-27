@@ -56,6 +56,16 @@ def parse_timestamp_field(value: str | int | float) -> Optional[datetime]:
                 dt = dt.replace(tzinfo=timezone.utc)
             return dt
         except (ValueError, OverflowError):
+            # dateutil already handles bare-digit calendar strings correctly
+            # ("20260312", "2026", a bare day-of-month) - only reached here
+            # for a value it rejected outright, e.g. a Unix epoch whose
+            # magnitude doesn't fit a year/day (a 13-digit ms epoch overflows,
+            # a 10-digit epoch reads as an out-of-range year). Route only
+            # that failure case through the (millisecond-aware) numeric
+            # branch instead of preempting dateutil for every digit string.
+            stripped = value.strip()
+            if re.fullmatch(r"-?\d+(?:\.\d+)?", stripped):
+                return parse_timestamp_field(float(stripped))
             return extract_timestamp(value)
 
     return None
