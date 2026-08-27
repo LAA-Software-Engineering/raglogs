@@ -6,6 +6,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.config import get_settings
 from src.core.clustering.clusterer import ClusterData
 from src.core.normalization.patterns import is_trigger_message
 from src.db.models import DEFAULT_LOG_SCOPE, LogEntry
@@ -55,38 +56,48 @@ def find_trigger_candidates(
 ) -> list[TriggerCandidate]:
     """
     Find likely trigger events in a window slightly before the main window.
+
+    Ordered by (timestamp, id) before the row cap so a >5000-row range returns
+    the same, earliest-first candidates on every call instead of an arbitrary
+    Postgres-chosen subset (#76). Only the columns trigger matching needs are
+    selected rather than hydrating full LogEntry ORM objects.
     """
     from datetime import timedelta
 
     search_start = window_start - timedelta(minutes=lookback_minutes)
 
-    q = select(LogEntry).where(
+    q = select(
+        LogEntry.normalized_message,
+        LogEntry.raw_message,
+        LogEntry.timestamp,
+        LogEntry.service,
+    ).where(
         LogEntry.timestamp >= search_start,
         LogEntry.timestamp <= window_end,
     )
     q = filter_log_entries_by_scope(q, scope)
     if ingestion_job_id:
         q = q.where(LogEntry.ingestion_job_id == ingestion_job_id)
-    q = q.limit(5000)
+    q = q.order_by(LogEntry.timestamp, LogEntry.id).limit(5000)
 
-    rows = db.execute(q).scalars().all()
+    rows = db.execute(q).all()
 
     candidates = []
-    for entry in rows:
+    for row in rows:
         # Prefer normalized_message; fall back to extracting message from raw JSON
-        msg = entry.normalized_message or ""
-        if not msg and entry.raw_message:
+        msg = row.normalized_message or ""
+        if not msg and row.raw_message:
             try:
                 import orjson
-                parsed = orjson.loads(entry.raw_message)
-                msg = parsed.get("message") or entry.raw_message
+                parsed = orjson.loads(row.raw_message)
+                msg = parsed.get("message") or row.raw_message
             except Exception:
-                msg = entry.raw_message
+                msg = row.raw_message
         if is_trigger_message(msg):
             candidates.append(TriggerCandidate(
                 message=msg[:500],
-                timestamp=entry.timestamp,
-                service=entry.service,
+                timestamp=row.timestamp,
+                service=row.service,
             ))
 
     # Sort by timestamp, deduplicate by message text
@@ -160,12 +171,12 @@ def assemble_evidence(
     # Take from all remaining significant clusters, not just top-5 by importance
     secondary = sorted(significant_clusters[1:], key=lambda c: c.count, reverse=True)[:4] if len(significant_clusters) > 1 else []
 
-    # Trigger candidates (look back up to 10 min before window start)
+    # Trigger candidates (look back up to TRIGGER_LOOKBACK_MINUTES before window start)
     triggers = find_trigger_candidates(
         db,
         window_start,
         window_end,
-        lookback_minutes=10,
+        lookback_minutes=get_settings().trigger_lookback_minutes,
         ingestion_job_id=ingestion_job_id,
         scope=scope,
     )

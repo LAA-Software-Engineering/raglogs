@@ -1,18 +1,24 @@
 """
-Tests for src.core.explain.evidence._build_evidence_items
+Tests for src.core.explain.evidence._build_evidence_items and
+find_trigger_candidates's query construction.
 
 Focused on the derived-text logic: queue-growth reformat, secondary
 ordering and phrasing, trigger timing correlation, baseline messaging,
-and the no-primary fallback. Does not require a database.
+and the no-primary fallback. Does not require a database — the query-shape
+tests inspect the compiled Select against a mocked session; tests/integration
+covers the actual row-cap/ordering behavior against a live Postgres.
 """
 import pytest
+from collections import namedtuple
 from datetime import datetime, timezone, timedelta
+from unittest.mock import MagicMock
 
 from src.core.clustering.clusterer import ClusterData
 from src.core.explain.evidence import (
     TriggerCandidate,
     _build_evidence_items,
     _services_str,
+    find_trigger_candidates,
 )
 
 
@@ -279,3 +285,109 @@ class TestServicesStr:
     def test_no_services(self):
         c = _cluster("x", services={})
         assert _services_str(c) == "unknown service"
+
+
+# ── find_trigger_candidates query construction (#76) ───────────────────────────
+#
+# select(LogEntry).limit(5000) with no ORDER BY let Postgres return an
+# arbitrary subset of matching rows on any window with more than 5000
+# candidates, so the same explain call could return different trigger
+# candidates — and a different confidence label — from one run to the next.
+# These check that the query is now ordered and column-scoped; the actual
+# >5000-row behavior against Postgres is covered in tests/integration.
+
+_TriggerRow = namedtuple("_TriggerRow", "normalized_message raw_message timestamp service")
+
+
+def _mock_db_returning_rows(rows: list) -> MagicMock:
+    db = MagicMock()
+    db.execute.return_value.all.return_value = rows
+    return db
+
+
+class TestFindTriggerCandidatesQuery:
+    def test_query_is_ordered_by_timestamp_then_id(self):
+        db = _mock_db_returning_rows([])
+        find_trigger_candidates(db, _now() - timedelta(hours=1), _now())
+
+        query = db.execute.call_args[0][0]
+        assert "ORDER BY log_entries.timestamp, log_entries.id" in str(query)
+
+    def test_query_has_a_row_cap(self):
+        db = _mock_db_returning_rows([])
+        find_trigger_candidates(db, _now() - timedelta(hours=1), _now())
+
+        query = db.execute.call_args[0][0]
+        assert "LIMIT" in str(query)
+
+    def test_query_selects_only_the_columns_trigger_matching_needs(self):
+        """Regression guard against re-widening to select(LogEntry) full ORM
+        objects, which hydrates raw_message (up to 4KB/row) for nothing."""
+        db = _mock_db_returning_rows([])
+        find_trigger_candidates(db, _now() - timedelta(hours=1), _now())
+
+        query = db.execute.call_args[0][0]
+        assert list(query.selected_columns.keys()) == [
+            "normalized_message",
+            "raw_message",
+            "timestamp",
+            "service",
+        ]
+
+    def test_lookback_minutes_shifts_the_search_start(self):
+        db = _mock_db_returning_rows([])
+        window_start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        find_trigger_candidates(db, window_start, window_start + timedelta(hours=1), lookback_minutes=45)
+
+        query = db.execute.call_args[0][0]
+        compiled = str(query.compile(compile_kwargs={"literal_binds": True}))
+        expected_search_start = window_start - timedelta(minutes=45)
+        assert str(expected_search_start) in compiled
+
+
+class TestFindTriggerCandidatesExtraction:
+    def test_row_matching_trigger_pattern_becomes_a_candidate(self):
+        t = _now() - timedelta(minutes=5)
+        rows = [_TriggerRow("Deploy completed for billing-worker v2.4.1", None, t, "deployment-controller")]
+        db = _mock_db_returning_rows(rows)
+
+        candidates = find_trigger_candidates(db, _now() - timedelta(hours=1), _now())
+
+        assert len(candidates) == 1
+        assert candidates[0].message.startswith("Deploy completed")
+        assert candidates[0].service == "deployment-controller"
+        assert candidates[0].timestamp == t
+
+    def test_row_not_matching_trigger_pattern_is_skipped(self):
+        t = _now() - timedelta(minutes=5)
+        rows = [_TriggerRow("GET /health 200 OK", None, t, "api")]
+        db = _mock_db_returning_rows(rows)
+
+        candidates = find_trigger_candidates(db, _now() - timedelta(hours=1), _now())
+
+        assert candidates == []
+
+    def test_falls_back_to_raw_message_json_when_normalized_is_empty(self):
+        t = _now() - timedelta(minutes=5)
+        rows = [_TriggerRow("", '{"message": "pod restarted after eviction"}', t, "worker")]
+        db = _mock_db_returning_rows(rows)
+
+        candidates = find_trigger_candidates(db, _now() - timedelta(hours=1), _now())
+
+        assert len(candidates) == 1
+        assert "pod restarted" in candidates[0].message
+
+    def test_repeated_calls_over_the_same_rows_return_identical_candidates(self):
+        """Query-construction-level proxy for determinism: given the same rows
+        (as Postgres would return once ordering is applied), the same call
+        always produces the same candidates in the same order."""
+        base = _now() - timedelta(minutes=8)
+        rows = [
+            _TriggerRow("Deploy completed for api v3.0.0", None, base, "deploy"),
+            _TriggerRow("pod restarted", None, base + timedelta(minutes=1), "api"),
+        ]
+
+        first = find_trigger_candidates(_mock_db_returning_rows(rows), _now() - timedelta(hours=1), _now())
+        second = find_trigger_candidates(_mock_db_returning_rows(rows), _now() - timedelta(hours=1), _now())
+
+        assert [c.message for c in first] == [c.message for c in second]
