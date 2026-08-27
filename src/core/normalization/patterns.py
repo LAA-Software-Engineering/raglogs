@@ -7,6 +7,11 @@ NORMALIZATION_RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"), "<uuid>"),
     # JWT / long base64 tokens (30+ chars of base64url)
     (re.compile(r"eyJ[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{10,}"), "<jwt>"),
+    # Numeric IDs after common keywords — must run BEFORE the hex rule,
+    # otherwise an 8+ digit decimal ID (e.g. "user 12345678") is swallowed
+    # by the hex rule and normalized to <hex>, fragmenting equivalent lines
+    # ("user 12345678 not found" vs "user 4567 not found") across clusters.
+    (re.compile(r"\b(user|account|order|transaction|session|job|task|worker|tenant|customer|invoice)\s+(?:id\s+)?#?(\d+)\b", re.IGNORECASE), r"\1 <id>"),
     # Hex strings 8+ chars (hashes, IDs)
     (re.compile(r"\b[0-9a-fA-F]{8,}\b"), "<hex>"),
     # Long alphanumeric tokens that look like API keys (20+ mixed chars)
@@ -21,8 +26,6 @@ NORMALIZATION_RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r"(https?://[^\s?]+)\?[^\s]*"), r"\1?<params>"),
     # request_id=<value> style KV pairs with dynamic values
     (re.compile(r"\b(request_id|req_id|trace_id|span_id|correlation_id)=\S+"), r"\1=<*>"),
-    # Numeric IDs after common keywords
-    (re.compile(r"\b(user|account|order|transaction|session|job|task|worker|tenant|customer|invoice)\s+(?:id\s+)?#?(\d+)\b", re.IGNORECASE), r"\1 <id>"),
     # Duration values like 123ms, 1.5s, 200ms
     (re.compile(r"\b\d+(?:\.\d+)?\s*(?:ms|s|sec|seconds?|minutes?|min|hours?|hr)\b"), "<duration>"),
     # Port numbers standalone (not part of IP above)
