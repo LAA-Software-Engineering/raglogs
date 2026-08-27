@@ -1,15 +1,22 @@
-"""Integration coverage for the trigger-search determinism fix (#76).
+"""Integration coverage for trigger-search determinism and recall (#76).
 
 ``find_trigger_candidates`` used to run ``select(LogEntry).limit(5000)`` with
 no ``ORDER BY``. Postgres is free to return any 5000 matching rows for a
 query shaped like that, so on any window with more candidates than the cap
 the same ``explain`` call could return different trigger candidates — and a
-different confidence label — from one run to the next, and a real trigger
-near the edge of a large window could simply not be in the sampled rows.
+different confidence label — from one run to the next.
 
-This is skipped without a live Postgres (CI has no DB by default); the
-query-shape assertions that don't need a real database live in
-tests/unit/test_evidence.py.
+Ordering by ``(timestamp, id)`` before the cap fixes determinism, but on its
+own does *not* fix recall: the cap still applied to every log row in range,
+not to trigger-shaped rows, so on a busy scope the earliest 5000 rows in
+range can all be non-trigger noise, and a real trigger occurring later in
+range is silently and *deterministically* dropped every time — a regression
+from "sometimes missed" to "always missed" for that shape of incident. The
+fix filters to ``TRIGGER_PATTERNS`` matches in SQL before ordering/capping,
+so the cap bounds trigger candidates rather than log volume.
+
+Skipped without a live Postgres (CI has no DB by default); the query-shape
+assertions that don't need a real database live in tests/unit/test_evidence.py.
 """
 
 from __future__ import annotations
@@ -25,11 +32,8 @@ pytestmark = pytest.mark.skipif(
     reason="Integration tests require DB_URL environment variable",
 )
 
-# Comfortably over the find_trigger_candidates row cap (5000) without making
-# the test slow. The mechanism under test (order earliest-first, then cap)
-# generalizes to arbitrarily large windows — this only needs to prove the
-# cap no longer drops an in-range trigger non-deterministically.
-ROW_COUNT = 5500
+# Comfortably over the find_trigger_candidates row cap (5000).
+NOISE_ROW_COUNT = 6000
 
 
 @pytest.fixture
@@ -52,23 +56,39 @@ def db_session():
         yield db
 
 
-def test_trigger_at_start_of_large_window_is_found_deterministically(db_session) -> None:
+def _heartbeat_rows(scope: str, start: datetime, end: datetime, count: int) -> list:
+    from src.db.models import LogEntry
+
+    span_seconds = (end - start).total_seconds()
+    return [
+        LogEntry(
+            id=uuid.uuid4(),
+            timestamp=start + timedelta(seconds=(span_seconds * i) / count),
+            service="api",
+            level="info",
+            normalized_message=f"heartbeat {i}",
+            source_adapter="file",
+            scope=scope,
+        )
+        for i in range(1, count + 1)
+    ]
+
+
+def test_two_calls_over_a_large_window_return_identical_candidates(db_session) -> None:
+    """Determinism: same window, same data, two calls, same result. This is
+    the property a plain unordered LIMIT could not guarantee."""
     from src.core.explain.evidence import find_trigger_candidates
     from src.db.models import LogEntry
 
-    scope = f"test-trigger-search-{uuid.uuid4().hex[:8]}"
+    scope = f"test-trigger-determinism-{uuid.uuid4().hex[:8]}"
     window_start = datetime(2026, 1, 1, 1, 0, tzinfo=timezone.utc)
     window_end = window_start + timedelta(hours=1)
     lookback_minutes = 10
     search_start = window_start - timedelta(minutes=lookback_minutes)
 
-    # The trigger sits at the very first in-range instant. With the old
-    # unordered LIMIT 5000, whether Postgres happened to include this row in
-    # its arbitrary subset was pure luck. With ORDER BY timestamp ASC it is
-    # always among the earliest 5000 rows returned, by construction.
     trigger_entry = LogEntry(
         id=uuid.uuid4(),
-        timestamp=search_start,
+        timestamp=search_start + timedelta(minutes=3),
         service="deployment-controller",
         level="info",
         normalized_message="Deploy completed for billing-worker v2.4.1",
@@ -76,30 +96,7 @@ def test_trigger_at_start_of_large_window_is_found_deterministically(db_session)
         scope=scope,
     )
 
-    # ROW_COUNT non-trigger rows spread across the rest of the range.
-    span_seconds = (window_end - search_start).total_seconds()
-    filler = [
-        LogEntry(
-            id=uuid.uuid4(),
-            timestamp=search_start + timedelta(seconds=(span_seconds * i) / ROW_COUNT),
-            service="api",
-            level="info",
-            normalized_message=f"heartbeat {i}",
-            source_adapter="file",
-            scope=scope,
-        )
-        for i in range(1, ROW_COUNT + 1)
-    ]
-
-    # Insert the filler first and the trigger last, so its physical/insertion
-    # order is decorrelated from its (earliest) timestamp order. This is the
-    # arrangement that actually exercises the bug: a plain sequential scan
-    # tends to return rows in roughly insertion order when there's no ORDER
-    # BY, which would let a naive "limit(5000), no order_by" query silently
-    # drop this trigger every time even though it belongs in the window.
-    # (Verified against the pre-fix query on this exact dataset: 0/5000
-    # returned rows contained it.)
-    db_session.add_all(filler)
+    db_session.add_all(_heartbeat_rows(scope, search_start, window_end, NOISE_ROW_COUNT))
     db_session.flush()
     db_session.add(trigger_entry)
     db_session.flush()
@@ -113,3 +110,141 @@ def test_trigger_at_start_of_large_window_is_found_deterministically(db_session)
 
     assert [c.message for c in first] == [c.message for c in second]
     assert any("Deploy completed for billing-worker" in c.message for c in first)
+
+
+def test_trigger_after_5000_earlier_noise_rows_is_still_found(db_session) -> None:
+    """Recall regression guard.
+
+    Concrete scenario from PR #89 review: window_start=12:00, 10m lookback
+    (search_start=11:50), 6000 heartbeats packed into 11:50-11:58, then a
+    real "Deploy completed" trigger at 11:59 -- chronologically the 6001st
+    event in range. ORDER BY timestamp ASC LIMIT 5000 alone always excludes
+    this row (it is never among the earliest 5000 by timestamp), which
+    converts the pre-fix "sometimes misses on an arbitrary Postgres subset"
+    bug into an "always misses" bug for any incident shaped like this one.
+    The fix (filter to TRIGGER_PATTERNS matches in SQL before the cap) must
+    find it regardless of how much earlier noise preceded it.
+    """
+    from src.core.explain.evidence import find_trigger_candidates
+    from src.db.models import LogEntry
+
+    scope = f"test-trigger-recall-{uuid.uuid4().hex[:8]}"
+    window_start = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    window_end = window_start + timedelta(hours=1)
+    lookback_minutes = 10
+    search_start = window_start - timedelta(minutes=lookback_minutes)  # 11:50
+
+    # 6000 heartbeats packed into the first 8 of the 10 lookback minutes.
+    noise_end = search_start + timedelta(minutes=8)  # 11:58
+    db_session.add_all(_heartbeat_rows(scope, search_start, noise_end, NOISE_ROW_COUNT))
+    db_session.flush()
+
+    trigger_entry = LogEntry(
+        id=uuid.uuid4(),
+        timestamp=window_start - timedelta(minutes=1),  # 11:59 -- after all the noise
+        service="deployment-controller",
+        level="info",
+        normalized_message="Deploy completed for billing-worker v2.4.1",
+        source_adapter="file",
+        scope=scope,
+    )
+    db_session.add(trigger_entry)
+    db_session.flush()
+
+    candidates = find_trigger_candidates(
+        db_session, window_start, window_end, lookback_minutes=lookback_minutes, scope=scope
+    )
+
+    assert any("Deploy completed for billing-worker" in c.message for c in candidates), (
+        f"trigger not found among {len(candidates)} candidate(s) despite being in range — "
+        "the row cap is bounding log volume again instead of trigger candidates"
+    )
+
+
+def test_widening_lookback_recovers_a_slow_burn_trigger(db_session) -> None:
+    """The stated purpose of TRIGGER_LOOKBACK_MINUTES (#76): a trigger well
+    before window_start should be found by widening the lookback, without the
+    intervening noise crowding it out of the row cap."""
+    from src.core.explain.evidence import find_trigger_candidates
+    from src.db.models import LogEntry
+
+    scope = f"test-trigger-lookback-{uuid.uuid4().hex[:8]}"
+    window_start = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    window_end = window_start + timedelta(hours=1)
+
+    # Trigger 25 minutes before window_start -- outside the default 10m
+    # lookback, inside a widened 30m one.
+    trigger_time = window_start - timedelta(minutes=25)
+    trigger_entry = LogEntry(
+        id=uuid.uuid4(),
+        timestamp=trigger_time,
+        service="deployment-controller",
+        level="info",
+        normalized_message="Deploy completed for billing-worker v2.4.1",
+        source_adapter="file",
+        scope=scope,
+    )
+    db_session.add_all(
+        _heartbeat_rows(
+            scope, window_start - timedelta(minutes=30), window_end, NOISE_ROW_COUNT
+        )
+    )
+    db_session.flush()
+    db_session.add(trigger_entry)
+    db_session.flush()
+
+    missed = find_trigger_candidates(
+        db_session, window_start, window_end, lookback_minutes=10, scope=scope
+    )
+    assert not any("Deploy completed" in c.message for c in missed)
+
+    found = find_trigger_candidates(
+        db_session, window_start, window_end, lookback_minutes=30, scope=scope
+    )
+    assert any("Deploy completed for billing-worker" in c.message for c in found)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Deploy completed for billing-worker v2.4.1",
+        "deployment started for api",
+        "Application restarted after crash",
+        "pod evicted due to memory pressure",
+        "Configuration reloaded successfully",
+        "Migration running: 0003_add_index",
+        "Queue full: rejecting new events",
+        "circuit_breaker tripped for payments-service",
+        "Webhook secret changed by admin",
+        "Token expired for session abc123",
+        "release v3.0.0 deployed to prod",
+        "Rollout completed successfully",
+    ],
+)
+def test_every_trigger_pattern_is_found_via_the_sql_filter(db_session, message: str) -> None:
+    """Regex-dialect equivalence regression guard: each TRIGGER_PATTERNS
+    entry must round-trip through Postgres's ~* the same way Python's `re`
+    matches it, end to end through find_trigger_candidates — not just in an
+    ad hoc check against the raw operator."""
+    from src.core.explain.evidence import find_trigger_candidates
+    from src.db.models import LogEntry
+
+    scope = f"test-trigger-pattern-{uuid.uuid4().hex[:8]}"
+    window_start = datetime(2026, 1, 1, 1, 0, tzinfo=timezone.utc)
+    window_end = window_start + timedelta(hours=1)
+
+    entry = LogEntry(
+        id=uuid.uuid4(),
+        timestamp=window_start - timedelta(minutes=2),
+        service="some-service",
+        level="info",
+        normalized_message=message,
+        source_adapter="file",
+        scope=scope,
+    )
+    db_session.add(entry)
+    db_session.flush()
+
+    candidates = find_trigger_candidates(db_session, window_start, window_end, scope=scope)
+
+    assert any(c.message == message for c in candidates), f"not found via SQL filter: {message!r}"

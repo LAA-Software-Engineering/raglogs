@@ -3,14 +3,30 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from src.config import get_settings
 from src.core.clustering.clusterer import ClusterData
-from src.core.normalization.patterns import is_trigger_message
+from src.core.normalization.patterns import TRIGGER_PATTERNS, is_trigger_message
 from src.db.models import DEFAULT_LOG_SCOPE, LogEntry
 from src.db.scope_filter import filter_log_entries_by_scope
+
+# TRIGGER_PATTERNS translated to Postgres's case-insensitive regex operator so
+# trigger matching happens in the WHERE clause instead of after a row cap has
+# already discarded everything past the first N log lines in range (#76 review:
+# ordering by timestamp before LIMIT makes *which* rows are examined
+# deterministic, but on a busy scope the earliest N rows can all be non-trigger
+# noise, silently excluding a real trigger that occurs later in range). None of
+# the patterns use \b, lookaround, or other constructs where Python's `re` and
+# Postgres's ARE dialect diverge — verified match-for-match against a live
+# Postgres for every pattern in tests/integration/test_trigger_search.py.
+_TRIGGER_SQL_PATTERNS = [p.pattern for p in TRIGGER_PATTERNS]
+
+# Safety valve, not the primary recall mechanism now that the WHERE clause
+# already narrows to trigger-shaped rows: real trigger phrasing is rare, so
+# this should only ever bind on pathological/adversarial log content.
+_TRIGGER_ROW_CAP = 5000
 
 
 def _trunc(text: str, max_len: int) -> str:
@@ -50,21 +66,39 @@ def find_trigger_candidates(
     db: Session,
     window_start: datetime,
     window_end: datetime,
-    lookback_minutes: int = 10,
+    lookback_minutes: Optional[int] = None,
     ingestion_job_id: Optional[uuid.UUID] = None,
     scope: str = DEFAULT_LOG_SCOPE,
 ) -> list[TriggerCandidate]:
     """
     Find likely trigger events in a window slightly before the main window.
 
-    Ordered by (timestamp, id) before the row cap so a >5000-row range returns
-    the same, earliest-first candidates on every call instead of an arbitrary
-    Postgres-chosen subset (#76). Only the columns trigger matching needs are
-    selected rather than hydrating full LogEntry ORM objects.
+    The WHERE clause filters to rows whose normalized_message or raw_message
+    matches a TRIGGER_PATTERNS regex (Postgres ~*) before ordering/capping, so
+    the row cap bounds trigger-shaped candidates rather than arbitrary log
+    volume. Without this, ORDER BY timestamp LIMIT N alone is deterministic
+    but still silently drops a real trigger whenever more than N unrelated log
+    lines occur earlier in the search range than it does (#76 review).
+    is_trigger_message() re-checks each SQL match in Python as a safety net —
+    cheap here since the SQL filter has already narrowed the result set to a
+    small candidate set.
+
+    lookback_minutes defaults to settings.trigger_lookback_minutes when not
+    given explicitly, so TRIGGER_LOOKBACK_MINUTES has one source of truth
+    rather than a second hardcoded default here that callers could silently
+    diverge from.
     """
     from datetime import timedelta
 
+    if lookback_minutes is None:
+        lookback_minutes = get_settings().trigger_lookback_minutes
+
     search_start = window_start - timedelta(minutes=lookback_minutes)
+
+    trigger_match = or_(
+        *(LogEntry.normalized_message.op("~*")(p) for p in _TRIGGER_SQL_PATTERNS),
+        *(LogEntry.raw_message.op("~*")(p) for p in _TRIGGER_SQL_PATTERNS),
+    )
 
     q = select(
         LogEntry.normalized_message,
@@ -74,11 +108,12 @@ def find_trigger_candidates(
     ).where(
         LogEntry.timestamp >= search_start,
         LogEntry.timestamp <= window_end,
+        trigger_match,
     )
     q = filter_log_entries_by_scope(q, scope)
     if ingestion_job_id:
         q = q.where(LogEntry.ingestion_job_id == ingestion_job_id)
-    q = q.order_by(LogEntry.timestamp, LogEntry.id).limit(5000)
+    q = q.order_by(LogEntry.timestamp, LogEntry.id).limit(_TRIGGER_ROW_CAP)
 
     rows = db.execute(q).all()
 
@@ -171,12 +206,13 @@ def assemble_evidence(
     # Take from all remaining significant clusters, not just top-5 by importance
     secondary = sorted(significant_clusters[1:], key=lambda c: c.count, reverse=True)[:4] if len(significant_clusters) > 1 else []
 
-    # Trigger candidates (look back up to TRIGGER_LOOKBACK_MINUTES before window start)
+    # Trigger candidates (lookback defaults to settings.trigger_lookback_minutes
+    # inside find_trigger_candidates — not repeated here to avoid a second
+    # source of truth for the default).
     triggers = find_trigger_candidates(
         db,
         window_start,
         window_end,
-        lookback_minutes=get_settings().trigger_lookback_minutes,
         ingestion_job_id=ingestion_job_id,
         scope=scope,
     )
