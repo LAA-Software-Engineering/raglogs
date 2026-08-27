@@ -1,10 +1,18 @@
-"""parse_timestamp_field must treat numeric strings the same as numbers.
+"""parse_timestamp_field must treat numeric strings the same as numbers,
+without misreading a bare-digit calendar date as an epoch.
 
 Millisecond-epoch timestamps encoded as strings (as many JSON log sources
 emit them) previously fell through dateutil, then the Unix-timestamp regex
 in extract_timestamp - which requires an exact 10-digit match - and came
 out as None. Log lines with a None timestamp are silently dropped from
 every windowed query (clustering, explain, timeline, compare).
+
+The numeric-string branch only runs after dateutil itself rejects the
+value: routing every bare-digit string through it regardless previously
+regressed calendar strings dateutil already parsed correctly ("20260312",
+a bare year, ...) into wrong-but-plausible-looking datetimes - a worse
+failure than the None being fixed, since a wrong non-null timestamp is
+silently included under the wrong time window instead of being filtered.
 """
 
 from datetime import datetime, timezone
@@ -51,3 +59,21 @@ def test_iso_string_still_parses_via_dateutil():
 
 def test_unparseable_string_returns_none():
     assert parse_timestamp_field("not a timestamp") is None
+
+
+def test_bare_digit_calendar_date_is_not_misread_as_an_epoch():
+    # "20260312" is a plausible epoch under a magnitude-only numeric check
+    # (all digits), but dateutil already parses it correctly as a calendar
+    # date. The numeric-string branch must only run when dateutil itself
+    # rejects the value, not preempt it for every digit string.
+    assert parse_timestamp_field("20260312") == datetime(
+        2026, 3, 12, tzinfo=timezone.utc
+    )
+
+
+def test_bare_digit_calendar_date_before_unix_epoch_range():
+    # A date dateutil parses fine but that a naive int(...) > 1e12 check
+    # would not distinguish from a millisecond epoch by digit count alone.
+    assert parse_timestamp_field("19991231") == datetime(
+        1999, 12, 31, tzinfo=timezone.utc
+    )
