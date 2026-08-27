@@ -349,6 +349,34 @@ class TestFindTriggerCandidatesQuery:
         bound = str(query.compile(compile_kwargs={"literal_binds": True}))
         assert "deploy" in bound  # a pattern's literal text made it into the SQL
 
+    def test_raw_message_match_is_gated_on_normalized_message_being_empty(self):
+        """#76 review round 2: matching raw_message unconditionally lets a row
+        with a benign normalized_message but trigger-shaped text somewhere
+        else in the raw JSON blob (an error/detail field) consume a cap slot
+        as a false positive — is_trigger_message() only ever reads raw_message
+        when normalized_message is empty, so the SQL side must mirror that or
+        the cap is contestable by the same kind of noise this filter exists to
+        exclude. Structural check only; the behavioral proof (false positives
+        don't starve a real trigger) is in tests/integration."""
+        db = _mock_db_returning_rows([])
+        find_trigger_candidates(db, _now() - timedelta(hours=1), _now())
+
+        query = db.execute.call_args[0][0]
+        bound = str(query.compile(compile_kwargs={"literal_binds": True}))
+
+        # The raw_message branch must be reachable only through a "normalized
+        # is empty" guard: normalized_populated AND normalized_matches, OR
+        # NOT(normalized_populated) AND raw_matches — not a bare OR between
+        # the two match groups.
+        normalized_branch_end = bound.index("~* 'rollout")
+        or_not_idx = bound.index("OR NOT", normalized_branch_end)
+        raw_branch_start = bound.index("log_entries.raw_message ~*")
+        assert or_not_idx < raw_branch_start, (
+            "raw_message matching must be gated behind the empty-normalized_message "
+            "guard, not OR'd in unconditionally"
+        )
+        assert "normalized_message IS NOT NULL" in bound[or_not_idx:raw_branch_start]
+
     def test_every_trigger_pattern_is_represented_in_the_where_clause(self):
         from src.core.normalization.patterns import TRIGGER_PATTERNS
 

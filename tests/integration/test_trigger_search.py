@@ -15,6 +15,18 @@ from "sometimes missed" to "always missed" for that shape of incident. The
 fix filters to ``TRIGGER_PATTERNS`` matches in SQL before ordering/capping,
 so the cap bounds trigger candidates rather than log volume.
 
+Round 2: matching ``raw_message`` in that SQL filter unconditionally
+reopened the same bug one column over. ``is_trigger_message()`` only reads
+``raw_message`` when ``normalized_message`` is empty -- otherwise it reads
+``normalized_message`` alone. So a row with a benign ``normalized_message``
+but a raw JSON blob that incidentally contains trigger-shaped text in some
+other field (an error/detail field, a stack trace) matched the SQL filter as
+a false positive, consumed a cap slot, and was then correctly rejected by
+``is_trigger_message()`` -- but too late, since the cap had already been
+spent on it instead of the real trigger. The fix gates the ``raw_message``
+branch behind ``normalized_message`` being empty/null, mirroring the Python
+fallback exactly.
+
 Skipped without a live Postgres (CI has no DB by default); the query-shape
 assertions that don't need a real database live in tests/unit/test_evidence.py.
 """
@@ -72,6 +84,39 @@ def _heartbeat_rows(scope: str, start: datetime, end: datetime, count: int) -> l
         )
         for i in range(1, count + 1)
     ]
+
+
+def _raw_json_false_positive_rows(scope: str, start: datetime, end: datetime, count: int) -> list:
+    """Rows with a benign normalized_message but a raw JSON blob that
+    incidentally contains trigger-shaped text in an unrelated field --
+    the false-positive-at-SQL-layer shape from PR #89 review round 2."""
+    import orjson
+
+    from src.db.models import LogEntry
+
+    span_seconds = (end - start).total_seconds()
+    rows = []
+    for i in range(1, count + 1):
+        raw = orjson.dumps(
+            {
+                "level": "info",
+                "message": f"heartbeat {i}",
+                "detail": "token expired notice suppressed, will not retry",
+            }
+        ).decode()
+        rows.append(
+            LogEntry(
+                id=uuid.uuid4(),
+                timestamp=start + timedelta(seconds=(span_seconds * i) / count),
+                service="api",
+                level="info",
+                normalized_message=f"heartbeat {i}",  # benign -- Python would reject this
+                raw_message=raw,
+                source_adapter="file",
+                scope=scope,
+            )
+        )
+    return rows
 
 
 def test_two_calls_over_a_large_window_return_identical_candidates(db_session) -> None:
@@ -158,6 +203,54 @@ def test_trigger_after_5000_earlier_noise_rows_is_still_found(db_session) -> Non
     assert any("Deploy completed for billing-worker" in c.message for c in candidates), (
         f"trigger not found among {len(candidates)} candidate(s) despite being in range — "
         "the row cap is bounding log volume again instead of trigger candidates"
+    )
+
+
+def test_raw_json_false_positives_do_not_starve_the_cap(db_session) -> None:
+    """PR #89 review round 2's exact scenario: 6000 rows precede the deploy,
+    each with a benign normalized_message ("heartbeat N") that
+    is_trigger_message() would reject, but a raw JSON blob containing "token
+    expired" in an unrelated field. Matching raw_message unconditionally in
+    SQL would count all 6000 as trigger candidates, spend the entire row cap
+    on them, and never reach the real deploy trigger -- even though Python
+    would have rejected every one of those 6000 rows itself, because it never
+    reads raw_message when normalized_message is populated. Confirmed this
+    fails without the empty-normalized_message gate and passes with it.
+    """
+    from src.core.explain.evidence import find_trigger_candidates
+    from src.db.models import LogEntry
+
+    scope = f"test-trigger-raw-false-positive-{uuid.uuid4().hex[:8]}"
+    window_start = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    window_end = window_start + timedelta(hours=1)
+    lookback_minutes = 10
+    search_start = window_start - timedelta(minutes=lookback_minutes)  # 11:50
+    noise_end = search_start + timedelta(minutes=8)  # 11:58
+
+    db_session.add_all(
+        _raw_json_false_positive_rows(scope, search_start, noise_end, NOISE_ROW_COUNT)
+    )
+    db_session.flush()
+
+    trigger_entry = LogEntry(
+        id=uuid.uuid4(),
+        timestamp=window_start - timedelta(minutes=1),  # 11:59
+        service="deployment-controller",
+        level="info",
+        normalized_message="Deploy completed for billing-worker v2.4.1",
+        source_adapter="file",
+        scope=scope,
+    )
+    db_session.add(trigger_entry)
+    db_session.flush()
+
+    candidates = find_trigger_candidates(
+        db_session, window_start, window_end, lookback_minutes=lookback_minutes, scope=scope
+    )
+
+    assert any("Deploy completed for billing-worker" in c.message for c in candidates), (
+        f"trigger not found among {len(candidates)} candidate(s) — raw_message false "
+        "positives (benign normalized_message, trigger-shaped raw JSON) starved the cap"
     )
 
 

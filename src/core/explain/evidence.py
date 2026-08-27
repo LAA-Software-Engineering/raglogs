@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, not_, or_, select
 from sqlalchemy.orm import Session
 
 from src.config import get_settings
@@ -73,15 +73,31 @@ def find_trigger_candidates(
     """
     Find likely trigger events in a window slightly before the main window.
 
-    The WHERE clause filters to rows whose normalized_message or raw_message
-    matches a TRIGGER_PATTERNS regex (Postgres ~*) before ordering/capping, so
-    the row cap bounds trigger-shaped candidates rather than arbitrary log
-    volume. Without this, ORDER BY timestamp LIMIT N alone is deterministic
-    but still silently drops a real trigger whenever more than N unrelated log
-    lines occur earlier in the search range than it does (#76 review).
-    is_trigger_message() re-checks each SQL match in Python as a safety net —
-    cheap here since the SQL filter has already narrowed the result set to a
-    small candidate set.
+    The WHERE clause filters to rows the Python extraction below would
+    actually evaluate a trigger match against, before ordering/capping, so the
+    row cap bounds trigger-shaped candidates rather than arbitrary log volume:
+      - normalized_message, when it's populated (the common case) — this is
+        the only text the Python fallback reads in that case.
+      - raw_message, only when normalized_message is empty/null — matching
+        the Python fallback exactly, which never reads raw_message otherwise.
+    Matching raw_message unconditionally would let a row with a benign
+    normalized_message but a raw JSON blob that incidentally contains
+    trigger-shaped text in some other field (an error/detail field, a stack
+    trace) consume a cap slot as a false positive: is_trigger_message() would
+    correctly reject it since it never sees raw_message in that case, but by
+    then the cap has already spent the slot, reopening the same starvation
+    this filter exists to close — just triggered by raw-JSON noise instead of
+    log volume (#76 review round 2).
+
+    Without any of this, ORDER BY timestamp LIMIT N alone is deterministic but
+    still silently drops a real trigger whenever more than N unrelated log
+    lines occur earlier in the search range than it does (#76 review round 1).
+    is_trigger_message() re-checks every SQL match in Python as a final
+    arbiter — cheap here since the SQL filter has already narrowed the result
+    set to a small candidate set, and it stays authoritative for the rare
+    raw-JSON-fallback rows where the SQL side can still be an imprecise
+    superset (e.g. a trigger phrase in a non-"message" JSON field on a line
+    whose "message" field happens to be missing or unparseable).
 
     lookback_minutes defaults to settings.trigger_lookback_minutes when not
     given explicitly, so TRIGGER_LOOKBACK_MINUTES has one source of truth
@@ -95,9 +111,19 @@ def find_trigger_candidates(
 
     search_start = window_start - timedelta(minutes=lookback_minutes)
 
+    normalized_populated = and_(
+        LogEntry.normalized_message.isnot(None),
+        LogEntry.normalized_message != "",
+    )
     trigger_match = or_(
-        *(LogEntry.normalized_message.op("~*")(p) for p in _TRIGGER_SQL_PATTERNS),
-        *(LogEntry.raw_message.op("~*")(p) for p in _TRIGGER_SQL_PATTERNS),
+        and_(
+            normalized_populated,
+            or_(*(LogEntry.normalized_message.op("~*")(p) for p in _TRIGGER_SQL_PATTERNS)),
+        ),
+        and_(
+            not_(normalized_populated),
+            or_(*(LogEntry.raw_message.op("~*")(p) for p in _TRIGGER_SQL_PATTERNS)),
+        ),
     )
 
     q = select(
