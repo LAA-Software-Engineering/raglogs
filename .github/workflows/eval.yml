@@ -1,0 +1,58 @@
+# Explanation-quality eval. Not a PR gate (it ingests + runs the full pipeline
+# per case); it tracks raglogs' accuracy and its lift over the trivial baseline
+# over time — on a schedule, on pushes to main, and on demand.
+name: eval
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *"   # daily at 06:00 UTC
+  push:
+    branches: [ "main" ]
+    paths:
+      - "src/**"
+      - "tests/eval/**"
+      - ".github/workflows/eval.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: raglogs
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DB_URL: postgresql+psycopg://postgres:postgres@localhost:5432/raglogs
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Migrate
+        run: alembic upgrade head
+      - name: Run eval
+        run: raglogs eval --json eval_results.json
+      - name: Upload eval results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: eval-results
+          path: eval_results.json

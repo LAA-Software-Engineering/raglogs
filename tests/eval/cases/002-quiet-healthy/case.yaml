@@ -1,0 +1,10 @@
+id: quiet-healthy-002
+# Negative case: a healthy window of routine health checks and 200s. The
+# correct answer is "nothing significant happened" — raglogs should abstain
+# (insufficient evidence), not invent a root cause.
+window:
+  start: "2026-04-01T00:00:00+00:00"
+  end: "2026-04-01T00:30:00+00:00"
+logs: tests/eval/cases/002-quiet-healthy/logs.jsonl
+expect_explanation: false
+notes: Info-level health checks and normal 200 OK traffic; no errors, no deploy.
