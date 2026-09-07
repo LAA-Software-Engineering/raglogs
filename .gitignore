@@ -74,6 +74,9 @@ data/
 # Eval harness output (tracked as a CI artifact, not committed)
 /eval_results.json
 
+# Benchmark output (tracked as a CI artifact, not committed)
+/bench_results.json
+
 # Loghub benchmark output (Loghub itself is downloaded under data/, gitignored)
 /loghub_results.json
 

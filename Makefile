@@ -1,7 +1,7 @@
 .PHONY: help install install-dev \
         db-up db-down docker-up docker-down docker-demo docker-logs \
         init migrate demo ingest explain clusters ask \
-        api web web-serve worker test test-unit test-int test-cov eval eval-data loghub lint format \
+        api web web-serve worker test test-unit test-int test-cov eval eval-data bench loghub lint format \
         openapi jsonschema client-go client-python clean
 
 PYTHON  := python
@@ -155,6 +155,13 @@ eval-data:
 # header) — it is research/academic-use only and never committed.
 loghub:
 	$(PYTHON) scripts/loghub_bench.py
+
+# ── Performance benchmark ─────────────────────────────────────────────────────
+
+bench: db-up
+	@sleep 2
+	alembic upgrade head
+	$(PYTHON) scripts/benchmark.py
 
 # ── Quality ───────────────────────────────────────────────────────────────────
 

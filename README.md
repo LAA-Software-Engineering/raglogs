@@ -1332,6 +1332,17 @@ make client-python
 make clean
 ```
 
+### Performance
+
+`make bench` ingests synthetic log lines and explains the window, reporting
+wall time and query counts per phase so regressions are visible (it runs on a
+schedule and on `main` via `.github/workflows/bench.yml`, uploading
+`bench_results.json`). The working target is **explain a window in under 10s**;
+the real ceiling on line volume is still being characterized — treat the
+benchmark output, not this sentence, as the source of truth. See issue #85 for
+the remaining perf work (connection-pool sizing and bulk cluster-member inserts
+already landed; time-partitioning and a full load test are open).
+
 **Project structure**
 
 ```
