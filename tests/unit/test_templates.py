@@ -4,7 +4,6 @@ Tests for src.core.explain.templates
 Verifies the rendered text output shape — section order, secondary loop
 completeness, trigger hierarchy, truncation, and edge cases.
 """
-import pytest
 from datetime import datetime, timezone, timedelta
 
 from src.core.clustering.clusterer import ClusterData
@@ -125,7 +124,7 @@ class TestSecondarySection:
         text = render_text_summary(p, "high")
         # All three should be bullet points under "Secondary effects:"
         secondary_block = text.split("Secondary effects:")[1].split("Likely trigger:")[0]
-        bullets = [l for l in secondary_block.splitlines() if l.strip().startswith("-")]
+        bullets = [line for line in secondary_block.splitlines() if line.strip().startswith("-")]
         assert len(bullets) == 3
 
     def test_no_secondary_emits_none_identified(self):
@@ -150,7 +149,7 @@ class TestSecondarySection:
         p = _packet(primary=_cluster("DB timeout"), secondary=secondaries)
         text = render_text_summary(p, "medium")
         secondary_block = text.split("Secondary effects:")[1].split("Likely trigger:")[0]
-        bullets = [l for l in secondary_block.splitlines() if l.strip().startswith("-")]
+        bullets = [line for line in secondary_block.splitlines() if line.strip().startswith("-")]
         assert len(bullets) == 3
 
 
@@ -227,7 +226,7 @@ class TestPrimaryIssue:
         long_msg = "A" * 200
         p = _packet(primary=_cluster(long_msg))
         text = render_text_summary(p, "medium")
-        primary_line = next(l for l in text.splitlines() if l.startswith("Primary issue:"))
+        primary_line = next(line for line in text.splitlines() if line.startswith("Primary issue:"))
         assert len(primary_line) < 200
 
 

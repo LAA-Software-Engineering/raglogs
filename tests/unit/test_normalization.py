@@ -1,4 +1,3 @@
-import pytest
 from src.core.normalization.normalize import normalize_message
 from src.core.normalization.fingerprint import compute_fingerprint, fingerprint_message
 

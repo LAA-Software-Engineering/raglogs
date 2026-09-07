@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Optional
 import re
 
-from src.core.explain.evidence import EvidencePacket, TriggerCandidate
+from src.core.explain.evidence import EvidencePacket
 from src.core.clustering.clusterer import ClusterData
 
 

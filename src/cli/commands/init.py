@@ -1,4 +1,3 @@
-import sys
 from pathlib import Path
 
 import typer
@@ -22,16 +21,16 @@ def init_cmd(
         if example.exists():
             import shutil
             shutil.copy(example, env_path)
-            console.print(f"[green]✓[/green] Created .env from .env.example")
+            console.print("[green]✓[/green] Created .env from .env.example")
         else:
             env_path.write_text(
                 "DB_URL=postgresql+psycopg://postgres:postgres@localhost:5432/raglogs\n"
                 "LLM_PROVIDER=disabled\n"
                 "EMBEDDINGS_PROVIDER=disabled\n"
             )
-            console.print(f"[green]✓[/green] Created default .env")
+            console.print("[green]✓[/green] Created default .env")
     else:
-        console.print(f"[dim]  .env already exists[/dim]")
+        console.print("[dim]  .env already exists[/dim]")
 
     # Override DB URL if provided
     if db_url:

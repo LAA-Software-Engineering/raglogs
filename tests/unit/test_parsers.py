@@ -1,5 +1,3 @@
-import pytest
-from datetime import datetime, timezone
 
 from src.core.parsing.json_parser import parse_json_line
 from src.core.parsing.text_parser import parse_text_line

@@ -10,7 +10,6 @@ row cap, the SQL-side TRIGGER_PATTERNS filter, column scoping, lookback
 resolution); tests/integration/test_trigger_search.py covers the actual
 determinism and cap-vs-recall behavior against a live Postgres.
 """
-import pytest
 from collections import namedtuple
 from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock

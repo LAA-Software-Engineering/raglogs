@@ -2,7 +2,6 @@ import json
 import random
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -25,7 +24,7 @@ def demo_cmd(
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    console.print(f"[bold cyan]Generating sample incident data...[/bold cyan]")
+    console.print("[bold cyan]Generating sample incident data...[/bold cyan]")
     console.print(f"  Deploy:      {deploy_time.strftime('%H:%M:%S')} UTC (55m ago)")
     console.print(f"  Errors from: {error_start.strftime('%H:%M:%S')} UTC (53m ago)")
 
