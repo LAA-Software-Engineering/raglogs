@@ -168,12 +168,50 @@ def _infer_level(message: str) -> str:
     return "info"
 
 
+def _build_record(
+    ts_raw: object,
+    service: object,
+    message: object,
+    window: tuple[datetime, datetime] | None = None,
+) -> dict | None:
+    """One raglogs ingest record from raw fields, or None to skip.
+
+    Skips unparseable timestamps and, when ``window`` is given, rows outside it.
+    """
+    ts = _parse_log_time(str(ts_raw))
+    if ts is None:
+        return None
+    if window is not None and not (window[0] <= ts <= window[1]):
+        return None
+    msg = str(message or "").strip()
+    svc = str(service).strip() if service is not None else ""
+    return {
+        "timestamp": ts.isoformat(),
+        "service": svc or None,
+        "message": msg,
+        "level": _infer_level(msg),
+    }
+
+
+def _pick_column(names: list[str], *candidates: str) -> str | None:
+    """Resolve a column by exact (case-insensitive) name, then substring."""
+    lower = {n.lower(): n for n in names}
+    for cand in candidates:
+        if cand in lower:
+            return lower[cand]
+    for cand in candidates:
+        for lc, original in lower.items():
+            if cand in lc:
+                return original
+    return None
+
+
 def convert_logs_csv(text: str) -> list[dict]:
     """Convert RCAEval ``logs.csv`` text into raglogs JSONL ingest records.
 
     Reads ``time, service, message`` by header when present, else positionally.
-    A ``level`` is inferred from the message so error lines feed clustering and
-    the baseline arm. Rows with an unparseable timestamp are skipped.
+    Kept for the CSV variant of the corpus; the current Hugging Face packaging
+    ships ``logs.parquet`` (see :func:`load_parquet_logs`).
     """
     reader = csv.reader(io.StringIO(text))
     rows = list(reader)
@@ -192,18 +230,40 @@ def convert_logs_csv(text: str) -> list[dict]:
     for row in body:
         if len(row) <= max(ti, si, mi):
             continue
-        ts = _parse_log_time(row[ti])
-        if ts is None:
-            continue
-        message = row[mi].strip()
-        records.append(
-            {
-                "timestamp": ts.isoformat(),
-                "service": row[si].strip() or None,
-                "message": message,
-                "level": _infer_level(message),
-            }
+        rec = _build_record(row[ti], row[si], row[mi])
+        if rec is not None:
+            records.append(rec)
+    return records
+
+
+def load_parquet_logs(
+    path: Path, window: tuple[datetime, datetime] | None = None
+) -> list[dict]:
+    """Convert an RCAEval ``logs.parquet`` into raglogs ingest records.
+
+    The Hugging Face dataset ships logs as Parquet with columns
+    ``timestamp, container_name, message`` (epoch-second timestamps). Column
+    names are resolved leniently. When ``window`` is given, only rows inside it
+    are kept — the harness explains that window anyway, so this bounds ingest
+    (a case can hold tens of thousands of lines).
+    """
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(str(path))
+    names = table.column_names
+    tcol = _pick_column(names, "timestamp", "time")
+    scol = _pick_column(names, "container_name", "service", "pod_name", "pod", "container")
+    mcol = _pick_column(names, "message", "log", "body")
+    if tcol is None or mcol is None:
+        raise ValueError(f"logs.parquet columns not recognized: {names}")
+
+    records: list[dict] = []
+    for row in table.to_pylist():
+        rec = _build_record(
+            row.get(tcol), row.get(scol) if scol else None, row.get(mcol), window
         )
+        if rec is not None:
+            records.append(rec)
     return records
 
 
@@ -225,6 +285,9 @@ def build_case_yaml(
 ) -> dict:
     """Build the harness ``case.yaml`` dict for one RCAEval case."""
     start, end = window
+    # RE3 is the code-level-fault suite (faults named f1/f2/f3…), so those are
+    # code triggers regardless of the fault token; RE2 maps by fault family.
+    trigger_type = "code" if meta.suite == "re3" else trigger_type_for_fault(meta.fault)
     # No `logs` key: the loader defaults to logs.jsonl in the case dir, which is
     # exactly where convert_case writes it.
     return {
@@ -233,7 +296,7 @@ def build_case_yaml(
         "root_cause": {"service": meta.service},
         "trigger": {
             "timestamp": inject_time.isoformat(),
-            "type": trigger_type_for_fault(meta.fault),
+            "type": trigger_type,
         },
         "expect_explanation": True,
         "notes": f"RCAEval {meta.suite} {meta.system} fault={meta.fault} instance={meta.instance}",
@@ -254,18 +317,22 @@ def convert_case(
     import yaml
 
     src_dir = Path(src_dir)
-    logs_csv = src_dir / "logs.csv"
     inject_txt = src_dir / "inject_time.txt"
-    if not logs_csv.exists() or not inject_txt.exists():
+    logs_parquet = src_dir / "logs.parquet"
+    logs_csv = src_dir / "logs.csv"
+    if not inject_txt.exists() or not (logs_parquet.exists() or logs_csv.exists()):
         return False
 
     meta = parse_case_dir_name(src_dir.name)
     inject_time = parse_inject_time(inject_txt.read_text())
-    records = convert_logs_csv(logs_csv.read_text())
+    window = window_around(inject_time, pre_seconds, post_seconds)
+    if logs_parquet.exists():
+        records = load_parquet_logs(logs_parquet, window)
+    else:
+        records = convert_logs_csv(logs_csv.read_text())
     if not records:
         return False
 
-    window = window_around(inject_time, pre_seconds, post_seconds)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     with (out_dir / "logs.jsonl").open("w") as f:

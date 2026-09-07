@@ -113,6 +113,72 @@ class TestConvertLogs:
         assert convert_logs_csv("") == []
 
 
+def _write_parquet(path, rows):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    cols = {k: [r[k] for r in rows] for k in rows[0]}
+    pq.write_table(pa.table(cols), str(path))
+
+
+class TestParquetLogs:
+    def test_maps_hf_columns_and_filters_window(self, tmp_path):
+        from datetime import datetime, timezone
+
+        from src.eval.rcaeval import load_parquet_logs
+
+        # HF schema: timestamp (epoch s), container_name, message.
+        rows = [
+            {"timestamp": 1700000000, "container_name": "adservice", "message": "started"},
+            {"timestamp": 1700000300, "container_name": "adservice", "message": "NullPointer error"},
+            {"timestamp": 1700009999, "container_name": "frontend", "message": "way outside window"},
+        ]
+        p = tmp_path / "logs.parquet"
+        _write_parquet(p, rows)
+
+        window = (
+            datetime.fromtimestamp(1699999900, tz=timezone.utc),
+            datetime.fromtimestamp(1700000400, tz=timezone.utc),
+        )
+        recs = load_parquet_logs(p, window)
+        assert len(recs) == 2  # third row filtered out
+        assert recs[0]["service"] == "adservice"
+        assert recs[1]["level"] == "error"  # inferred from "error"
+
+    def test_no_window_keeps_all(self, tmp_path):
+        from src.eval.rcaeval import load_parquet_logs
+
+        p = tmp_path / "logs.parquet"
+        _write_parquet(p, [{"timestamp": 1700000000, "container_name": "s", "message": "m"}])
+        assert len(load_parquet_logs(p)) == 1
+
+
+class TestConvertCaseParquet:
+    def test_re3_parquet_case_loads_as_code_trigger(self, tmp_path):
+        from src.eval.case import load_case
+        from src.eval.rcaeval import convert_case
+
+        src = tmp_path / "re3ob_adservice_f3_1"
+        src.mkdir()
+        (src / "inject_time.txt").write_text("1700000300")
+        _write_parquet(
+            src / "logs.parquet",
+            [
+                {"timestamp": 1700000290, "container_name": "adservice", "message": "ok"},
+                {"timestamp": 1700000305, "container_name": "adservice", "message": "boom exception"},
+                {"timestamp": 1700099999, "container_name": "frontend", "message": "far future"},
+            ],
+        )
+        out = tmp_path / "out"
+        assert convert_case(src, out) is True
+
+        case = load_case(out)
+        assert case.root_cause.service == "adservice"
+        assert case.trigger.type == "code"  # RE3 = code-level faults
+        # the far-future row is outside the window and dropped
+        assert sum(1 for _ in open(out / "logs.jsonl")) == 2
+
+
 class TestConvertCase:
     def test_output_loads_as_a_harness_case(self, tmp_path):
         from src.eval.case import load_case
