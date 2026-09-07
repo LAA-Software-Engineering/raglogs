@@ -1,0 +1,58 @@
+# Performance benchmark. Not a PR gate; tracks ingest/explain wall time and
+# query counts over time so regressions are visible (issue #85). Runs on a
+# schedule, on pushes to main, and on demand.
+name: bench
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 6 * * *"   # daily at 06:30 UTC
+  push:
+    branches: [ "main" ]
+    paths:
+      - "src/**"
+      - "scripts/benchmark.py"
+      - ".github/workflows/bench.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: raglogs
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DB_URL: postgresql+psycopg://postgres:postgres@localhost:5432/raglogs
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Migrate
+        run: alembic upgrade head
+      - name: Run benchmark
+        run: python scripts/benchmark.py --lines 20000 --json bench_results.json
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-results
+          path: bench_results.json

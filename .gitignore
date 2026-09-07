@@ -74,6 +74,9 @@ data/
 # Eval harness output (tracked as a CI artifact, not committed)
 /eval_results.json
 
+# Benchmark output (tracked as a CI artifact, not committed)
+/bench_results.json
+
 # Generated API clients (keep README + thin Python wrapper)
 clients/go/*.go
 clients/python/generated/
