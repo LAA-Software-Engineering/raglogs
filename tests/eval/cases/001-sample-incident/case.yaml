@@ -1,0 +1,19 @@
+id: sample-incident-001
+# Canary case: the committed sample_data fixture the product was developed
+# against. Expect near-100% — treat a high score here as a smoke check that the
+# harness wiring works, NOT as evidence of quality on unseen incidents.
+window:
+  start: "2026-03-16T15:00:00+00:00"
+  end: "2026-03-16T16:10:00+00:00"
+logs: sample_data/sample_incident
+root_cause:
+  service: billing-worker
+  fingerprint_hint: "signature verification failed"
+trigger:
+  timestamp: "2026-03-16T15:15:30+00:00"
+  type: deploy
+expect_explanation: true
+notes: >
+  A billing-worker v2.4.1 deploy at ~15:15 breaks Stripe webhook signature
+  verification; api checkout 500s cascade shortly after. Root cause is
+  billing-worker; the trigger is the deploy.

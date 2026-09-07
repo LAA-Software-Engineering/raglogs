@@ -1,0 +1,9 @@
+id: steady-state-003
+# Negative case: steady checkout traffic, all 200 OK with mild latency
+# variation. No error spike, no trigger. raglogs should abstain.
+window:
+  start: "2026-04-02T00:00:00+00:00"
+  end: "2026-04-02T00:30:00+00:00"
+logs: tests/eval/cases/003-steady-state/logs.jsonl
+expect_explanation: false
+notes: Steady successful checkout traffic; nothing anomalous in the window.

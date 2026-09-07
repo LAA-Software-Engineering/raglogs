@@ -1,7 +1,7 @@
 .PHONY: help install install-dev \
         db-up db-down docker-up docker-down docker-demo docker-logs \
         init migrate demo ingest explain clusters ask \
-        api web web-serve worker test test-unit test-int test-cov lint format \
+        api web web-serve worker test test-unit test-int test-cov eval eval-data lint format \
         openapi jsonschema client-go client-python clean
 
 PYTHON  := python
@@ -140,6 +140,16 @@ test-int:
 
 test-cov:
 	pytest tests/unit/ --cov=src --cov-report=term-missing
+
+# ── Eval harness ──────────────────────────────────────────────────────────────
+
+eval: db-up
+	@sleep 2
+	alembic upgrade head
+	raglogs eval
+
+eval-data:
+	$(PYTHON) scripts/eval_data.py
 
 # ── Quality ───────────────────────────────────────────────────────────────────
 
