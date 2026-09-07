@@ -2,7 +2,7 @@
         db-up db-down docker-up docker-down docker-demo docker-logs \
         init migrate demo ingest explain clusters ask \
         api web web-serve worker test test-unit test-int test-cov eval eval-data bench loghub lint format \
-        openapi jsonschema client-go client-python clean
+        openapi jsonschema config-docs client-go client-python clean
 
 PYTHON  := python
 PIP     := pip
@@ -178,6 +178,10 @@ openapi:
 
 jsonschema:
 	PYTHONPATH=. $(PYTHON) scripts/export_jsonschema.py
+
+# Regenerate docs/configuration.md from the Settings model (never edit it by hand).
+config-docs:
+	$(PYTHON) scripts/gen_config_docs.py
 
 # Generates clients/go/client.go when oapi-codegen is installed.
 # Missing binary: print install hint and exit 0 so CI without Go still passes.
