@@ -68,6 +68,9 @@ logs/
 # Local data
 data/
 
+# Stray CLI export output redirected into the repo root
+/exported_logs.json
+
 # Generated API clients (keep README + thin Python wrapper)
 clients/go/*.go
 clients/python/generated/

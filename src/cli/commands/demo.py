@@ -10,7 +10,7 @@ console = Console()
 
 
 def demo_cmd(
-    output_dir: str = typer.Option("./sample_data/sample_incident", "--output-dir", help="Where to write sample logs"),
+    output_dir: str = typer.Option("./data/sample_incident", "--output-dir", help="Where to write sample logs (default is gitignored; do not point at the committed sample_data/ fixtures)"),
     ingest: bool = typer.Option(True, "--ingest/--no-ingest", help="Ingest after generating"),
     explain: bool = typer.Option(True, "--explain/--no-explain", help="Run explain after ingesting"),
 ):
