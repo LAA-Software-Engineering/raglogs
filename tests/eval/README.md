@@ -70,5 +70,28 @@ team could learn, and the harness makes it impossible to avoid.
 - `002-quiet-healthy`, `003-steady-state` — negative cases where the correct
   answer is "nothing significant happened".
 
-Large labeled corpora (RCAEval #78, OTel-demo #79, Loghub-2.0 #80) arrive via
-`make eval-data` and drop into this directory in the same format.
+## External corpora
+
+Large labeled corpora are downloaded (never committed) and converted into the
+same case format under gitignored `data/eval-cases/`.
+
+### RCAEval RE2/RE3 (`make eval-data`)
+
+[RCAEval](https://github.com/phamquiluan/RCAEval) (MIT) ships 360 labeled
+failure cases whose `inject_time.txt` is exactly the trigger label. `make
+eval-data` downloads it (~3.4 GB) and converts each case — deriving the
+root-cause service and fault type from the directory name and the trigger from
+`inject_time.txt` — into `data/eval-cases/rcaeval/{re2,re3}/`. Then:
+
+```bash
+raglogs eval --cases data/eval-cases/rcaeval/re2 --json eval_re2.json
+raglogs eval --cases data/eval-cases/rcaeval/re3 --json eval_re3.json
+```
+
+Score **RE2 and RE3 separately**: RE2 faults (CPU/memory/disk/network stress)
+don't announce themselves in the logs, so raglogs' pattern-based trigger
+detection is expected to score near-zero there — that gap is the finding, and it
+motivates the trigger-redesign work (#82). RE3 (code-level faults, visible as
+stack traces) is where raglogs should be competitive.
+
+OTel-demo (#79) and Loghub-2.0 (#80) will plug in here the same way.
