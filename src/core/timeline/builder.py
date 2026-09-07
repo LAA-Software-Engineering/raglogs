@@ -61,16 +61,6 @@ def _classify_trigger(message: str) -> str:
     return "trigger"
 
 
-def _effect_severity(cluster: ClusterData) -> int:
-    """Lower = more severe = sorts first among effects."""
-    msg = (cluster.representative_message or "").lower()
-    if any(kw in msg for kw in ("500", "error", "fail", "exception", "refused", "denied")):
-        return 0
-    if any(kw in msg for kw in ("latency", "slow", "timeout", "degraded")):
-        return 1
-    return 2
-
-
 def _classify_secondary(cluster: ClusterData, primary: Optional[ClusterData]) -> str:
     msg = (cluster.representative_message or "").lower()
     if re.search(r"queue|pending|backlog", msg):
@@ -164,11 +154,14 @@ def build_timeline(packet: EvidencePacket) -> list[TimelineEvent]:
             services=services,
         ))
 
-    # Sort effects by: severity first, then timestamp
+    # Sort effects by: severity first, then timestamp. The category rank
+    # (error < effect < symptom) and the within-category description rank must
+    # dominate so error effects sort ahead of symptoms regardless of when each
+    # first appeared; timestamp only breaks ties among equally-severe events.
     post_events.sort(key=lambda e: (
-        e.timestamp,
         EFFECT_SEVERITY.get(e.category, 1),
         _effect_severity_from_desc(e.description),
+        e.timestamp,
     ))
 
     result = pre_events
