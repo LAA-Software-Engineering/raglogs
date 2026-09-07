@@ -1,0 +1,82 @@
+# Configuration
+
+Every setting is read from an environment variable (see `.env.example`). This table is generated from `src/config/settings.py` by `make config-docs` — edit the model, not this file.
+
+| Env var | Type | Default |
+| --- | --- | --- |
+| `DB_URL` | str | `postgresql+psycopg://postgres:postgres@localhost:5432/raglogs` |
+| `DB_POOL_SIZE` | int | `20` |
+| `DB_MAX_OVERFLOW` | int | `20` |
+| `EMBEDDINGS_PROVIDER` | disabled \| openai \| local | `disabled` |
+| `EMBEDDINGS_MODEL` | str | `text-embedding-3-small` |
+| `EMBEDDINGS_DIMENSIONS` | int | `1536` |
+| `CLUSTER_MERGE_SIMILARITY_THRESHOLD` | float | `0.92` |
+| `CLUSTER_MERGE_MIN_COUNT` | int | `1` |
+| `ASK_SEMANTIC_TOP_K` | int | `100` |
+| `ASK_SEMANTIC_MIN_SIMILARITY` | float | `0.75` |
+| `SIMILAR_SEMANTIC_MIN_SIMILARITY` | float | `0.8` |
+| `LLM_PROVIDER` | disabled \| openai \| ollama \| claude | `disabled` |
+| `LLM_MODEL` | str | `gpt-4.1-mini` |
+| `OPENAI_API_KEY` | str | `""` |
+| `OPENAI_BASE_URL` | str | `https://api.openai.com/v1` |
+| `OLLAMA_BASE_URL` | str | `http://localhost:11434` |
+| `ANTHROPIC_API_KEY` | str | `""` |
+| `ANTHROPIC_BASE_URL` | str | `https://api.anthropic.com` |
+| `DEFAULT_BASELINE_WINDOW` | str | `24h` |
+| `MAX_EVIDENCE_ITEMS` | int | `8` |
+| `MAX_CLUSTERS_FOR_EXPLAIN` | int | `10` |
+| `TRIGGER_LOOKBACK_MINUTES` | int | `10` |
+| `AUTH_ENABLED` | bool | `false` |
+| `AUTH_MODE` | api_key \| oidc \| both | `api_key` |
+| `OIDC_ISSUER` | str | `""` |
+| `OIDC_AUDIENCE` | str | `""` |
+| `OIDC_JWKS_URL` | str | `""` |
+| `API_BIND_HOST` | str | `127.0.0.1` |
+| `AUTH_REFUSE_INSECURE_BIND` | bool | `false` |
+| `WORKER_POLL_INTERVAL` | int | `2` |
+| `RETENTION_RAW` | str | `30d` |
+| `RETENTION_SUMMARY` | str | `180d` |
+| `PURGE_INTERVAL_SECONDS` | int | `3600` |
+| `PURGE_CHUNK_SIZE` | int | `1000` |
+| `INGEST_QUEUE_MAX` | int | `100` |
+| `INGEST_RETRY_AFTER_SECONDS` | int | `5` |
+| `INGEST_PUSH_MAX_LINES` | int | `5000` |
+| `TAIL_POLL_INTERVAL` | int | `30` |
+| `TAIL_ERROR_THRESHOLD` | int | `5` |
+| `RATELIMIT_ENABLED` | bool | `true` |
+| `RATELIMIT_INGEST_RPS` | float | `100.0` |
+| `RATELIMIT_QUERY_RPS` | float | `100.0` |
+| `RATELIMIT_BURST` | float | `100.0` |
+| `RATELIMIT_RETRY_AFTER_SECONDS` | int | `1` |
+| `LLM_MAX_CONCURRENCY` | int | `4` |
+| `LLM_TIMEOUT` | float | `30.0` |
+| `LLM_MAX_RETRIES` | int | `2` |
+| `LLM_MAX_TOKENS` | int | `600` |
+| `LLM_MAX_INPUT_TOKENS` | int | `0` |
+| `LLM_BREAKER_THRESHOLD` | int | `5` |
+| `LLM_BREAKER_COOLDOWN_SECONDS` | float | `60.0` |
+| `WEBHOOK_SECRET` | str | `""` |
+| `WEBHOOK_MAX_RETRIES` | int | `5` |
+| `WEBHOOK_TIMEOUT` | float | `10.0` |
+| `INGEST_IDEMPOTENCY_TTL_SECONDS` | int | `86400` |
+| `ADAPTER_CLOUDWATCH_REGION` | str | `us-east-1` |
+| `DATADOG_API_KEY` | str | `""` |
+| `DATADOG_APP_KEY` | str | `""` |
+| `DATADOG_SITE` | str | `datadoghq.com` |
+| `DATADOG_PAGE_SIZE` | int | `1000` |
+| `DATADOG_MAX_ROWS` | int | `10000` |
+| `LOKI_URL` | str | `""` |
+| `LOKI_TENANT` | str | `""` |
+| `LOKI_BEARER_TOKEN` | str | `""` |
+| `LOKI_USERNAME` | str | `""` |
+| `LOKI_PASSWORD` | str | `""` |
+| `LOKI_QUERY` | str | `""` |
+| `LOG_FORMAT` | json \| console | `json` |
+| `OTEL_SDK_DISABLED` | bool | `false` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | str | `""` |
+| `OTEL_SERVICE_NAME` | str | `raglogs` |
+| `SEVERITY_WEIGHT_FATAL` | float | `5.0` |
+| `SEVERITY_WEIGHT_ERROR` | float | `4.0` |
+| `SEVERITY_WEIGHT_WARN` | float | `3.0` |
+| `SEVERITY_WEIGHT_INFO` | float | `1.0` |
+| `SEVERITY_WEIGHT_DEBUG` | float | `0.5` |

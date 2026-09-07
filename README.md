@@ -690,6 +690,11 @@ raglogs keys revoke <key-uuid>
 
 All settings are read from `.env`, environment variables, or CLI flags. Priority: CLI > env var > `.env` file > defaults.
 
+> **The complete, authoritative list of every setting (env var, type, default) is
+> [`docs/configuration.md`](docs/configuration.md), generated from the `Settings`
+> model by `make config-docs` so it can't drift.** The table below highlights the
+> settings you're most likely to touch.
+
 | Variable | Default | Description |
 |---|---|---|
 | `DB_URL` | `postgresql+psycopg://postgres:postgres@localhost:5432/raglogs` | PostgreSQL connection URL |
