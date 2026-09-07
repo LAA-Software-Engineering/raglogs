@@ -1,0 +1,80 @@
+# Eval against a labeled external corpus (RCAEval), so a src/core change can be
+# backed by a real eval delta (the #88 policy) instead of only the 3 committed
+# seed cases. Opt-in (workflow_dispatch) for now: it downloads RCAEval (large)
+# and runs the full ingest+explain pipeline per case, so it's deliberately not a
+# per-PR gate. Promote to a schedule once a first manual run confirms the
+# download + eval work end to end. See issue #108.
+name: eval-corpus
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "Which RCAEval suite(s) to score"
+        type: choice
+        options: ["all", "re2", "re3"]
+        default: "all"
+      limit:
+        description: "Max cases per suite (keeps the run bounded)"
+        default: "30"
+
+permissions:
+  contents: read
+
+jobs:
+  eval-corpus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: raglogs
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DB_URL: postgresql+psycopg://postgres:postgres@localhost:5432/raglogs
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Migrate
+        run: alembic upgrade head
+      - name: Download + convert RCAEval subset
+        run: python scripts/eval_data.py --suite "${{ inputs.suite }}" --limit "${{ inputs.limit }}"
+      - name: Eval RE2
+        run: |
+          if [ -d data/eval-cases/rcaeval/re2 ]; then
+            raglogs eval --cases data/eval-cases/rcaeval/re2 --json eval_re2.json
+          else
+            echo "no RE2 cases converted, skipping"
+          fi
+      - name: Eval RE3
+        run: |
+          if [ -d data/eval-cases/rcaeval/re3 ]; then
+            raglogs eval --cases data/eval-cases/rcaeval/re3 --json eval_re3.json
+          else
+            echo "no RE3 cases converted, skipping"
+          fi
+      - name: Upload eval results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: eval-corpus-results
+          path: |
+            eval_re2.json
+            eval_re3.json
+          if-no-files-found: warn

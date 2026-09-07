@@ -94,6 +94,14 @@ detection is expected to score near-zero there — that gap is the finding, and 
 motivates the trigger-redesign work (#82). RE3 (code-level faults, visible as
 stack traces) is where raglogs should be competitive.
 
+**In CI:** the `eval-corpus` workflow (`.github/workflows/eval-corpus.yml`) runs
+this on demand (`workflow_dispatch`, with `suite`/`limit` inputs) against the
+CI Postgres and uploads the per-suite JSON as an artifact — so a `src/core` PR
+can cite a real eval delta (#88) without a local 3.4 GB download. It's opt-in
+rather than a per-PR gate because it downloads RCAEval and runs the full
+pipeline per case; promote it to a schedule once a first run confirms it end to
+end (#108).
+
 ### Loghub-2.0 normalization benchmark (`make loghub`)
 
 Loghub-2.0's labels are parse templates, not incident narratives, so it scores
