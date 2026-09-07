@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import insert, select
 from sqlalchemy.orm import Session
 
 from src.core.clustering.baseline import compute_change_ratio, get_baseline_counts
@@ -288,40 +288,63 @@ def _create_cluster_run(
     return run
 
 
+# Cap on cluster members persisted per cluster (a sample, for performance).
+_MAX_CLUSTER_MEMBERS = 100
+
+
+def _cluster_and_member_rows(
+    cluster_run_id: uuid.UUID, clusters: list[ClusterData]
+) -> tuple[list[dict], list[dict]]:
+    """Build the Cluster and ClusterMember insert rows for a run.
+
+    Pure (no DB): ids are generated here so members can reference their cluster
+    without a per-cluster flush, which lets both be bulk-inserted. Members are
+    capped at ``_MAX_CLUSTER_MEMBERS`` per cluster.
+    """
+    cluster_rows: list[dict] = []
+    member_rows: list[dict] = []
+    for cd in clusters:
+        cluster_id = uuid.uuid4()
+        cluster_rows.append(
+            {
+                "id": cluster_id,
+                "cluster_run_id": cluster_run_id,
+                "cluster_key": cd.fingerprint,
+                "representative_message": (
+                    cd.representative_message[:2048] if cd.representative_message else None
+                ),
+                "fingerprint": cd.fingerprint,
+                "count": cd.count,
+                "services_json": list(cd.services.keys()),
+                "levels_json": cd.levels,
+                "first_seen": cd.first_seen,
+                "last_seen": cd.last_seen,
+                "baseline_count": cd.baseline_count,
+                "change_ratio": cd.change_ratio,
+                "importance_score": cd.importance_score,
+            }
+        )
+        for log_id in cd.log_entry_ids[:_MAX_CLUSTER_MEMBERS]:
+            member_rows.append(
+                {"id": uuid.uuid4(), "cluster_id": cluster_id, "log_entry_id": log_id}
+            )
+    return cluster_rows, member_rows
+
+
 def _persist_clusters(
     db: Session, cluster_run: ClusterRun, clusters: list[ClusterData]
 ) -> None:
-    for cd in clusters:
-        cluster = Cluster(
-            id=uuid.uuid4(),
-            cluster_run_id=cluster_run.id,
-            cluster_key=cd.fingerprint,
-            representative_message=cd.representative_message[:2048]
-            if cd.representative_message
-            else None,
-            fingerprint=cd.fingerprint,
-            count=cd.count,
-            services_json=list(cd.services.keys()),
-            levels_json=cd.levels,
-            first_seen=cd.first_seen,
-            last_seen=cd.last_seen,
-            baseline_count=cd.baseline_count,
-            change_ratio=cd.change_ratio,
-            importance_score=cd.importance_score,
-        )
-        db.add(cluster)
-        db.flush()
+    """Bulk-insert clusters and their sampled members.
 
-        # Add a sample of cluster members (up to 100 for performance)
-        sample_ids = cd.log_entry_ids[:100]
-        for log_id in sample_ids:
-            member = ClusterMember(
-                id=uuid.uuid4(),
-                cluster_id=cluster.id,
-                log_entry_id=log_id,
-            )
-            db.add(member)
-
+    Mirrors the ingest path's ``pg_insert`` batching: a single executemany for
+    clusters and one for members, instead of ~1,000 individual ORM adds with a
+    flush per cluster on every explain call.
+    """
+    cluster_rows, member_rows = _cluster_and_member_rows(cluster_run.id, clusters)
+    if cluster_rows:
+        db.execute(insert(Cluster), cluster_rows)
+    if member_rows:
+        db.execute(insert(ClusterMember), member_rows)
     db.flush()
 
 

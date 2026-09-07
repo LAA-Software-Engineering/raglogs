@@ -21,6 +21,21 @@ def test_reads_unprefixed_env(monkeypatch):
     assert settings.loki_url == "http://loki:3100"
 
 
+def test_pool_defaults_match_threadpool(monkeypatch):
+    # Defaults give 40 connections (20 + 20) to match FastAPI's threadpool.
+    settings = Settings(_env_file=None)
+    assert settings.db_pool_size == 20
+    assert settings.db_max_overflow == 20
+
+
+def test_pool_settings_from_env(monkeypatch):
+    monkeypatch.setenv("DB_POOL_SIZE", "50")
+    monkeypatch.setenv("DB_MAX_OVERFLOW", "25")
+    settings = Settings(_env_file=None)
+    assert settings.db_pool_size == 50
+    assert settings.db_max_overflow == 25
+
+
 def test_cluster_merge_settings_from_env(monkeypatch):
     monkeypatch.setenv("CLUSTER_MERGE_SIMILARITY_THRESHOLD", "0.95")
     monkeypatch.setenv("CLUSTER_MERGE_MIN_COUNT", "2")
