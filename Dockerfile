@@ -7,10 +7,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml .
-RUN pip install --no-cache-dir -e ".[dev]"
-
+# Copy the whole project before installing: the hatchling build backend reads
+# README.md (readme=) and src/ (packages=["src"]) to generate metadata, so an
+# editable install can't run against pyproject.toml alone.
 COPY . .
+RUN pip install --no-cache-dir -e ".[dev]"
 
 EXPOSE 8000
 

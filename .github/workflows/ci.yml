@@ -1,6 +1,6 @@
-# This workflow will install Python dependencies, run tests and lint with a single version of Python
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
-
+# CI gates for raglogs. Enforces what the project actually cares about:
+# ruff lint, unit tests with a src/core coverage floor, and integration tests
+# against a real Postgres+pgvector service — across the supported Python range.
 name: CI
 
 on:
@@ -11,54 +11,87 @@ on:
     paths-ignore:
       - "**/*.md"
       - "CODEOWNERS"
-      - "Makefile"
   pull_request:
     branches: [ "main" ]
     paths-ignore:
       - "**/*.md"
       - "CODEOWNERS"
-      - "Makefile"
 
 permissions:
   contents: read
 
 jobs:
-  build:
-
+  test:
     runs-on: ubuntu-latest
-
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: raglogs
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DB_URL: postgresql+psycopg://postgres:postgres@localhost:5432/raglogs
     steps:
-    - uses: actions/checkout@v7
-    - name: Set up Python 3.10
-      uses: actions/setup-python@v7
-      with:
-        python-version: "3.10"
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install flake8 pytest
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-    - name: Lint with flake8
-      run: |
-        # stop the build if there are Python syntax errors or undefined names
-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-        # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
-        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
-    - name: Test with pytest
-      run: |
-        pytest
-    - name: Export OpenAPI
-      run: |
-        PYTHONPATH=. python scripts/export_openapi.py
-    - name: Upload OpenAPI artifact
-      uses: actions/upload-artifact@v7
-      with:
-        name: openapi.json
-        path: clients/openapi.json
+      - uses: actions/checkout@v7
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Lint (ruff)
+        run: make lint
+      - name: Unit tests (with src/core coverage floor)
+        # Floor starts at the current level (~87%); ratchet upward over time,
+        # never set an aspirational number that turns main red.
+        run: pytest tests/unit/ --cov=src/core --cov-report=term-missing --cov-fail-under=85
+      - name: Integration tests (real Postgres + pgvector)
+        run: make test-int
+
+  openapi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Export OpenAPI
+        run: PYTHONPATH=. python scripts/export_openapi.py
+      - name: Upload OpenAPI artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: openapi.json
+          path: clients/openapi.json
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Docker build smoke test
+        run: docker build -t raglogs:ci .
 
   publish-openapi-release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    needs: openapi
     runs-on: ubuntu-latest
     permissions:
       contents: write
