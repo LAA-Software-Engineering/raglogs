@@ -12,6 +12,13 @@ class Settings(BaseSettings):
 
     db_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/raglogs"
 
+    # Connection pool. Sync route handlers run on FastAPI's threadpool (40
+    # threads by default), so the pool must be sized in the same ballpark or
+    # requests block on checkout and raise TimeoutError under load. Defaults
+    # give 40 connections (20 + 20) to match that threadpool.
+    db_pool_size: int = 20
+    db_max_overflow: int = 20
+
     embeddings_provider: Literal["disabled", "openai", "local"] = "disabled"
     embeddings_model: str = "text-embedding-3-small"
     embeddings_dimensions: int = 1536
