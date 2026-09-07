@@ -62,6 +62,9 @@ def db_session():
     with engine.connect() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         conn.commit()
+    # Clean slate so tests stay isolated when they share one database
+    # (e.g. a single Postgres service across the whole CI run).
+    Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
 
     with get_db() as db:
