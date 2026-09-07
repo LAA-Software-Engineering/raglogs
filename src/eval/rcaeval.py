@@ -58,8 +58,38 @@ class RCACase:
     instance: str
 
 
+# Fault tokens that may appear in a case name. Fault labels are matched as the
+# maximal suffix of these (before the trailing instance number), so a compound
+# fault like ``packet_loss`` or ``network_delay`` is captured whole instead of
+# leaking its leading token into the root-cause service label.
+_FAULT_TOKENS = frozenset(
+    {
+        "cpu",
+        "mem",
+        "memory",
+        "disk",
+        "io",
+        "socket",
+        "delay",
+        "latency",
+        "loss",
+        "packet",
+        "network",
+        "code",
+        "hog",
+        "stress",
+        "leak",
+    }
+)
+
+
 def parse_case_dir_name(name: str) -> RCACase:
-    """Parse ``re2ob_adservice_cpu_1`` into its ground-truth components."""
+    """Parse ``re2ob_adservice_cpu_1`` into its ground-truth components.
+
+    ``fault`` is the maximal trailing run of known fault tokens (so
+    ``re2ob_adservice_packet_loss_1`` yields service ``adservice`` and fault
+    ``packet_loss``, not service ``adservice_packet`` / fault ``loss``).
+    """
     parts = name.split("_")
     if len(parts) < 4:
         raise ValueError(f"unexpected RCAEval case name: {name!r}")
@@ -69,10 +99,19 @@ def parse_case_dir_name(name: str) -> RCACase:
     if suite not in ("re2", "re3"):
         raise ValueError(f"unexpected RCAEval benchmark prefix in {name!r}")
     instance = parts[-1]
-    fault = parts[-2]
-    service = "_".join(parts[1:-2])
-    if not service:
-        raise ValueError(f"could not parse service from {name!r}")
+
+    middle = parts[1:-1]  # service tokens + fault tokens
+    # Peel fault tokens off the right; keep at least one token for the service.
+    split = len(middle)
+    while split > 1 and middle[split - 1].lower() in _FAULT_TOKENS:
+        split -= 1
+    if split == len(middle):
+        # No recognized fault suffix; fall back to a single trailing token.
+        split = len(middle) - 1
+    service = "_".join(middle[:split])
+    fault = "_".join(middle[split:])
+    if not service or not fault:
+        raise ValueError(f"could not parse service/fault from {name!r}")
     return RCACase(
         case_id=name,
         suite=suite,

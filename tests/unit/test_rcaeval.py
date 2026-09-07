@@ -33,6 +33,23 @@ class TestParseCaseName:
         assert c.fault == "code"
         assert c.instance == "2"
 
+    def test_compound_fault_does_not_corrupt_service(self):
+        # A two-token fault must be captured whole, not split into the service.
+        c = parse_case_dir_name("re2ob_adservice_packet_loss_1")
+        assert c.service == "adservice"
+        assert c.fault == "packet_loss"
+        assert trigger_type_for_fault(c.fault) == "dependency"
+
+    def test_compound_network_delay(self):
+        c = parse_case_dir_name("re2ss_carts_network_delay_3")
+        assert c.service == "carts"
+        assert c.fault == "network_delay"
+
+    def test_unrecognized_fault_falls_back_to_single_token(self):
+        c = parse_case_dir_name("re2ob_adservice_weirdfault_1")
+        assert c.service == "adservice"
+        assert c.fault == "weirdfault"
+
     def test_rejects_bad_prefix(self):
         with pytest.raises(ValueError):
             parse_case_dir_name("xx1ob_adservice_cpu_1")
