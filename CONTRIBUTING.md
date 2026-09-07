@@ -12,7 +12,7 @@ This document covers how to get set up, what the codebase expects, and how to su
 git clone https://github.com/leo-aa88/raglogs
 cd raglogs
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt && pip install -e .
+pip install -e ".[dev]"
 cp .env.example .env
 # Edit .env — set DB_URL at minimum
 docker compose up postgres -d

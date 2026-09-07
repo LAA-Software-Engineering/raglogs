@@ -1305,8 +1305,8 @@ injects the header, or keep auth off on loopback). `/health` stays public.
 ## Development
 
 ```bash
-# Install everything
-pip install -r requirements.txt && pip install -e .
+# Install everything (runtime + dev tooling)
+pip install -e ".[dev]"
 
 # Unit tests (no DB needed)
 make test-unit

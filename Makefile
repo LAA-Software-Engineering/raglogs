@@ -48,9 +48,6 @@ help:
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
-install-requirements:
-	$(PIP) install -r requirements.txt
-
 install-dev:
 	$(PIP) install -e ".[dev]"
 

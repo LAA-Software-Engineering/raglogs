@@ -49,6 +49,7 @@ dev = [
     "pytest-cov>=5.0.0",
     "anyio>=4.0.0",
     "moto[logs]>=5.0.0",
+    "ruff>=0.6.0",
 ]
 
 [project.scripts]
