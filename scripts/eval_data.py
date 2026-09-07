@@ -43,11 +43,17 @@ def _download(suite: str) -> Path:
         )
         raise SystemExit(1)
 
-    print(f"Downloading RCAEval {suite} into {RAW_DIR} (this is large)...")
+    # Fetch only what the converter needs (the label + the logs), not the far
+    # larger metrics.parquet / traces.parquet in each case directory.
+    print(f"Downloading RCAEval {suite} logs into {RAW_DIR}...")
     local = snapshot_download(
         repo_id=REPO_ID,
         repo_type="dataset",
-        allow_patterns=f"{suite}*",
+        allow_patterns=[
+            f"{suite}*/inject_time.txt",
+            f"{suite}*/logs.parquet",
+            f"{suite}*/logs.csv",
+        ],
         local_dir=str(RAW_DIR),
     )
     return Path(local)
@@ -60,7 +66,9 @@ def _convert_suite(suite: str, limit: int | None) -> int:
     # Case directories are named like re2ob_adservice_cpu_1; find any dir that
     # contains the required files, regardless of nesting.
     case_dirs = sorted(
-        p.parent for p in root.rglob("inject_time.txt") if (p.parent / "logs.csv").exists()
+        p.parent
+        for p in root.rglob("inject_time.txt")
+        if (p.parent / "logs.parquet").exists() or (p.parent / "logs.csv").exists()
     )
     if limit is not None:
         case_dirs = case_dirs[:limit]

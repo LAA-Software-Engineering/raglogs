@@ -52,6 +52,7 @@ dev = [
     "ruff>=0.6.0",
     "PyYAML>=6.0",
     "huggingface-hub>=0.24.0",
+    "pyarrow>=15.0",
 ]
 
 [project.scripts]
