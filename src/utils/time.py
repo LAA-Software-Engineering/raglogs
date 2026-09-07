@@ -96,7 +96,6 @@ def resolve_baseline_window(
     """
     Resolve the baseline window that precedes the incident window.
     """
-    window_duration = window_end - window_start
     baseline_duration = parse_duration(baseline_window_str)
 
     # Baseline ends just before the incident window

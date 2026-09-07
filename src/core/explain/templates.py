@@ -1,5 +1,3 @@
-from typing import Optional
-
 from src.core.explain.evidence import EvidencePacket
 from src.utils.time import format_window
 

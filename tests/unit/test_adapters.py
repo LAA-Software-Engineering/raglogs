@@ -624,7 +624,6 @@ class TestDatadogSourceAdapter:
         DatadogSourceAdapter(api_key="k", app_key="a").check_available()
 
     def test_retry_skips_non_retryable_client_errors(self):
-        from src.adapters.datadog.adapter import DatadogSourceAdapter
 
         self._no_retry_sleep()
         mock_client = MagicMock()
@@ -639,7 +638,6 @@ class TestDatadogSourceAdapter:
         assert mock_client.post.call_count == 1
 
     def test_retry_retries_rate_limit_errors(self):
-        from src.adapters.datadog.adapter import DatadogSourceAdapter
 
         self._no_retry_sleep()
         mock_client = MagicMock()

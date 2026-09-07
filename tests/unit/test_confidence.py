@@ -6,7 +6,6 @@ Each test targets a specific scoring rule. The key invariants:
   - 'medium-high' is the ceiling when no trigger is present
   - no primary cluster → always 'low'
 """
-import pytest
 from datetime import datetime, timezone, timedelta
 
 from src.core.clustering.clusterer import ClusterData
@@ -150,8 +149,10 @@ class TestBaselineScoring:
         # Neither should score the baseline dimension differently — zero baseline
         # should not add points the way a genuine change ratio does
         score_zero = compute_confidence(p_with_zero)
+        score_baseline = compute_confidence(p_with_baseline)
         # We only verify it doesn't blow past medium without other signals
         assert score_zero in ("low", "medium")
+        assert score_baseline in ("low", "medium")
 
     def test_high_change_ratio_adds_score(self):
         # baseline present + high change_ratio (2) + large count (2) + trigger (2) = 6 → high
