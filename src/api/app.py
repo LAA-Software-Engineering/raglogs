@@ -56,6 +56,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         validate_embeddings_config,
     )
 
+    # A broken embeddings config is logged loudly but does NOT abort startup:
+    # embeddings are an optional feature, and coupling the whole API's
+    # availability to them (taking down explain/timeline/compare/keyword-ask,
+    # especially during an incident) is worse than serving without them. The
+    # `ingest --with-embeddings` path DOES hard-exit on the same error, where a
+    # vector would actually be persisted. Keep this in sync with the README /
+    # .env.example wording.
     try:
         validate_embeddings_config(settings)
     except EmbeddingsConfigError as exc:
