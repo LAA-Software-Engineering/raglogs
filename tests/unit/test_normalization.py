@@ -1,4 +1,3 @@
-import pytest
 from src.core.normalization.normalize import normalize_message
 from src.core.normalization.fingerprint import compute_fingerprint, fingerprint_message
 
@@ -28,6 +27,25 @@ class TestNormalize:
         norm1 = normalize_message(msg1)
         norm2 = normalize_message(msg2)
         assert norm1 == norm2
+
+    def test_long_and_short_keyword_ids_share_fingerprint(self):
+        # Regression for #64: an 8+ digit decimal ID must normalize to <id>,
+        # not <hex>, so it clusters with shorter IDs instead of fragmenting.
+        long_id = normalize_message("user 12345678 not found")
+        short_id = normalize_message("user 4567 not found")
+        assert long_id == "user <id> not found"
+        assert long_id == short_id
+
+    def test_keyword_id_before_hex_preserves_ip(self):
+        # The keyword-ID rule must not run ahead of the IPv4 rule (it would eat
+        # the first octet: "user <id>.168.1.1"). The IP stays intact and the
+        # trailing decimal ID still normalizes.
+        result = normalize_message("user 192.168.1.1 accessed order 12345678")
+        assert result == "user <ip> accessed order <id>"
+
+    def test_real_hex_hash_still_hex(self):
+        # A hex string containing letters is still a hash, not an ID.
+        assert normalize_message("commit abcdef1234567890 pushed") == "commit <hex> pushed"
 
     def test_endpoint_preserved(self):
         msg = "Stripe signature verification failed for endpoint /webhooks/stripe"
