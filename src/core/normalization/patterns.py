@@ -7,8 +7,12 @@ NORMALIZATION_RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"), "<uuid>"),
     # JWT / long base64 tokens (30+ chars of base64url)
     (re.compile(r"eyJ[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{10,}"), "<jwt>"),
-    # Hex strings 8+ chars (hashes, IDs)
-    (re.compile(r"\b[0-9a-fA-F]{8,}\b"), "<hex>"),
+    # Hex strings 8+ chars (hashes, IDs) — require at least one a-f letter so
+    # pure-decimal IDs (e.g. "user 12345678") are NOT swallowed here and instead
+    # reach the keyword-ID / numeric rules below. Without this, an 8+ digit
+    # decimal normalizes to <hex> while a shorter one becomes <id>/<num>,
+    # fragmenting equivalent lines across clusters (see issue #64).
+    (re.compile(r"\b(?=[0-9a-fA-F]*[a-fA-F])[0-9a-fA-F]{8,}\b"), "<hex>"),
     # Long alphanumeric tokens that look like API keys (20+ mixed chars)
     (re.compile(r"\b[A-Za-z0-9_\-]{32,}\b"), "<token>"),
     # IPv4 addresses
