@@ -19,7 +19,11 @@ from sqlalchemy.orm import Session
 
 from src.config import get_settings
 from src.config.settings import Settings
-from src.core.embeddings.provider import EmbeddingsProvider, get_embeddings_provider
+from src.core.embeddings.provider import (
+    STORED_EMBEDDING_DIMS,
+    EmbeddingsProvider,
+    get_embeddings_provider,
+)
 from src.db.models import (
     CLUSTER_EMBEDDING_UNIQUE,
     ClusterEmbedding,
@@ -32,8 +36,8 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger()
 
-# Must match ``log_embeddings.embedding Vector(1536)`` in the applied schema.
-STORED_EMBEDDING_DIMS = 1536
+# ``STORED_EMBEDDING_DIMS`` is defined in provider.py (the canonical source) and
+# re-exported here for the existing call sites below.
 
 
 def ingest_embeddings_provider(

@@ -591,7 +591,7 @@ Populate vectors at ingest time:
 raglogs ingest ./logs --with-embeddings
 ```
 
-Vectors are stored in `log_embeddings` (1536-d). If `EMBEDDINGS_DIMENSIONS` is not 1536, persist is skipped so the schema stays valid. Provider failures during ingest are skipped; the log lines still land.
+Vectors are stored in `log_embeddings` (1536-d). Because that column width is fixed, a non-disabled provider with `EMBEDDINGS_DIMENSIONS ≠ 1536` — or a `local` model whose native width isn't 1536 — is a hard configuration error: `ingest --with-embeddings` and API startup fail with an actionable message instead of silently persisting nothing. Transient provider failures *during* ingest are still skipped fail-open; the log lines land regardless.
 
 **Example output**
 
@@ -702,7 +702,7 @@ All settings are read from `.env`, environment variables, or CLI flags. Priority
 | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Anthropic Messages API host |
 | `EMBEDDINGS_PROVIDER` | `disabled` | `disabled`, `openai`, `local`. Cluster merge, semantic `ask`, and `/similar` ANN skip when `disabled` |
 | `EMBEDDINGS_MODEL` | `text-embedding-3-small` | Embeddings model name |
-| `EMBEDDINGS_DIMENSIONS` | `1536` | Vector size passed to the OpenAI embeddings API. Persist/ask skip unless this is 1536 (stored column width) |
+| `EMBEDDINGS_DIMENSIONS` | `1536` | Vector size. Must be 1536 (the stored column width) for any non-disabled provider; any other value is a hard config error surfaced at startup / before ingest |
 | `CLUSTER_MERGE_SIMILARITY_THRESHOLD` | `0.92` | Cosine similarity at or above which fingerprint clusters merge. High on purpose so distinct errors stay separate |
 | `CLUSTER_MERGE_MIN_COUNT` | `1` | Minimum `count` for a cluster to participate in a merge |
 | `ASK_SEMANTIC_TOP_K` | `100` | Max log lines returned by semantic `ask` |
@@ -913,7 +913,7 @@ Fingerprinting can still split one incident across multiple clusters when wordin
 - **Cluster template persist.** After clustering, raglogs upserts each cluster's representative template into `cluster_embeddings` keyed by `(scope, fingerprint)` when the embeddings provider is available. Similar-incident search queries those rows (not raw `log_embeddings`). Skip happens automatically when `EMBEDDINGS_PROVIDER=disabled`.
 - **Ask vs merge vs similar.** Semantic `ask` uses the *stored* `log_embeddings` table (populated by `raglogs ingest --with-embeddings`) and `ASK_SEMANTIC_MIN_SIMILARITY` (default **0.75**). Cluster merge still uses its own in-memory pass and threshold. Similar-incident search (`POST /v1/query/similar`) uses the `cluster_embeddings` table (upserted at analysis time when an embeddings provider is available) and `SIMILAR_SEMANTIC_MIN_SIMILARITY` (default **0.80**). Compare still applies its own heuristic collapse for webhook retries / queue growth after clustering.
 
-Local embeddings require the optional extra: `pip install 'raglogs[local-embeddings]'` (`sentence-transformers`). If that import fails, merge is skipped.
+Local embeddings require the optional extra: `pip install 'raglogs[local-embeddings]'` (`sentence-transformers`) **and** a model that emits exactly 1536 dims to match the stored column. The common models don't (`all-MiniLM-L6-v2` = 384, `all-mpnet-base-v2` = 768), so `EMBEDDINGS_PROVIDER=local` with one of them fails loudly at startup / before ingest rather than silently producing no embeddings. On the analysis-time merge hot path a missing extra or bad config degrades to skip (logged at `error`), never a crash.
 
 ### Baseline comparison
 

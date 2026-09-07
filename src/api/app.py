@@ -51,6 +51,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     setup_observability(log_format=settings.log_format)
     warn_if_insecure_bind(settings.api_bind_host, settings)
 
+    from src.core.embeddings.provider import (
+        EmbeddingsConfigError,
+        validate_embeddings_config,
+    )
+
+    try:
+        validate_embeddings_config(settings)
+    except EmbeddingsConfigError as exc:
+        import structlog
+
+        structlog.get_logger().error("embeddings_config_invalid", reason=str(exc))
+
     if not check_connection():
         import structlog
         log = structlog.get_logger()

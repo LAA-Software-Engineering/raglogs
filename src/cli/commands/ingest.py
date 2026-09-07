@@ -55,12 +55,23 @@ def ingest_cmd(
 
     if with_embeddings:
         from src.config import get_settings
+        from src.core.embeddings.provider import (
+            EmbeddingsConfigError,
+            validate_embeddings_config,
+        )
 
-        if get_settings().embeddings_provider == "disabled":
+        settings = get_settings()
+        if settings.embeddings_provider == "disabled":
             console.print(
                 "[yellow]Warning:[/yellow] --with-embeddings requested but "
                 "EMBEDDINGS_PROVIDER=disabled; ingesting without embeddings."
             )
+        else:
+            try:
+                validate_embeddings_config(settings)
+            except EmbeddingsConfigError as e:
+                console.print(f"[red]Error:[/red] {e}")
+                raise typer.Exit(1)
 
     with Progress(
         SpinnerColumn(),
