@@ -57,7 +57,11 @@ def compute_importance_score(
     severity = get_severity_weight(levels_distribution)
     log_count = math.log(count + 1)
     change_weight = math.log(change_ratio + 1)
-    spread_weight = math.log(services_count + 1) * 0.5
+    # Root-cause errors tend to be service-SPECIFIC; the cascade (generic 500s /
+    # timeouts) is what fans out across many services. Penalize spread so the
+    # primary cluster leans toward the originating service rather than the
+    # widely-echoed cascade (#82 — measured against RCAEval RE3).
+    spread_weight = -math.log(services_count + 1) * 0.5
     trigger_weight = 2.0 if is_trigger_correlated else 0.0
 
     return severity + log_count + change_weight + spread_weight + trigger_weight

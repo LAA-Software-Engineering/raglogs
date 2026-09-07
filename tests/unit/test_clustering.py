@@ -63,7 +63,9 @@ class TestImportanceScore:
         )
         assert with_trigger > base
 
-    def test_multi_service_boost(self):
+    def test_service_specific_scores_higher(self):
+        # Root-cause errors are usually service-specific; the cascade fans out.
+        # A single-service cluster should now outscore a widely-spread one (#82).
         single = compute_importance_score(
             count=10, levels_distribution={"error": 10},
             change_ratio=5.0, services_count=1
@@ -72,4 +74,4 @@ class TestImportanceScore:
             count=10, levels_distribution={"error": 10},
             change_ratio=5.0, services_count=3
         )
-        assert multi > single
+        assert single > multi
