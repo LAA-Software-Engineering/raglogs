@@ -77,6 +77,9 @@ data/
 # Benchmark output (tracked as a CI artifact, not committed)
 /bench_results.json
 
+# Loghub benchmark output (Loghub itself is downloaded under data/, gitignored)
+/loghub_results.json
+
 # Generated API clients (keep README + thin Python wrapper)
 clients/go/*.go
 clients/python/generated/

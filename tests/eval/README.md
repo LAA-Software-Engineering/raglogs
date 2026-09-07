@@ -94,4 +94,29 @@ detection is expected to score near-zero there — that gap is the finding, and 
 motivates the trigger-redesign work (#82). RE3 (code-level faults, visible as
 stack traces) is where raglogs should be competitive.
 
-OTel-demo (#79) and Loghub-2.0 (#80) will plug in here the same way.
+### Loghub-2.0 normalization benchmark (`make loghub`)
+
+Loghub-2.0's labels are parse templates, not incident narratives, so it scores
+the **normalization/fingerprinting layer**, not explanations. `scripts/loghub_bench.py`
+runs `fingerprint_message` over a system's lines, groups by fingerprint, and
+compares the induced partition against the ground-truth `EventId` labels,
+reporting per system:
+
+- **Grouping accuracy (GA)** — fraction of messages whose induced group exactly
+  matches their ground-truth group (over-merging and fragmentation both lower it).
+- **Template-count ratio** — `induced / ground-truth` distinct templates (`>1`
+  fragments, `<1` over-merges).
+
+```bash
+# Download Loghub-2.0 from https://zenodo.org/record/8275861 into data/loghub/
+python scripts/loghub_bench.py --loghub-dir data/loghub --json loghub_results.json
+```
+
+> ⚠️ **Licensing:** Loghub is **free for research and academic use with
+> attribution and citation required** — *not* permissive like RCAEval. Never
+> vendor it into the repo or ship it in an artifact; download on demand only.
+> Cite: Jieming Zhu, Shilin He, Pinjia He, Jinyang Liu, Michael R. Lyu.
+> "Loghub: A Large Collection of System Log Datasets for AI-driven Log
+> Analytics." ISSRE, 2023.
+
+OTel-demo (#79) will plug in here the same way.
