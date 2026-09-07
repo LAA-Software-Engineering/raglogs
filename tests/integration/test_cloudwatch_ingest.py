@@ -53,19 +53,22 @@ def test_cloudwatch_ingest_then_explain(db_session):
         client.create_log_stream(logGroupName="/aws/lambda/my-service", logStreamName="stream-1")
 
         now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+        # Distinct messages per event: identical content would be collapsed by
+        # the ingest content-dedup (see test_ingest_dedup), leaving one row and
+        # defeating this test's point — that all five persist with a timestamp.
         client.put_log_events(
             logGroupName="/aws/lambda/my-service",
             logStreamName="stream-1",
             logEvents=[
                 {
-                    "timestamp": now_ms,
+                    "timestamp": now_ms + i * 1000,
                     "message": (
                         '{"level": "error", "message": '
-                        '"Stripe webhook signature verification failed", '
+                        f'"Stripe webhook signature verification failed (attempt {i})", '
                         '"service": "billing-worker"}'
                     ),
                 }
-                for _ in range(5)
+                for i in range(5)
             ],
         )
 
