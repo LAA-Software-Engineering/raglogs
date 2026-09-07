@@ -51,6 +51,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     setup_observability(log_format=settings.log_format)
     warn_if_insecure_bind(settings.api_bind_host, settings)
 
+    from src.core.embeddings.provider import (
+        EmbeddingsConfigError,
+        validate_embeddings_config,
+    )
+
+    # A broken embeddings config is logged loudly but does NOT abort startup:
+    # embeddings are an optional feature, and coupling the whole API's
+    # availability to them (taking down explain/timeline/compare/keyword-ask,
+    # especially during an incident) is worse than serving without them. The
+    # `ingest --with-embeddings` path DOES hard-exit on the same error, where a
+    # vector would actually be persisted. Keep this in sync with the README /
+    # .env.example wording.
+    try:
+        validate_embeddings_config(settings)
+    except EmbeddingsConfigError as exc:
+        import structlog
+
+        structlog.get_logger().error("embeddings_config_invalid", reason=str(exc))
+
     if not check_connection():
         import structlog
         log = structlog.get_logger()
