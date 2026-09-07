@@ -11,7 +11,7 @@ defer to it.
 
 - Python **3.10+**
 - Typer (CLI), FastAPI + Uvicorn (HTTP API)
-- SQLAlchemy 2.x (async) + Alembic, Postgres with `pgvector`
+- SQLAlchemy 2.x (sync sessions) + Alembic, Postgres with `pgvector`
 - Pydantic v2 / pydantic-settings, structlog, rich
 - numpy + scikit-learn (clustering), tenacity (retries), httpx
 - pytest + pytest-asyncio (`asyncio_mode = auto`)
@@ -63,7 +63,7 @@ src/core/
 src/adapters/     log source adapters — each yields ParsedLogLine
 src/cli/commands/ one file per CLI command
 src/api/routes/   FastAPI route handlers
-src/db/           SQLAlchemy models + async session
+src/db/           SQLAlchemy models + sync session
 src/config/       settings (env-driven)
 ```
 
