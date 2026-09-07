@@ -39,14 +39,33 @@ class ClusterData:
     merged_fingerprints: list[str] = field(default_factory=list)
 
 
+def _onset_fraction(
+    first_seen: Optional[datetime],
+    window_start: Optional[datetime],
+    window_end: Optional[datetime],
+) -> float:
+    """Where the cluster's first log falls in the window (0=start, 1=end)."""
+    if first_seen is None or window_start is None or window_end is None:
+        return 0.5
+    span = (window_end - window_start).total_seconds()
+    if span <= 0:
+        return 0.5
+    return (first_seen - window_start).total_seconds() / span
+
+
 def _build_cluster_data(
-    fingerprint: str, group: dict, baseline_counts: dict[str, int]
+    fingerprint: str,
+    group: dict,
+    baseline_counts: dict[str, int],
+    window_start: Optional[datetime] = None,
+    window_end: Optional[datetime] = None,
 ) -> ClusterData:
     """Build a ClusterData from one fingerprint's grouped log rows."""
     count = len(group["ids"])
     services = dict(group["services"])
     levels = dict(group["levels"])
     timestamps = sorted([t for t in group["timestamps"] if t is not None])
+    first_seen = timestamps[0] if timestamps else None
 
     baseline_count = baseline_counts.get(fingerprint, 0)
     change_ratio = compute_change_ratio(count, baseline_count)
@@ -66,6 +85,7 @@ def _build_cluster_data(
         change_ratio=change_ratio,
         services_count=len(services),
         is_trigger_correlated=is_trigger,
+        onset_fraction=_onset_fraction(first_seen, window_start, window_end),
     )
 
     return ClusterData(
@@ -217,7 +237,8 @@ def _run_clustering(
 
     # 4. Build cluster data
     clusters: list[ClusterData] = [
-        _build_cluster_data(fp, g, baseline_counts) for fp, g in groups.items()
+        _build_cluster_data(fp, g, baseline_counts, window_start, window_end)
+        for fp, g in groups.items()
     ]
 
     # 5. Optional semantic merge, then rank and cap

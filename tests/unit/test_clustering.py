@@ -63,9 +63,7 @@ class TestImportanceScore:
         )
         assert with_trigger > base
 
-    def test_service_specific_scores_higher(self):
-        # Root-cause errors are usually service-specific; the cascade fans out.
-        # A single-service cluster should now outscore a widely-spread one (#82).
+    def test_multi_service_boost(self):
         single = compute_importance_score(
             count=10, levels_distribution={"error": 10},
             change_ratio=5.0, services_count=1
@@ -74,4 +72,17 @@ class TestImportanceScore:
             count=10, levels_distribution={"error": 10},
             change_ratio=5.0, services_count=3
         )
-        assert single > multi
+        assert multi > single
+
+    def test_earlier_onset_scores_higher(self):
+        # A root cause precedes the cascade, so an earlier-onset cluster should
+        # outscore an identical later-onset one (#82).
+        early = compute_importance_score(
+            count=10, levels_distribution={"error": 10},
+            change_ratio=2.0, services_count=1, onset_fraction=0.0,
+        )
+        late = compute_importance_score(
+            count=10, levels_distribution={"error": 10},
+            change_ratio=2.0, services_count=1, onset_fraction=1.0,
+        )
+        assert early > late
