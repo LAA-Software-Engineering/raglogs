@@ -50,6 +50,10 @@ class EvalCase:
     trigger: Optional[Trigger] = None
     notes: str = ""
     logs_paths: list[Path] = field(default_factory=list)
+    # Optional baseline-window duration (e.g. "5m") so change-vs-baseline has a
+    # real pre-incident period; None uses the pipeline default. For corpora with
+    # a short capture (e.g. RCAEval), point this at the pre-injection window.
+    baseline_window: Optional[str] = None
 
 
 def _resolve_logs(case_dir: Path, raw: Optional[object]) -> list[Path]:
@@ -134,6 +138,7 @@ def load_case(case_dir: Path) -> EvalCase:
         trigger=_trigger(raw.get("trigger")),
         notes=str(raw.get("notes", "")),
         logs_paths=_resolve_logs(case_dir, raw.get("logs")),
+        baseline_window=(str(raw["baseline"]) if raw.get("baseline") else None),
     )
 
 
