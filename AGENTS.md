@@ -96,6 +96,25 @@ src/config/       settings (env-driven)
   when it isn't obvious. Reference the related issue.
 - No purely cosmetic reformatting PRs.
 
+## Evaluation & scope policy
+
+raglogs has far more operational surface than verified analysis quality, so the
+project measures before it extends (issue #88, epic #74). The tooling now
+exists: `make eval` scores raglogs and a trivial baseline over labeled cases
+and reports the **lift**; `make eval-data` / `make loghub` download external
+corpora (RCAEval, Loghub-2.0).
+
+- **Any PR that changes `src/core/`** — normalization, clustering, evidence,
+  explain, timeline, retrieval — **must state the eval delta in its
+  description**: metric before, metric after, on which corpus. "No change" is
+  an acceptable answer; "not measured" is not.
+- **Net-new platform surface is frozen** until raglogs shows measurable lift
+  over the baseline on at least two independent corpora: no new source
+  adapters, auth modes, API surface, client languages, or operational
+  subsystems. Bug fixes, making existing features work as documented, and
+  anything that improves explanation quality with an eval delta attached are
+  always allowed.
+
 ## Boundaries — do not touch
 
 - `.env` (real secrets), `migrations/versions/*` already applied (add a new
