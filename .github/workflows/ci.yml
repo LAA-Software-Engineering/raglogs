@@ -89,6 +89,40 @@ jobs:
       - name: Docker build smoke test
         run: docker build -t raglogs:ci .
 
+  # The unit/integration jobs build the schema with Base.metadata.create_all, so
+  # they never exercise the Alembic chain. This proves the migrations actually
+  # apply to a clean database (a broken migration would otherwise pass PR CI).
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: raglogs
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DB_URL: postgresql+psycopg://postgres:postgres@localhost:5432/raglogs
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Apply migrations to a clean database
+        run: alembic upgrade head
+
   publish-openapi-release:
     if: startsWith(github.ref, 'refs/tags/')
     needs: openapi
