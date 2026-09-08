@@ -37,10 +37,13 @@ def get_severity_weight(levels_distribution: dict[str, int]) -> float:
     return weighted
 
 
-# How strongly earlier onset (within the incident window) boosts a cluster. A
-# root cause tends to precede the cascade it triggers, so the cluster that
-# appeared first is a better primary candidate than a louder but later one (#82).
-_ONSET_WEIGHT = 3.0
+# How strongly a cluster's anomaly against baseline (change_ratio) weighs in
+# selection. A fault's error is *new* against a fair pre-incident baseline
+# (change_ratio ~= count), while steady background noise sits near 1. At weight
+# 1.0 this term was too weak to outvote raw log(count), so a louder steady
+# cluster beat the anomalous one; #82 raises it so a genuine spike can win even
+# when it is not the highest-volume cluster.
+_CHANGE_WEIGHT = 3.0
 
 
 def compute_importance_score(
@@ -49,7 +52,6 @@ def compute_importance_score(
     change_ratio: float,
     services_count: int,
     is_trigger_correlated: bool = False,
-    onset_fraction: float = 0.5,
 ) -> float:
     """
     Compute a composite importance score for a cluster.
@@ -57,24 +59,14 @@ def compute_importance_score(
     importance_score =
         severity_weight
         + log(count + 1)
-        + change_ratio_weight
+        + change_ratio_weight   (weighted by _CHANGE_WEIGHT)
         + spread_weight
         + trigger_correlation_weight
-        + onset_weight
-
-    ``onset_fraction`` is where the cluster's first log falls within the incident
-    window (0 = at the start, 1 = at the end); earlier onset scores higher. The
-    default 0.5 is neutral for callers that don't supply timing.
     """
     severity = get_severity_weight(levels_distribution)
     log_count = math.log(count + 1)
-    change_weight = math.log(change_ratio + 1)
+    change_weight = math.log(change_ratio + 1) * _CHANGE_WEIGHT
     spread_weight = math.log(services_count + 1) * 0.5
     trigger_weight = 2.0 if is_trigger_correlated else 0.0
-    onset_weight = _ONSET_WEIGHT * (1.0 - _clamp01(onset_fraction))
 
-    return severity + log_count + change_weight + spread_weight + trigger_weight + onset_weight
-
-
-def _clamp01(x: float) -> float:
-    return 0.0 if x < 0.0 else 1.0 if x > 1.0 else x
+    return severity + log_count + change_weight + spread_weight + trigger_weight
