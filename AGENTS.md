@@ -114,6 +114,18 @@ corpora (RCAEval, Loghub-2.0).
   subsystems. Bug fixes, making existing features work as documented, and
   anything that improves explanation quality with an eval delta attached are
   always allowed.
+- **Carve-out (approved 2026-09-08): metrics/traces ingestion for causal
+  localization.** Logs-only root-cause on RCAEval RE2/RE3 has now been measured
+  to a ceiling — volume, novelty, anomaly, onset, and stack-trace-content all
+  wash or fail leave-one-system-out (see `docs/rca-direction.md`, #118). The
+  failures are exactly the *propagation* faults, where the exception surfaces
+  downstream of the injected service and only call-direction (traces) can walk
+  back to it. Ingesting metrics/traces and using them for RCA is therefore
+  **analysis-core work justified by measured failure of the existing signal**,
+  not speculative platform expansion — and is unfrozen. It still carries the
+  same bar as everything else: land it behind the eval harness with the lift
+  delta stated (leave-one-service / -fault / -system-out, per #118). The rest of
+  the freeze (auth modes, client languages, unrelated API surface, etc.) stands.
 
 ## Boundaries — do not touch
 
