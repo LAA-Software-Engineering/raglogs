@@ -244,14 +244,15 @@ def select_primary_cluster(
 ) -> Optional[ClusterData]:
     """Pick the primary (root-cause) cluster.
 
-    The trivial "most frequent error/fatal cluster" selector (pure error volume
-    at (service, fingerprint) granularity) reaches parity with the trivial
-    baseline. To *beat* it (#82), rank candidates by a configurable blend of
-    error volume, anomaly against the in-job baseline (``change_ratio``, now real
-    after #115), and onset earliness — a quiet-but-anomalous, early cluster can
-    outrank a louder late symptom. Setting the anomaly and onset weights to 0
-    recovers the pure-volume baseline. Fall back to the highest-volume cluster
-    when nothing is error-level so an explanation is still produced.
+    Ranks candidates by a configurable blend of error volume, anomaly against the
+    in-job baseline (``change_ratio``), and onset earliness at (service,
+    fingerprint) granularity. **By default only volume is weighted** — that is
+    the trivial "most frequent error/fatal cluster" selector, which reaches
+    parity with the baseline. Adding anomaly+onset was measured on RCAEval and
+    did not robustly lift across corpora (RE3 +1 case, RE2 -1 case; #82), so the
+    weights default to 0 and the blend is kept for a corpus where it generalizes.
+    Fall back to the highest-volume cluster when nothing is error-level so an
+    explanation is still produced.
     """
     if not significant_clusters:
         return None

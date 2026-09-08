@@ -99,5 +99,5 @@ Every setting is read from an environment variable (see `.env.example`). This ta
 | `CONFIDENCE_SCORE_MEDIUM_HIGH` | float | `0.72` |
 | `CONFIDENCE_SCORE_HIGH` | float | `0.9` |
 | `RCA_WEIGHT_VOLUME` | float | `1.0` |
-| `RCA_WEIGHT_ANOMALY` | float | `1.0` |
-| `RCA_WEIGHT_ONSET` | float | `3.0` |
+| `RCA_WEIGHT_ANOMALY` | float | `0.0` |
+| `RCA_WEIGHT_ONSET` | float | `0.0` |

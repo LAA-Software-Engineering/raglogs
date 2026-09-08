@@ -172,12 +172,18 @@ class Settings(BaseSettings):
 
     # Root-cause candidate ranking (#82). The primary (service, fingerprint) is
     # scored by a weighted sum of log(error-volume), log(change_ratio+1) [anomaly
-    # vs the in-job baseline], and onset earliness in the window [0..1]. Setting
-    # anomaly and onset weights to 0 recovers the pure most-frequent-error
-    # trivial baseline. Tuned against RCAEval RE2/RE3 (top-1 RCA lift).
+    # vs the in-job baseline], and onset earliness in the window [0..1].
+    #
+    # Anomaly and onset default to 0 => pure most-frequent-error volume, i.e. the
+    # trivial baseline (28.9% RE3 / 8.0% RE2). Enabling them was measured on
+    # RCAEval and did NOT robustly lift across corpora: at anomaly=1, onset=3 the
+    # top-1 RCA was RE3 30.0% (+1.1pp, +1 case) but RE2 7.0% (-1.0pp, -1 case) —
+    # a wash within single-case noise, because onset helps code faults (cause
+    # precedes cascade) but hurts resource/network faults (no causal onset). The
+    # mechanism is kept configurable for a corpus where it does generalize.
     rca_weight_volume: float = 1.0
-    rca_weight_anomaly: float = 1.0
-    rca_weight_onset: float = 3.0
+    rca_weight_anomaly: float = 0.0
+    rca_weight_onset: float = 0.0
 
 
 _settings: Settings | None = None
