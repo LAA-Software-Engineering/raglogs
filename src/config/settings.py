@@ -142,6 +142,34 @@ class Settings(BaseSettings):
     severity_weight_info: float = 1.0
     severity_weight_debug: float = 0.5
 
+    # Confidence scoring (#83). Every threshold/weight the confidence scorer
+    # uses is exposed here so it can be tuned against a labeled corpus rather
+    # than edited in code. Defaults reproduce the original hand-picked values
+    # exactly — changing them is the supported way to recalibrate. NOTE: these
+    # have NOT been fitted to any corpus; on RCAEval the labels are in fact
+    # anti-calibrated, but that is a log-only-cascade artifact, so the defaults
+    # are left untouched pending a fit that generalizes (see the issue).
+    confidence_count_high: int = 50  # primary cluster size for +2
+    confidence_count_low: int = 10  # primary cluster size for +1
+    confidence_change_ratio_high: float = 10.0  # change_ratio for +2
+    confidence_change_ratio_low: float = 3.0  # change_ratio for +1
+    confidence_points_count_high: int = 2
+    confidence_points_count_low: int = 1
+    confidence_points_change_high: int = 2
+    confidence_points_change_low: int = 1
+    confidence_points_trigger: int = 2
+    confidence_points_secondary: int = 1
+    confidence_points_multiservice: int = 1
+    confidence_threshold_high: int = 5  # score for "high" (also requires trigger)
+    confidence_threshold_medium_high: int = 4  # score for "medium-high"
+    confidence_threshold_medium: int = 2  # score for "medium"
+    # Ordinal rank (NOT a calibrated probability) each label maps to in the v1
+    # schema's ``score`` field. See the field's schema description.
+    confidence_score_low: float = 0.25
+    confidence_score_medium: float = 0.50
+    confidence_score_medium_high: float = 0.72
+    confidence_score_high: float = 0.90
+
 
 _settings: Settings | None = None
 

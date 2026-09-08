@@ -61,7 +61,18 @@ class TimeWindow(BaseModel):
 
 class Confidence(BaseModel):
     label: str
-    score: float = Field(ge=0.0, le=1.0)
+    # Ordinal rank in [0,1] derived from ``label`` — NOT a calibrated
+    # probability. A "high" ranks above a "medium"; the number is not
+    # P(explanation correct). Configurable via ``confidence_score_*`` and not
+    # yet fitted to measured accuracy (#83). Read ``label`` for the decision.
+    score: float = Field(
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Ordinal confidence rank in [0,1] derived from the label, not a "
+            "calibrated probability. Prefer `label`."
+        ),
+    )
 
 
 class TriggerInfo(BaseModel):
