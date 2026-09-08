@@ -288,6 +288,10 @@ def rank_and_merge_clusters(
             merged,
             key=lambda c: (max(c.error_service_counts.values(), default=0), c.count),
         )
+        # Only guarantee an error-level candidate (matches select_primary_cluster's
+        # error-first key). A warn-only root cause can still be capped out — an
+        # accepted blind spot for the error/fatal faults #82 targets; revisit if a
+        # corpus of warn-only root causes appears.
         if max(candidate.error_service_counts.values(), default=0) > 0 and not any(
             c is candidate for c in top
         ):
