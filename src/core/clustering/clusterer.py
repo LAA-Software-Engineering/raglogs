@@ -266,13 +266,33 @@ def rank_and_merge_clusters(
 
     Returns ``(clusters, algorithm)`` where algorithm is ``fingerprint`` when
     embeddings were not used and ``fingerprint+semantic`` when they were.
+
+    The ``max_clusters`` cap is an importance ranking for *display*, but primary
+    (root-cause) selection happens downstream over whatever survives it. A quiet
+    root cause — few error lines relative to the downstream cascade it triggers —
+    can rank below the cap and be dropped, so the primary is then chosen from
+    symptoms only (measured on RCAEval RE3: root cause fell to a downstream
+    caller in every miss, #82). Guarantee the top root-cause candidate — the
+    cluster with the largest single-service error group, which is what primary
+    selection keys on — survives the cap.
     """
     from src.core.clustering.semantic_merge import maybe_semantic_merge
 
     merged, used_semantic = maybe_semantic_merge(clusters, provider=provider)
     merged.sort(key=lambda c: c.importance_score, reverse=True)
     algorithm = "fingerprint+semantic" if used_semantic else "fingerprint"
-    return merged[:max_clusters], algorithm
+
+    top = merged[:max_clusters]
+    if len(merged) > len(top):
+        candidate = max(
+            merged,
+            key=lambda c: (max(c.error_service_counts.values(), default=0), c.count),
+        )
+        if max(candidate.error_service_counts.values(), default=0) > 0 and not any(
+            c is candidate for c in top
+        ):
+            top = [*top, candidate]
+    return top, algorithm
 
 
 def _create_cluster_run(

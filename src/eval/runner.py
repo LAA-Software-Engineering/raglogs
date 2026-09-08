@@ -78,9 +78,6 @@ def run_case(db: Session, case: EvalCase) -> CaseResult:
         scope=scope,
         no_llm=True,
         baseline_window_str=case.baseline_window,
-        # Diagnostic: don't let the top-N-by-importance cap hide the root-cause
-        # error cluster from primary selection (#82 investigation).
-        max_clusters=500,
     )
     raglogs = prediction_from_result(result)
     baseline = baseline_prediction(db, case.window_start, case.window_end, job.id)
