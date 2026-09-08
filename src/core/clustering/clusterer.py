@@ -210,15 +210,27 @@ def _run_clustering(
         g["ids"].append(row.id)
 
     # 3. Get baseline counts
-    # When scoped to a specific ingestion job, skip cross-job baseline: other jobs
-    # may contain re-ingested data with overlapping timestamps, making baseline
-    # counts meaningless. Treat the scoped run as a fresh first-occurrence baseline.
+    baseline_start, baseline_end = resolve_baseline_window(
+        window_start, window_end, baseline_window_str
+    )
     if ingestion_job_id:
-        baseline_counts: dict[str, int] = {}
-    else:
-        baseline_start, baseline_end = resolve_baseline_window(
-            window_start, window_end, baseline_window_str
+        # When scoped to a specific ingestion job, a *cross-job* baseline is
+        # meaningless — other jobs may hold re-ingested data with overlapping
+        # timestamps. Compare instead against this job's own logs that precede
+        # the incident window (an in-job temporal baseline). Previously this
+        # path used an empty baseline, which left change_ratio degenerate
+        # (baseline_count 0 for every cluster) and gave no control-window
+        # comparison at all (#82).
+        baseline_counts = get_baseline_counts(
+            db,
+            baseline_start,
+            baseline_end,
+            service=service,
+            environment=environment,
+            scope=scope,
+            include_only_ingestion_job_id=ingestion_job_id,
         )
+    else:
         baseline_counts = get_baseline_counts(
             db,
             baseline_start,

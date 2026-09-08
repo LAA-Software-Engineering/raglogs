@@ -258,6 +258,24 @@ class TestScopeFilterSQL:
         assert "log_entries.scope" in sql
         assert "incident:A" in _params(stmt)
 
+    def test_baseline_include_only_job_scopes_to_that_job(self) -> None:
+        import uuid
+
+        job_id = uuid.uuid4()
+        db = MagicMock()
+        db.execute.return_value.all.return_value = []
+        get_baseline_counts(
+            db,
+            WINDOW_START,
+            WINDOW_END,
+            scope="incident:A",
+            include_only_ingestion_job_id=job_id,
+        )
+        stmt = db.execute.call_args[0][0]
+        sql = _compiled(stmt)
+        assert "log_entries.ingestion_job_id =" in sql
+        assert job_id in _params(stmt)
+
     def test_search_logs_sql_includes_scope(self) -> None:
         db = MagicMock()
         db.execute.return_value.scalars.return_value.all.return_value = []
