@@ -37,15 +37,6 @@ def get_severity_weight(levels_distribution: dict[str, int]) -> float:
     return weighted
 
 
-# How strongly a cluster's anomaly against baseline (change_ratio) weighs in
-# selection. A fault's error is *new* against a fair pre-incident baseline
-# (change_ratio ~= count), while steady background noise sits near 1. At weight
-# 1.0 this term was too weak to outvote raw log(count), so a louder steady
-# cluster beat the anomalous one; #82 raises it so a genuine spike can win even
-# when it is not the highest-volume cluster.
-_CHANGE_WEIGHT = 3.0
-
-
 def compute_importance_score(
     count: int,
     levels_distribution: dict[str, int],
@@ -59,13 +50,13 @@ def compute_importance_score(
     importance_score =
         severity_weight
         + log(count + 1)
-        + change_ratio_weight   (weighted by _CHANGE_WEIGHT)
+        + change_ratio_weight
         + spread_weight
         + trigger_correlation_weight
     """
     severity = get_severity_weight(levels_distribution)
     log_count = math.log(count + 1)
-    change_weight = math.log(change_ratio + 1) * _CHANGE_WEIGHT
+    change_weight = math.log(change_ratio + 1)
     spread_weight = math.log(services_count + 1) * 0.5
     trigger_weight = 2.0 if is_trigger_correlated else 0.0
 

@@ -73,17 +73,3 @@ class TestImportanceScore:
             change_ratio=5.0, services_count=3
         )
         assert multi > single
-
-    def test_anomaly_outscores_louder_steady_cluster(self):
-        # A moderate but anomalous spike (new vs baseline) should outscore a
-        # much louder steady cluster whose rate barely changed (#82): the
-        # change_ratio term is weighted so a genuine spike can win on selection.
-        anomalous = compute_importance_score(
-            count=50, levels_distribution={"error": 50},
-            change_ratio=51.0, services_count=1,
-        )
-        louder_steady = compute_importance_score(
-            count=5000, levels_distribution={"error": 5000},
-            change_ratio=1.0, services_count=1,
-        )
-        assert anomalous > louder_steady

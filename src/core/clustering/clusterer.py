@@ -40,9 +40,7 @@ class ClusterData:
 
 
 def _build_cluster_data(
-    fingerprint: str,
-    group: dict,
-    baseline_counts: dict[str, int],
+    fingerprint: str, group: dict, baseline_counts: dict[str, int]
 ) -> ClusterData:
     """Build a ClusterData from one fingerprint's grouped log rows."""
     count = len(group["ids"])
@@ -219,8 +217,7 @@ def _run_clustering(
 
     # 4. Build cluster data
     clusters: list[ClusterData] = [
-        _build_cluster_data(fp, g, baseline_counts)
-        for fp, g in groups.items()
+        _build_cluster_data(fp, g, baseline_counts) for fp, g in groups.items()
     ]
 
     # 5. Optional semantic merge, then rank and cap
