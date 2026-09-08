@@ -147,6 +147,24 @@ class TestPredictionFromResult:
         assert pred.returned_any_trigger is False
 
 
+class TestServicesByVolume:
+    def test_dominant_service_comes_first(self):
+        # services[0] is read as the cluster's service, so it must be the one
+        # with the most log lines, not an arbitrary insertion order (#82).
+        from src.core.explain.summarizer import _services_by_volume
+
+        assert _services_by_volume({"api": 3, "billing-worker": 40, "cache": 1}) == [
+            "billing-worker",
+            "api",
+            "cache",
+        ]
+
+    def test_empty(self):
+        from src.core.explain.summarizer import _services_by_volume
+
+        assert _services_by_volume({}) == []
+
+
 # ── Report / lift ─────────────────────────────────────────────────────────────
 
 
