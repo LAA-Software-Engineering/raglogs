@@ -264,6 +264,36 @@ class TestRankAndMergeClusters:
         assert len(out) == 1
         assert out[0].count == 30
 
+    def test_root_cause_candidate_survives_importance_cap(self) -> None:
+        # Loud downstream clusters rank high on importance; the real root cause
+        # is quiet (low importance) but owns the largest single-service error
+        # group. It must survive the cap so primary selection sees it (#82).
+        loud = [
+            _cluster(f"loud{i}", count=200, importance_score=100.0 - i,
+                     services={f"caller{i}": 200})
+            for i in range(3)
+        ]
+        for c in loud:
+            c.error_service_counts = {next(iter(c.services)): 30}
+        root = _cluster("root", count=20, importance_score=1.0, services={"authsvc": 20})
+        root.error_service_counts = {"authsvc": 50}
+        out, _ = rank_and_merge_clusters(
+            [*loud, root], max_clusters=3, provider=DisabledEmbeddingsProvider(),
+        )
+        assert any(c is root for c in out)
+
+    def test_no_extra_cluster_when_no_error_groups(self) -> None:
+        # Warn-only clusters have no error groups, so the guarantee must not fire.
+        clusters = [
+            _cluster(f"c{i}", count=100 - i, importance_score=100.0 - i,
+                     levels={"warn": 100 - i})
+            for i in range(3)
+        ]
+        out, _ = rank_and_merge_clusters(
+            clusters, max_clusters=2, provider=DisabledEmbeddingsProvider(),
+        )
+        assert len(out) == 2
+
     def test_max_clusters_applied_after_merge(self) -> None:
         a = _cluster("a", count=10, importance_score=10.0)
         b = _cluster("b", count=10, importance_score=9.0)

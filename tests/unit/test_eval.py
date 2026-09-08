@@ -147,6 +147,46 @@ class TestPredictionFromResult:
         assert pred.returned_any_trigger is False
 
 
+class TestOrderedServices:
+    def _cluster(self, services, error_service_counts):
+        from src.core.clustering.clusterer import ClusterData
+
+        return ClusterData(
+            fingerprint="fp",
+            representative_message="m",
+            count=sum(services.values()),
+            services=services,
+            levels={"error": sum(services.values())},
+            first_seen=T0,
+            last_seen=T0,
+            baseline_count=0,
+            change_ratio=1.0,
+            importance_score=1.0,
+            error_service_counts=error_service_counts,
+        )
+
+    def test_dominant_error_service_comes_first(self):
+        # services[0] is read as the cluster's service, so it must be the one
+        # with the most error lines, matching the trivial baseline (#82) — even
+        # when another service has more total lines.
+        from src.core.explain.summarizer import _ordered_services
+
+        c = self._cluster(
+            services={"gateway": 100, "billing-worker": 40, "cache": 5},
+            error_service_counts={"billing-worker": 40, "gateway": 2},
+        )
+        assert _ordered_services(c)[0] == "billing-worker"
+
+    def test_falls_back_to_volume_without_error_counts(self):
+        from src.core.explain.summarizer import _ordered_services
+
+        c = self._cluster(
+            services={"api": 3, "worker": 40, "cache": 1},
+            error_service_counts={},
+        )
+        assert _ordered_services(c) == ["worker", "api", "cache"]
+
+
 # ── Report / lift ─────────────────────────────────────────────────────────────
 
 

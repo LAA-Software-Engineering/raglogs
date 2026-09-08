@@ -21,6 +21,10 @@ from src.db.models import (
 from src.db.scope_filter import filter_log_entries_by_scope
 from src.utils.time import resolve_baseline_window
 
+# Levels that count as a "problem" line for (service, fingerprint) root-cause
+# attribution — matches the trivial baseline's error/fatal/critical filter (#82).
+_ERROR_LEVELS = ("error", "fatal", "critical")
+
 
 @dataclass
 class ClusterData:
@@ -37,6 +41,10 @@ class ClusterData:
     is_trigger: bool = False
     log_entry_ids: list[uuid.UUID] = field(default_factory=list)
     merged_fingerprints: list[str] = field(default_factory=list)
+    # Per-service count of error/fatal/critical lines in this cluster. Lets
+    # primary selection work at (service, fingerprint) granularity — matching the
+    # trivial "most frequent error cluster" selector (#82).
+    error_service_counts: dict[str, int] = field(default_factory=dict)
 
 
 def _build_cluster_data(
@@ -46,6 +54,7 @@ def _build_cluster_data(
     count = len(group["ids"])
     services = dict(group["services"])
     levels = dict(group["levels"])
+    error_service_counts = dict(group.get("error_services", {}))
     timestamps = sorted([t for t in group["timestamps"] if t is not None])
 
     baseline_count = baseline_counts.get(fingerprint, 0)
@@ -81,6 +90,7 @@ def _build_cluster_data(
         importance_score=importance,
         is_trigger=is_trigger,
         log_entry_ids=group["ids"],
+        error_service_counts=error_service_counts,
     )
 
 
@@ -178,6 +188,7 @@ def _run_clustering(
             "messages": [],
             "services": defaultdict(int),
             "levels": defaultdict(int),
+            "error_services": defaultdict(int),
             "timestamps": [],
             "ids": [],
         }
@@ -190,6 +201,8 @@ def _run_clustering(
             g["messages"].append(row.normalized_message)
         if row.service:
             g["services"][row.service] += 1
+            if row.level and row.level.lower() in _ERROR_LEVELS:
+                g["error_services"][row.service] += 1
         if row.level:
             g["levels"][row.level] += 1
         if row.timestamp:
@@ -253,13 +266,37 @@ def rank_and_merge_clusters(
 
     Returns ``(clusters, algorithm)`` where algorithm is ``fingerprint`` when
     embeddings were not used and ``fingerprint+semantic`` when they were.
+
+    The ``max_clusters`` cap is an importance ranking for *display*, but primary
+    (root-cause) selection happens downstream over whatever survives it. A quiet
+    root cause — few error lines relative to the downstream cascade it triggers —
+    can rank below the cap and be dropped, so the primary is then chosen from
+    symptoms only (measured on RCAEval RE3: root cause fell to a downstream
+    caller in every miss, #82). Guarantee the top root-cause candidate — the
+    cluster with the largest single-service error group, which is what primary
+    selection keys on — survives the cap.
     """
     from src.core.clustering.semantic_merge import maybe_semantic_merge
 
     merged, used_semantic = maybe_semantic_merge(clusters, provider=provider)
     merged.sort(key=lambda c: c.importance_score, reverse=True)
     algorithm = "fingerprint+semantic" if used_semantic else "fingerprint"
-    return merged[:max_clusters], algorithm
+
+    top = merged[:max_clusters]
+    if len(merged) > len(top):
+        candidate = max(
+            merged,
+            key=lambda c: (max(c.error_service_counts.values(), default=0), c.count),
+        )
+        # Only guarantee an error-level candidate (matches select_primary_cluster's
+        # error-first key). A warn-only root cause can still be capped out — an
+        # accepted blind spot for the error/fatal faults #82 targets; revisit if a
+        # corpus of warn-only root causes appears.
+        if max(candidate.error_service_counts.values(), default=0) > 0 and not any(
+            c is candidate for c in top
+        ):
+            top = [*top, candidate]
+    return top, algorithm
 
 
 def _create_cluster_run(

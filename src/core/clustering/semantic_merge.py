@@ -178,6 +178,7 @@ def _merge_component(members: list[ClusterData]) -> ClusterData:
     change_ratio = compute_change_ratio(count, baseline_count)
     services = _sum_counts([m.services for m in members])
     levels = _sum_counts([m.levels for m in members])
+    error_service_counts = _sum_counts([m.error_service_counts for m in members])
 
     firsts = [m.first_seen for m in members if m.first_seen is not None]
     lasts = [m.last_seen for m in members if m.last_seen is not None]
@@ -217,4 +218,5 @@ def _merge_component(members: list[ClusterData]) -> ClusterData:
         is_trigger=is_trigger,
         log_entry_ids=log_entry_ids,
         merged_fingerprints=merged_fingerprints,
+        error_service_counts=error_service_counts,
     )

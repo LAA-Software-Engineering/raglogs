@@ -18,6 +18,24 @@ from src.db.scope_filter import filter_ingestion_jobs_by_scope
 log = structlog.get_logger()
 
 
+def _ordered_services(cluster) -> list[str]:
+    """A cluster's services, most-implicated first.
+
+    A fingerprint can span services, so the services dict is in arbitrary (DB
+    row) order, yet consumers read ``services[0]`` as the cluster's service. The
+    trivial baseline attributes root cause to the service with the most
+    error/fatal lines of a (service, fingerprint) group, so order by that first
+    (``error_service_counts``), then by total volume — dominant service first
+    (#82).
+    """
+    esc = getattr(cluster, "error_service_counts", {}) or {}
+    return sorted(
+        cluster.services,
+        key=lambda s: (esc.get(s, 0), cluster.services.get(s, 0)),
+        reverse=True,
+    )
+
+
 @dataclass
 class ExplainResult:
     window_start: datetime
@@ -199,7 +217,7 @@ def _explain_window(
         primary_cluster={
             "message": pc.representative_message,
             "count": pc.count,
-            "services": list(pc.services.keys()),
+            "services": _ordered_services(pc),
             "levels": list(pc.levels.keys()),
             "fingerprint": pc.fingerprint,
             "importance_score": round(pc.importance_score, 2),
@@ -212,7 +230,7 @@ def _explain_window(
             {
                 "message": c.representative_message,
                 "count": c.count,
-                "services": list(c.services.keys()),
+                "services": _ordered_services(c),
                 "levels": list(c.levels.keys()),
                 "fingerprint": c.fingerprint,
                 "importance_score": round(c.importance_score, 2),
@@ -245,13 +263,13 @@ def _packet_to_dict(packet: EvidencePacket) -> dict:
         "primary_cluster": {
             "message": pc.representative_message if pc else None,
             "count": pc.count if pc else 0,
-            "services": list(pc.services.keys()) if pc else [],
+            "services": _ordered_services(pc) if pc else [],
             "first_seen": pc.first_seen.isoformat() if pc and pc.first_seen else None,
             "baseline_count": pc.baseline_count if pc else 0,
             "change_ratio": round(pc.change_ratio, 2) if pc else 0,
         } if pc else None,
         "secondary_clusters": [
-            {"message": c.representative_message, "count": c.count, "services": list(c.services.keys())}
+            {"message": c.representative_message, "count": c.count, "services": _ordered_services(c)}
             for c in packet.secondary_clusters
         ],
         "trigger_candidates": [
