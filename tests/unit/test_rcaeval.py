@@ -177,6 +177,10 @@ class TestConvertCaseParquet:
         assert case.trigger.type == "code"  # RE3 = code-level faults
         # the far-future row is outside the window and dropped
         assert sum(1 for _ in open(out / "logs.jsonl")) == 2
+        # Incident window starts at injection; baseline covers the pre-injection
+        # period so change-ratio has a real comparison (default pre = 300s).
+        assert case.window_start == parse_inject_time("1700000300")
+        assert case.baseline_window == "300s"
 
 
 class TestConvertCase:

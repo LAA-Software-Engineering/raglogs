@@ -285,6 +285,11 @@ def build_case_yaml(
 ) -> dict:
     """Build the harness ``case.yaml`` dict for one RCAEval case."""
     start, end = window
+    # The incident window is the post-injection period [inject_time, end]; the
+    # pre-injection period [start, inject_time] becomes the change-ratio baseline
+    # (logs.jsonl holds both), so raglogs' anomaly signal has something to
+    # compare against instead of an empty default 24h window.
+    baseline_seconds = max(int((inject_time - start).total_seconds()), 1)
     # RE3 is the code-level-fault suite (faults named f1/f2/f3…), so those are
     # code triggers regardless of the fault token; RE2 maps by fault family.
     trigger_type = "code" if meta.suite == "re3" else trigger_type_for_fault(meta.fault)
@@ -292,7 +297,8 @@ def build_case_yaml(
     # exactly where convert_case writes it.
     return {
         "id": meta.case_id,
-        "window": {"start": start.isoformat(), "end": end.isoformat()},
+        "window": {"start": inject_time.isoformat(), "end": end.isoformat()},
+        "baseline": f"{baseline_seconds}s",
         "root_cause": {"service": meta.service},
         "trigger": {
             "timestamp": inject_time.isoformat(),

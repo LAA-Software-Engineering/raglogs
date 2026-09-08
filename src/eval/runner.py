@@ -77,6 +77,7 @@ def run_case(db: Session, case: EvalCase) -> CaseResult:
         ingestion_job_id=job.id,
         scope=scope,
         no_llm=True,
+        baseline_window_str=case.baseline_window,
     )
     raglogs = prediction_from_result(result)
     baseline = baseline_prediction(db, case.window_start, case.window_end, job.id)
