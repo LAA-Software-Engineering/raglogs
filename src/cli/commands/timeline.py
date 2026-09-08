@@ -1,24 +1,16 @@
 """
 raglogs timeline — reconstruct the sequence of events in an incident window.
 
-Output example:
+Output is schematic (categories and ordering, derived from cluster
+relationships — trigger time, first-seen ordering, level, volume):
 
-  Incident timeline  2026-03-12 14:07 → 14:15 UTC
+  Incident timeline  <window start> → <window end> UTC
 
-  14:07:26  deploy      Deploy completed for billing-worker v2.4.1
-  14:07:27  startup     billing-worker started on port 8080
-
-  14:09:26  error ↑     Stripe signature verification failed (/webhooks/stripe)
-                        184 events · billing-worker · 6 min span
-
-  14:09:29  effect      POST /api/checkout 500 (upstream billing error)
-                        39 events · api
-
-  14:09:31  effect      Checkout latency increased
-                        25 events · api
-
-  14:09:35  symptom     Webhook queue grew to 168 pending items
-                        2 events · billing-worker
+  <ts>  deploy      <trigger line>            (change that preceded the errors)
+  <ts>  startup     <service> started
+  <ts>  error ↑     <primary error cluster>   N events · <service> · <span>
+  <ts>  effect      <downstream error>         M events · <service>
+  <ts>  symptom     <secondary signal>         K events · <service>
 """
 from typing import Optional
 

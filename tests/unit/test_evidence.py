@@ -288,7 +288,7 @@ class TestSecondaryEffects:
         p = self._primary()
         s = _cluster("POST /api/checkout 500 Internal Server Error", count=39, first_seen=base)
         items = _build_evidence_items(p, [s], [], 200, _now())
-        assert any("checkout 500s" in i for i in items)
+        assert any("5xx/error responses" in i for i in items)
 
     def test_latency_secondary_uses_latency_phrasing(self):
         base = _now() - timedelta(minutes=28)
