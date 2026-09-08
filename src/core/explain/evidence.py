@@ -195,32 +195,35 @@ def count_logs_in_window(
     return result or 0
 
 
-_ERROR_LEVELS = ("error", "fatal", "critical")
-
-
-def _error_volume(c: ClusterData) -> int:
-    """Number of error/fatal/critical log lines in a cluster."""
-    return sum(n for lvl, n in c.levels.items() if lvl in _ERROR_LEVELS)
+def _top_error_service_count(c: ClusterData) -> int:
+    """Line count of this cluster's largest single (service, error-level) group."""
+    return max(c.error_service_counts.values(), default=0)
 
 
 def select_primary_cluster(
     significant_clusters: list[ClusterData],
 ) -> Optional[ClusterData]:
-    """Pick the primary (root-cause) cluster: the most voluminous error cluster.
+    """Pick the primary (root-cause) cluster the way the trivial baseline does.
 
-    This is the trivial "most frequent error/fatal cluster" selector. Measured
-    on RCAEval RE2 and RE3 (#82), the composite importance-score ranking was
-    consistently *below* this simple selector on root-cause accuracy — and every
-    attempt to recover lift by reweighting or by novelty/onset selection failed
-    — so the trivial selector is the default rather than a known-worse heuristic.
-    ``importance_score`` only breaks ties. Fall back to the highest-volume
-    cluster when nothing is error-level, so an explanation is still produced.
+    The trivial "most frequent error/fatal cluster" selector groups by
+    (service, fingerprint) and takes the largest group. Measured on RCAEval RE2
+    and RE3 (#82), that selector beats raglogs' composite importance-score
+    ranking on root-cause accuracy — and reweighting / novelty / onset
+    experiments never recovered the gap — so it is the default rather than a
+    known-worse heuristic. Select the cluster whose largest single-service error
+    group is biggest (``error_service_counts``); ``count`` then
+    ``importance_score`` only break ties. Fall back to the highest-volume
+    cluster when nothing is error-level so an explanation is still produced.
     """
     if not significant_clusters:
         return None
-    error_clusters = [c for c in significant_clusters if _error_volume(c) > 0]
-    pool = error_clusters or significant_clusters
-    return max(pool, key=lambda c: (_error_volume(c), c.count, c.importance_score))
+    error_clusters = [c for c in significant_clusters if _top_error_service_count(c) > 0]
+    if error_clusters:
+        return max(
+            error_clusters,
+            key=lambda c: (_top_error_service_count(c), c.count, c.importance_score),
+        )
+    return max(significant_clusters, key=lambda c: (c.count, c.importance_score))
 
 
 def assemble_evidence(

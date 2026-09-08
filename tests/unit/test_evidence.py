@@ -30,6 +30,9 @@ def _now():
     return datetime.now(tz=timezone.utc)
 
 
+_ERR = ("error", "fatal", "critical")
+
+
 def _cluster(
     message: str,
     count: int = 10,
@@ -38,18 +41,29 @@ def _cluster(
     first_seen: datetime | None = None,
     baseline_count: int = 0,
     change_ratio: float = 1.0,
+    error_service_counts: dict | None = None,
 ) -> ClusterData:
+    services_d = {"api": count} if services is None else services
+    levels_d = {"error": count} if levels is None else levels
+    if error_service_counts is None:
+        err = sum(n for lvl, n in levels_d.items() if lvl in _ERR)
+        if err and services_d:
+            top = max(services_d, key=services_d.get)
+            error_service_counts = {top: err}
+        else:
+            error_service_counts = {}
     return ClusterData(
         fingerprint="abcd1234",
         representative_message=message,
         count=count,
-        services={"api": count} if services is None else services,
-        levels={"error": count} if levels is None else levels,
+        services=services_d,
+        levels=levels_d,
         first_seen=first_seen or _now(),
         last_seen=_now(),
         baseline_count=baseline_count,
         change_ratio=change_ratio,
         importance_score=5.0,
+        error_service_counts=error_service_counts,
     )
 
 
@@ -142,6 +156,21 @@ class TestSelectPrimaryCluster:
         w1 = _cluster("w1", count=5, levels={"warn": 5})
         w2 = _cluster("w2", count=40, levels={"warn": 40})
         assert select_primary_cluster([w1, w2]) is w2
+
+    def test_selects_at_service_fingerprint_granularity(self):
+        # Cluster B has more total error volume (45) but split across two
+        # services (25 + 20); cluster A is a single service with 30. The trivial
+        # baseline groups by (service, fingerprint), so A's 30-line group wins
+        # over B's largest 25-line group (#82).
+        a = _cluster(
+            "single-service errors", count=30, services={"front-end": 30},
+            levels={"error": 30}, error_service_counts={"front-end": 30},
+        )
+        b = _cluster(
+            "split errors", count=45, services={"gateway": 25, "cache": 20},
+            levels={"error": 45}, error_service_counts={"gateway": 25, "cache": 20},
+        )
+        assert select_primary_cluster([a, b]) is a
 
 
 # ── Trigger timing ────────────────────────────────────────────────────────────
