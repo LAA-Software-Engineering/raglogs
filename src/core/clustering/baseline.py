@@ -20,6 +20,7 @@ def get_baseline_counts(
     environment: Optional[str] = None,
     exclude_ingestion_job_id: Optional[uuid.UUID] = None,
     scope: str = DEFAULT_LOG_SCOPE,
+    include_only_ingestion_job_id: Optional[uuid.UUID] = None,
 ) -> dict[str, int]:
     """
     Return a dict of {fingerprint: count} for the baseline window.
@@ -27,6 +28,13 @@ def get_baseline_counts(
     When exclude_ingestion_job_id is provided, excludes ALL ingestion jobs that
     started at or after the given job's start time. This ensures the baseline
     only reflects data that pre-dates the current ingestion run.
+
+    When include_only_ingestion_job_id is provided, the baseline is restricted to
+    that single job's rows — an *in-job temporal baseline* (this job's logs that
+    precede the incident window). Use this for job-scoped analysis, where a
+    cross-job baseline is meaningless: it gives a real control-window comparison
+    without the overlapping-timestamp collisions that excluding jobs guards
+    against.
     """
     q = (
         select(LogEntry.fingerprint, func.count(LogEntry.id).label("cnt"))
@@ -42,6 +50,9 @@ def get_baseline_counts(
         q = q.where(LogEntry.service == service)
     if environment:
         q = q.where(LogEntry.environment == environment)
+
+    if include_only_ingestion_job_id:
+        q = q.where(LogEntry.ingestion_job_id == include_only_ingestion_job_id)
 
     if exclude_ingestion_job_id:
         # Find the start time of the current job
