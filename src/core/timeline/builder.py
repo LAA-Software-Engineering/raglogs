@@ -8,8 +8,9 @@ Ordering:
      - 500/error effects before latency/other effects
      - symptoms last
 
-Deduplication: individual webhook retry events (evt_XXXXXX) are collapsed
-into a single "N webhook retries" effect to reduce noise.
+Deduplication: repeated retry lines are collapsed into a single "N retry
+events" effect to reduce noise, by their retry semantics rather than any
+particular event-id format.
 """
 from dataclasses import dataclass
 from datetime import datetime
@@ -48,8 +49,12 @@ def _trunc(text: str, n: int) -> str:
 
 
 def _is_retry_noise(message: str) -> bool:
-    """Individual webhook retry lines (evt_XXXXXXX) are noise — collapse them."""
-    return bool(re.search(r"retry", message, re.IGNORECASE) and re.search(r"evt_", message, re.IGNORECASE))
+    """Repeated retry/attempt lines are noise — collapse them. Generic retry
+    semantics, not tied to any event-id format (near-identical retries already
+    share a fingerprint)."""
+    return bool(
+        re.search(r"\bretry(?:ing)?\b|\bretries\b|\battempt\s+\d+", message, re.IGNORECASE)
+    )
 
 
 def _classify_trigger(message: str) -> str:
@@ -139,7 +144,7 @@ def build_timeline(packet: EvidencePacket) -> list[TimelineEvent]:
             duration_minutes=_duration(sec),
         ))
 
-    # Collapse all retry clusters into one "N webhook retries" effect
+    # Collapse all retry clusters into one "N retry events" effect
     if retry_clusters:
         total_retries = sum(c.count for c in retry_clusters)
         services = sorted(set(s for c in retry_clusters for s in c.services))
@@ -149,7 +154,7 @@ def build_timeline(packet: EvidencePacket) -> list[TimelineEvent]:
             timestamp=ts,
             category="effect",
             label="effect",
-            description=f"Webhook retries ({total_retries} retry events)",
+            description=f"Retry events ({total_retries} retry events)",
             count=total_retries,
             services=services,
         ))

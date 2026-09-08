@@ -402,21 +402,22 @@ def _build_evidence_items(
         svc = _services_str(sec)
         msg = _trunc(sec.representative_message, 60)
 
-        # Detect queue-growth messages and reformat
+        # Detect queue/backlog-growth messages and reformat generically
         queue_match = re.search(r"(\d+)\s+events?\s+pending", sec.representative_message or "")
         if queue_match:
             depth = queue_match.group(1)
             items.append(
-                f"Webhook queue grew to {depth} pending items "
+                f"Queue depth grew to {depth} pending items in {svc} "
                 f"(observed in {count} {'log event' if count == 1 else 'log events'})"
             )
             continue
 
         if sec.first_seen and primary.first_seen and sec.first_seen >= primary.first_seen:
-            if "500" in msg or "error" in msg.lower():
-                items.append(f"{count} checkout 500s in {svc} started after the primary failure spike")
+            # Generic HTTP-status / latency signals — no domain vocabulary.
+            if re.search(r"\b5\d\d\b", msg) or "error" in msg.lower():
+                items.append(f"{count} 5xx/error responses in {svc} started after the primary failure spike")
             elif "latency" in msg.lower():
-                items.append(f"{count} elevated-latency checkout responses followed the same period")
+                items.append(f"{count} elevated-latency responses in {svc} followed the same period")
             else:
                 items.append(f"{count} '{msg}' events in {svc} (started after primary)")
         else:

@@ -10,9 +10,10 @@ Produces a CompareResult with:
   - new_triggers      trigger candidates in A not seen in B
 
 Noise reduction: before diffing, clusters are collapsed by semantic group.
-Individual webhook retry events (evt_XXXXXX) are merged into one entry.
-Queue-growth events with different depths are merged into one entry.
-This mirrors the deduplication done in the timeline builder.
+Retry lines (repeated delivery attempts) are merged into one entry, and
+queue-growth events with different depths are merged into one entry. Both are
+generic structural signals, not tied to any particular event source. This
+mirrors the deduplication done in the timeline builder.
 """
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -29,9 +30,11 @@ CHANGE_THRESHOLD = 1.5
 # ── Noise deduplication ───────────────────────────────────────────────────────
 
 def _is_retry(message: str) -> bool:
+    """A repeated delivery/attempt line — a generic noise class. Near-identical
+    retries differing only by an event/request id already share a fingerprint;
+    this catches the retry semantics themselves, not any id format."""
     return bool(
-        re.search(r"retry", message, re.IGNORECASE)
-        and re.search(r"evt_", message, re.IGNORECASE)
+        re.search(r"\bretry(?:ing)?\b|\bretries\b|\battempt\s+\d+", message, re.IGNORECASE)
     )
 
 def _is_queue_growth(message: str) -> bool:
@@ -42,8 +45,8 @@ def _is_queue_growth(message: str) -> bool:
 def _collapse_clusters(clusters: list[ClusterData]) -> list[ClusterData]:
     """
     Merge noisy per-event clusters into single representative entries:
-      - All retry evt_XXXXXX clusters → one "Webhook retries" cluster
-      - All queue-growth clusters     → one "Webhook queue growing" cluster
+      - All retry clusters        → one "Retry events" cluster
+      - All queue-growth clusters → one "Queue growth" cluster
 
     All other clusters pass through unchanged.
     """
@@ -84,9 +87,9 @@ def _collapse_clusters(clusters: list[ClusterData]) -> list[ClusterData]:
     if retry_group:
         n = len(retry_group)
         total = sum(c.count for c in retry_group)
-        normal.append(_merge(retry_group, f"Webhook retries ({n} distinct events, {total} total)", key="retries"))
+        normal.append(_merge(retry_group, f"Retry events ({n} distinct events, {total} total)", key="retries"))
     if queue_group:
-        normal.append(_merge(queue_group, "Webhook queue growing", key="queue_growth"))
+        normal.append(_merge(queue_group, "Queue growth", key="queue_growth"))
 
     return normal
 

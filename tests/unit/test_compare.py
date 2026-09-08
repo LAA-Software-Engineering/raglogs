@@ -135,15 +135,17 @@ class TestClassifiers:
         "Webhook retry attempt 1/3 for event evt_174550",
         "Retry evt_abc123 failed",
         "RETRY triggered for evt_XYZ",
+        "retrying request, no id here",   # #81: retry semantics, not an id format
+        "delivery attempt 4 failed",
     ])
     def test_is_retry_matches(self, msg):
         assert _is_retry(msg) is True
 
     @pytest.mark.parametrize("msg", [
-        "Stripe signature verification failed",
-        "POST /api/checkout 500",
-        "Webhook queue growing, 100 events pending",   # queue but no evt_
-        "retry without event id",
+        "signature verification failed",
+        "POST /api/orders 500",
+        "queue growing, 100 events pending",   # queue growth, not a retry
+        "database connection refused",
     ])
     def test_is_retry_no_match(self, msg):
         assert _is_retry(msg) is False
@@ -203,7 +205,7 @@ class TestCollapseClusters:
         assert len(result) == 1
         merged = result[0]
         assert merged.count == 3
-        assert "Webhook queue growing" in merged.representative_message
+        assert "Queue growth" in merged.representative_message
 
     def test_mixed_clusters_collapse_correctly(self):
         clusters = [
@@ -459,7 +461,7 @@ class TestCompareWindowsDeduplication:
         ]
         result = _compare(clusters_a=clusters_a)
         assert len(result.new_clusters) == 1
-        assert "queue growing" in result.new_clusters[0].message.lower()
+        assert "queue growth" in result.new_clusters[0].message.lower()
 
     def test_retry_in_both_windows_compares_as_single_entry(self):
         """Retries in A and B should collapse to one each, then diff normally."""
