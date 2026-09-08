@@ -68,15 +68,18 @@ def build_report(results: list[CaseResult]) -> dict:
             {
                 "id": r.case.id,
                 "expect_explanation": r.case.expect_explanation,
+                "expected_service": r.case.root_cause.service if r.case.root_cause else None,
                 "raglogs": {
                     "produced_explanation": r.raglogs.produced_explanation,
                     "root_cause_hit": root_cause_hit(r.case, r.raglogs),
+                    "predicted_services": r.raglogs.predicted_services,
                     "trigger_hit": trigger_hit(r.case, r.raglogs),
                     "confidence": r.raglogs.confidence,
                 },
                 "baseline": {
                     "produced_explanation": r.baseline.produced_explanation,
                     "root_cause_hit": root_cause_hit(r.case, r.baseline),
+                    "predicted_services": r.baseline.predicted_services,
                 },
             }
         )
