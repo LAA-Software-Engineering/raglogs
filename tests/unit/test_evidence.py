@@ -157,6 +157,39 @@ class TestSelectPrimaryCluster:
         w2 = _cluster("w2", count=40, levels={"warn": 40})
         assert select_primary_cluster([w1, w2]) is w2
 
+    def test_anomaly_can_outrank_louder_steady_cluster(self):
+        # A quiet but highly anomalous cluster (new vs baseline) beats a louder
+        # steady one (#82 anomaly-aware ranking).
+        loud_steady = _cluster("loud", count=200, levels={"error": 200}, change_ratio=1.0)
+        quiet_anom = _cluster("quiet", count=20, levels={"error": 20}, change_ratio=500.0)
+        assert select_primary_cluster([loud_steady, quiet_anom]) is quiet_anom
+
+    def test_earlier_onset_breaks_toward_cause(self):
+        ws = _now() - timedelta(minutes=30)
+        we = _now()
+        early = _cluster("early", count=50, levels={"error": 50},
+                         change_ratio=10.0, first_seen=ws)
+        late = _cluster("late", count=50, levels={"error": 50},
+                        change_ratio=10.0, first_seen=we)
+        assert select_primary_cluster([early, late], ws, we) is early
+
+    def test_zero_anomaly_onset_weights_recover_volume(self, monkeypatch):
+        from src.config import get_settings, reload_settings
+
+        monkeypatch.setenv("RCA_WEIGHT_ANOMALY", "0")
+        monkeypatch.setenv("RCA_WEIGHT_ONSET", "0")
+        reload_settings()
+        try:
+            loud_steady = _cluster("loud", count=200, levels={"error": 200}, change_ratio=1.0)
+            quiet_anom = _cluster("quiet", count=20, levels={"error": 20}, change_ratio=500.0)
+            # Pure volume now: the louder cluster wins.
+            assert select_primary_cluster([loud_steady, quiet_anom]) is loud_steady
+        finally:
+            for k in ("RCA_WEIGHT_ANOMALY", "RCA_WEIGHT_ONSET"):
+                monkeypatch.delenv(k, raising=False)
+            reload_settings()
+            get_settings()
+
     def test_selects_at_service_fingerprint_granularity(self):
         # Cluster B has more total error volume (45) but split across two
         # services (25 + 20); cluster A is a single service with 30. The trivial

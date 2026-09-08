@@ -170,6 +170,15 @@ class Settings(BaseSettings):
     confidence_score_medium_high: float = 0.72
     confidence_score_high: float = 0.90
 
+    # Root-cause candidate ranking (#82). The primary (service, fingerprint) is
+    # scored by a weighted sum of log(error-volume), log(change_ratio+1) [anomaly
+    # vs the in-job baseline], and onset earliness in the window [0..1]. Setting
+    # anomaly and onset weights to 0 recovers the pure most-frequent-error
+    # trivial baseline. Tuned against RCAEval RE2/RE3 (top-1 RCA lift).
+    rca_weight_volume: float = 1.0
+    rca_weight_anomaly: float = 1.0
+    rca_weight_onset: float = 3.0
+
 
 _settings: Settings | None = None
 

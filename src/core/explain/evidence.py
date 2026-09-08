@@ -1,3 +1,4 @@
+import math
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -200,20 +201,57 @@ def _top_error_service_count(c: ClusterData) -> int:
     return max(c.error_service_counts.values(), default=0)
 
 
+def _onset_earliness(
+    first_seen: Optional[datetime],
+    window_start: Optional[datetime],
+    window_end: Optional[datetime],
+) -> float:
+    """Where a cluster's first log falls in the window: 1.0 at the start (a cause
+    precedes its cascade), 0.0 at the end. Neutral 0.5 without timing."""
+    if first_seen is None or window_start is None or window_end is None:
+        return 0.5
+    span = (window_end - window_start).total_seconds()
+    if span <= 0:
+        return 0.5
+    frac = (window_end - first_seen).total_seconds() / span
+    return 0.0 if frac < 0.0 else 1.0 if frac > 1.0 else frac
+
+
+def _candidate_score(
+    c: ClusterData,
+    window_start: Optional[datetime],
+    window_end: Optional[datetime],
+) -> float:
+    """Anomaly/onset-aware root-cause score for a cluster's top (service,
+    fingerprint) error group (#82): weighted log(volume) + log(change_ratio+1)
+    [anomaly vs the in-job baseline] + onset earliness. Weights are configurable;
+    zeroing anomaly+onset recovers the pure most-frequent-error baseline."""
+    s = get_settings()
+    volume = math.log(_top_error_service_count(c) + 1)
+    anomaly = math.log(c.change_ratio + 1.0)
+    onset = _onset_earliness(c.first_seen, window_start, window_end)
+    return (
+        s.rca_weight_volume * volume
+        + s.rca_weight_anomaly * anomaly
+        + s.rca_weight_onset * onset
+    )
+
+
 def select_primary_cluster(
     significant_clusters: list[ClusterData],
+    window_start: Optional[datetime] = None,
+    window_end: Optional[datetime] = None,
 ) -> Optional[ClusterData]:
-    """Pick the primary (root-cause) cluster the way the trivial baseline does.
+    """Pick the primary (root-cause) cluster.
 
-    The trivial "most frequent error/fatal cluster" selector groups by
-    (service, fingerprint) and takes the largest group. Measured on RCAEval RE2
-    and RE3 (#82), that selector beats raglogs' composite importance-score
-    ranking on root-cause accuracy — and reweighting / novelty / onset
-    experiments never recovered the gap — so it is the default rather than a
-    known-worse heuristic. Select the cluster whose largest single-service error
-    group is biggest (``error_service_counts``); ``count`` then
-    ``importance_score`` only break ties. Fall back to the highest-volume
-    cluster when nothing is error-level so an explanation is still produced.
+    The trivial "most frequent error/fatal cluster" selector (pure error volume
+    at (service, fingerprint) granularity) reaches parity with the trivial
+    baseline. To *beat* it (#82), rank candidates by a configurable blend of
+    error volume, anomaly against the in-job baseline (``change_ratio``, now real
+    after #115), and onset earliness — a quiet-but-anomalous, early cluster can
+    outrank a louder late symptom. Setting the anomaly and onset weights to 0
+    recovers the pure-volume baseline. Fall back to the highest-volume cluster
+    when nothing is error-level so an explanation is still produced.
     """
     if not significant_clusters:
         return None
@@ -221,7 +259,7 @@ def select_primary_cluster(
     if error_clusters:
         return max(
             error_clusters,
-            key=lambda c: (_top_error_service_count(c), c.count, c.importance_score),
+            key=lambda c: (_candidate_score(c, window_start, window_end), c.count),
         )
     return max(significant_clusters, key=lambda c: (c.count, c.importance_score))
 
@@ -258,7 +296,7 @@ def assemble_evidence(
     if not significant_clusters:
         significant_clusters = clusters
 
-    primary = select_primary_cluster(significant_clusters)
+    primary = select_primary_cluster(significant_clusters, window_start, window_end)
     # Sort secondary by count descending — surface highest-volume effects first.
     # Take from all remaining significant clusters (all but the chosen primary).
     secondary = sorted(
