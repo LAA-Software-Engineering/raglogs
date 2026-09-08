@@ -123,6 +123,7 @@
           "type": "string"
         },
         "score": {
+          "description": "Ordinal confidence rank in [0,1] derived from the label, not a calibrated probability. Prefer `label`.",
           "maximum": 1.0,
           "minimum": 0.0,
           "title": "Score",

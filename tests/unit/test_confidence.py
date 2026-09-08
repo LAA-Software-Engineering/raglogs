@@ -205,6 +205,44 @@ class TestReturnValues:
             assert compute_confidence(p) in self.VALID
 
 
+class TestConfigurableScoring:
+    """#83: every threshold/weight is configurable; defaults are unchanged."""
+
+    def _strong_no_trigger(self):
+        # large cluster (2) + secondary (1) + multi-service (1) = 4 → medium-high
+        pc = _cluster(count=100, services={"api": 50, "worker": 50})
+        return _packet(primary=pc, secondary=[_cluster(count=10)],
+                       services=["api", "worker"], triggers=[])
+
+    def test_defaults_reproduce_original_scale(self):
+        assert compute_confidence(self._strong_no_trigger()) == "medium-high"
+
+    def test_threshold_override_lowers_label(self, monkeypatch):
+        from src.config import get_settings, reload_settings
+
+        monkeypatch.setenv("CONFIDENCE_THRESHOLD_MEDIUM_HIGH", "99")
+        reload_settings()
+        try:
+            # The same score-4 packet can no longer reach medium-high.
+            assert compute_confidence(self._strong_no_trigger()) == "medium"
+        finally:
+            monkeypatch.delenv("CONFIDENCE_THRESHOLD_MEDIUM_HIGH", raising=False)
+            reload_settings()
+            get_settings()
+
+    def test_score_map_override(self, monkeypatch):
+        from src.config import get_settings, reload_settings
+
+        monkeypatch.setenv("CONFIDENCE_SCORE_HIGH", "1.0")
+        reload_settings()
+        try:
+            assert score_from_label("high") == 1.0
+        finally:
+            monkeypatch.delenv("CONFIDENCE_SCORE_HIGH", raising=False)
+            reload_settings()
+            get_settings()
+
+
 class TestScoreFromLabel:
     def test_design_example_medium_high(self):
         assert score_from_label("medium-high") == 0.72

@@ -133,6 +133,18 @@
               ],
               "title": "Scope"
             }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "description": "Maximum number of completed ingestions to return (1\u2013500). Default 25.",
+              "default": 25,
+              "title": "Limit"
+            },
+            "description": "Maximum number of completed ingestions to return (1\u2013500). Default 25."
           }
         ],
         "responses": {
@@ -549,6 +561,18 @@
               ],
               "title": "Scope"
             }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "description": "Maximum number of completed ingestions to return (1\u2013500). Default 25.",
+              "default": 25,
+              "title": "Limit"
+            },
+            "description": "Maximum number of completed ingestions to return (1\u2013500). Default 25."
           }
         ],
         "responses": {
@@ -1428,6 +1452,53 @@
     "schemas": {
       "AskRequest": {
         "properties": {
+          "baseline_window": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Window",
+            "description": "Baseline duration (e.g. 24h). Omitted: per-key default, then DEFAULT_BASELINE_WINDOW."
+          },
+          "max_clusters": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Clusters",
+            "description": "Max clusters to analyze (1\u2013100). Omitted: per-key default, then MAX_CLUSTERS_FOR_EXPLAIN."
+          },
+          "max_evidence_items": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Evidence Items",
+            "description": "Max evidence items (1\u201350). Omitted: per-key default, then MAX_EVIDENCE_ITEMS."
+          },
+          "llm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LlmOverride"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Per-call LLM provider/enabled. Does not persist server config."
+          },
           "question": {
             "type": "string",
             "title": "Question"
@@ -1499,6 +1570,17 @@
               }
             ],
             "title": "Scope"
+          },
+          "no_llm": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "No Llm"
           }
         },
         "type": "object",
@@ -1743,6 +1825,53 @@
       },
       "ClustersRequest": {
         "properties": {
+          "baseline_window": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Window",
+            "description": "Baseline duration (e.g. 24h). Omitted: per-key default, then DEFAULT_BASELINE_WINDOW."
+          },
+          "max_clusters": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Clusters",
+            "description": "Max clusters to analyze (1\u2013100). Omitted: per-key default, then MAX_CLUSTERS_FOR_EXPLAIN."
+          },
+          "max_evidence_items": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Evidence Items",
+            "description": "Max evidence items (1\u201350). Omitted: per-key default, then MAX_EVIDENCE_ITEMS."
+          },
+          "llm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LlmOverride"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Per-call LLM provider/enabled. Does not persist server config."
+          },
           "since": {
             "anyOf": [
               {
@@ -1801,9 +1930,15 @@
             "title": "Env"
           },
           "top": {
-            "type": "integer",
-            "title": "Top",
-            "default": 15
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Top"
           },
           "ingestion_job_id": {
             "anyOf": [
@@ -1878,6 +2013,53 @@
       },
       "CompareRequest": {
         "properties": {
+          "baseline_window": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Window",
+            "description": "Baseline duration (e.g. 24h). Omitted: per-key default, then DEFAULT_BASELINE_WINDOW."
+          },
+          "max_clusters": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Clusters",
+            "description": "Max clusters to analyze (1\u2013100). Omitted: per-key default, then MAX_CLUSTERS_FOR_EXPLAIN."
+          },
+          "max_evidence_items": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Evidence Items",
+            "description": "Max evidence items (1\u201350). Omitted: per-key default, then MAX_EVIDENCE_ITEMS."
+          },
+          "llm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LlmOverride"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Per-call LLM provider/enabled. Does not persist server config."
+          },
           "since": {
             "anyOf": [
               {
@@ -2119,7 +2301,8 @@
             "type": "number",
             "maximum": 1.0,
             "minimum": 0.0,
-            "title": "Score"
+            "title": "Score",
+            "description": "Ordinal confidence rank in [0,1] derived from the label, not a calibrated probability. Prefer `label`."
           }
         },
         "type": "object",
@@ -2211,6 +2394,53 @@
       },
       "ExplainRequest": {
         "properties": {
+          "baseline_window": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Window",
+            "description": "Baseline duration (e.g. 24h). Omitted: per-key default, then DEFAULT_BASELINE_WINDOW."
+          },
+          "max_clusters": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Clusters",
+            "description": "Max clusters to analyze (1\u2013100). Omitted: per-key default, then MAX_CLUSTERS_FOR_EXPLAIN."
+          },
+          "max_evidence_items": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Evidence Items",
+            "description": "Max evidence items (1\u201350). Omitted: per-key default, then MAX_EVIDENCE_ITEMS."
+          },
+          "llm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LlmOverride"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Per-call LLM provider/enabled. Does not persist server config."
+          },
           "since": {
             "anyOf": [
               {
@@ -2269,25 +2499,15 @@
             "title": "Env"
           },
           "no_llm": {
-            "type": "boolean",
-            "title": "No Llm",
-            "default": false
-          },
-          "max_clusters": {
-            "type": "integer",
-            "title": "Max Clusters",
-            "default": 10
-          },
-          "baseline_window": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "boolean"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Baseline Window"
+            "title": "No Llm"
           },
           "ingestion_job_id": {
             "anyOf": [
@@ -2876,6 +3096,37 @@
         ],
         "title": "LlmBreakerHealth"
       },
+      "LlmOverride": {
+        "properties": {
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider",
+            "description": "openai | ollama | claude | disabled. Omitted: per-key default, then LLM_PROVIDER."
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled",
+            "description": "false acts like no_llm. Omitted: inferred from provider / server default."
+          }
+        },
+        "type": "object",
+        "title": "LlmOverride",
+        "description": "Optional per-call LLM selection. Unknown providers are rejected at resolve time."
+      },
       "LlmProvenance": {
         "properties": {
           "used": {
@@ -3047,6 +3298,53 @@
       },
       "SimilarRequest": {
         "properties": {
+          "baseline_window": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Window",
+            "description": "Baseline duration (e.g. 24h). Omitted: per-key default, then DEFAULT_BASELINE_WINDOW."
+          },
+          "max_clusters": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Clusters",
+            "description": "Max clusters to analyze (1\u2013100). Omitted: per-key default, then MAX_CLUSTERS_FOR_EXPLAIN."
+          },
+          "max_evidence_items": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Evidence Items",
+            "description": "Max evidence items (1\u201350). Omitted: per-key default, then MAX_EVIDENCE_ITEMS."
+          },
+          "llm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LlmOverride"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Per-call LLM provider/enabled. Does not persist server config."
+          },
           "since": {
             "anyOf": [
               {
@@ -3330,6 +3628,53 @@
       },
       "TimelineRequest": {
         "properties": {
+          "baseline_window": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Window",
+            "description": "Baseline duration (e.g. 24h). Omitted: per-key default, then DEFAULT_BASELINE_WINDOW."
+          },
+          "max_clusters": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Clusters",
+            "description": "Max clusters to analyze (1\u2013100). Omitted: per-key default, then MAX_CLUSTERS_FOR_EXPLAIN."
+          },
+          "max_evidence_items": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Evidence Items",
+            "description": "Max evidence items (1\u201350). Omitted: per-key default, then MAX_EVIDENCE_ITEMS."
+          },
+          "llm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LlmOverride"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Per-call LLM provider/enabled. Does not persist server config."
+          },
           "since": {
             "anyOf": [
               {
