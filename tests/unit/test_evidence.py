@@ -20,6 +20,7 @@ from src.core.explain.evidence import (
     _build_evidence_items,
     _services_str,
     find_trigger_candidates,
+    select_primary_cluster,
 )
 
 
@@ -109,6 +110,38 @@ class TestPrimaryCluster:
         p = _cluster("Database connection refused", count=50)
         items = _build_evidence_items(p, [], [], 100, _now())
         assert not any("appears in the primary error cluster" in i for i in items)
+
+
+# ── Primary selection (#82: trivial most-frequent-error selector) ──────────────
+
+class TestSelectPrimaryCluster:
+    def test_none_when_empty(self):
+        assert select_primary_cluster([]) is None
+
+    def test_picks_highest_error_volume(self):
+        small = _cluster("small", count=10, levels={"error": 10})
+        big = _cluster("big", count=200, levels={"error": 200})
+        assert select_primary_cluster([small, big]) is big
+
+    def test_ignores_importance_score_for_selection(self):
+        # A high-importance but low-error-volume cluster must not win over the
+        # louder error cluster — the selector is volume-first (#82).
+        loud = _cluster("loud errors", count=300, levels={"error": 300})
+        loud.importance_score = 1.0
+        clever = _cluster("clever", count=5, levels={"error": 5})
+        clever.importance_score = 99.0
+        assert select_primary_cluster([clever, loud]) is loud
+
+    def test_error_volume_beats_raw_count_from_warns(self):
+        # A huge warn cluster should not outrank a real error cluster.
+        warns = _cluster("noisy warns", count=1000, levels={"warn": 1000})
+        errors = _cluster("errors", count=20, levels={"error": 20})
+        assert select_primary_cluster([warns, errors]) is errors
+
+    def test_falls_back_to_volume_when_no_error(self):
+        w1 = _cluster("w1", count=5, levels={"warn": 5})
+        w2 = _cluster("w2", count=40, levels={"warn": 40})
+        assert select_primary_cluster([w1, w2]) is w2
 
 
 # ── Trigger timing ────────────────────────────────────────────────────────────

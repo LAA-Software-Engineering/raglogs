@@ -195,6 +195,34 @@ def count_logs_in_window(
     return result or 0
 
 
+_ERROR_LEVELS = ("error", "fatal", "critical")
+
+
+def _error_volume(c: ClusterData) -> int:
+    """Number of error/fatal/critical log lines in a cluster."""
+    return sum(n for lvl, n in c.levels.items() if lvl in _ERROR_LEVELS)
+
+
+def select_primary_cluster(
+    significant_clusters: list[ClusterData],
+) -> Optional[ClusterData]:
+    """Pick the primary (root-cause) cluster: the most voluminous error cluster.
+
+    This is the trivial "most frequent error/fatal cluster" selector. Measured
+    on RCAEval RE2 and RE3 (#82), the composite importance-score ranking was
+    consistently *below* this simple selector on root-cause accuracy — and every
+    attempt to recover lift by reweighting or by novelty/onset selection failed
+    — so the trivial selector is the default rather than a known-worse heuristic.
+    ``importance_score`` only breaks ties. Fall back to the highest-volume
+    cluster when nothing is error-level, so an explanation is still produced.
+    """
+    if not significant_clusters:
+        return None
+    error_clusters = [c for c in significant_clusters if _error_volume(c) > 0]
+    pool = error_clusters or significant_clusters
+    return max(pool, key=lambda c: (_error_volume(c), c.count, c.importance_score))
+
+
 def assemble_evidence(
     db: Session,
     window_start: datetime,
@@ -227,10 +255,14 @@ def assemble_evidence(
     if not significant_clusters:
         significant_clusters = clusters
 
-    primary = significant_clusters[0] if significant_clusters else None
-    # Sort secondary by count descending — surface highest-volume effects first
-    # Take from all remaining significant clusters, not just top-5 by importance
-    secondary = sorted(significant_clusters[1:], key=lambda c: c.count, reverse=True)[:4] if len(significant_clusters) > 1 else []
+    primary = select_primary_cluster(significant_clusters)
+    # Sort secondary by count descending — surface highest-volume effects first.
+    # Take from all remaining significant clusters (all but the chosen primary).
+    secondary = sorted(
+        (c for c in significant_clusters if c is not primary),
+        key=lambda c: c.count,
+        reverse=True,
+    )[:4]
 
     # Trigger candidates (lookback defaults to settings.trigger_lookback_minutes
     # inside find_trigger_candidates — not repeated here to avoid a second
