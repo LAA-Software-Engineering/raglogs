@@ -260,7 +260,11 @@ def select_primary_cluster(
     if error_clusters:
         return max(
             error_clusters,
-            key=lambda c: (_candidate_score(c, window_start, window_end), c.count),
+            key=lambda c: (
+                _candidate_score(c, window_start, window_end),
+                c.count,
+                c.importance_score,
+            ),
         )
     return max(significant_clusters, key=lambda c: (c.count, c.importance_score))
 
