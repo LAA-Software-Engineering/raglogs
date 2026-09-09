@@ -5,7 +5,10 @@ failure case named ``{benchmark}{system}_{service}_{fault}_{instance}`` (e.g.
 ``re2ob_adservice_cpu_1``), each containing:
 
 - ``inject_time.txt`` — the fault-injection Unix timestamp (the trigger label).
-- ``logs.csv`` — ``time, service, message`` rows.
+- ``logs.csv`` / ``logs.parquet`` — ``time, service, message`` rows.
+- ``traces.parquet`` / ``metrics.parquet`` — optional telemetry (#118 multi-modal
+  RCA); converted alongside logs into ``spans.jsonl`` / ``metrics.jsonl`` when
+  present (many RE2 and all sock-shop cases are logs-only).
 
 The case id encodes the ground-truth root-cause **service** and **fault type**,
 so we derive labels from the directory name + ``inject_time.txt`` and never need
@@ -358,6 +361,75 @@ def load_parquet_metrics(
     return samples
 
 
+def _span_to_jsonl(s) -> dict:
+    return {
+        "trace_id": s.trace_id,
+        "span_id": s.span_id,
+        "parent_span_id": s.parent_span_id,
+        "service": s.service,
+        "operation": s.operation,
+        "start_time": s.start_time.isoformat() if s.start_time else None,
+        "duration_ms": s.duration_ms,
+        "status_code": s.status_code,
+    }
+
+
+def _metric_to_jsonl(m) -> dict:
+    return {
+        "service": m.service,
+        "metric": m.metric,
+        "value": m.value,
+        "ts": m.ts.isoformat() if m.ts else None,
+    }
+
+
+def load_spans_jsonl(path: Path) -> list:
+    """Read a ``spans.jsonl`` (written by :func:`convert_case`) back into
+    ``ParsedSpan`` records so the eval runner can ingest them."""
+    from src.core.ingestion.telemetry import ParsedSpan
+
+    spans: list = []
+    with Path(path).open() as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            d = json.loads(line)
+            st = d.get("start_time")
+            spans.append(ParsedSpan(
+                trace_id=d.get("trace_id"),
+                span_id=d.get("span_id"),
+                parent_span_id=d.get("parent_span_id"),
+                service=d.get("service"),
+                operation=d.get("operation"),
+                start_time=datetime.fromisoformat(st) if st else None,
+                duration_ms=d.get("duration_ms"),
+                status_code=d.get("status_code"),
+            ))
+    return spans
+
+
+def load_metrics_jsonl(path: Path) -> list:
+    """Read a ``metrics.jsonl`` back into ``ParsedMetricSample`` records."""
+    from src.core.ingestion.telemetry import ParsedMetricSample
+
+    samples: list = []
+    with Path(path).open() as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            d = json.loads(line)
+            ts = d.get("ts")
+            samples.append(ParsedMetricSample(
+                service=d.get("service"),
+                metric=d.get("metric", ""),
+                value=d.get("value"),
+                ts=datetime.fromisoformat(ts) if ts else None,
+            ))
+    return samples
+
+
 def window_around(
     inject_time: datetime,
     pre_seconds: int = DEFAULT_PRE_SECONDS,
@@ -435,6 +507,26 @@ def convert_case(
     with (out_dir / "logs.jsonl").open("w") as f:
         for rec in records:
             f.write(json.dumps(rec) + "\n")
+
+    # Telemetry (traces + metrics) is optional and additive: many RE2 cases and
+    # every sock-shop case ship logs-only, so emit these files only when present.
+    # Both are windowed to the same [pre, post] span as logs.jsonl so baseline
+    # (pre-injection) vs incident comparisons line up across modalities.
+    traces_parquet = src_dir / "traces.parquet"
+    if traces_parquet.exists():
+        spans = load_parquet_spans(traces_parquet, window)
+        if spans:
+            with (out_dir / "spans.jsonl").open("w") as f:
+                for s in spans:
+                    f.write(json.dumps(_span_to_jsonl(s)) + "\n")
+    metrics_parquet = src_dir / "metrics.parquet"
+    if metrics_parquet.exists():
+        samples = load_parquet_metrics(metrics_parquet, window)
+        if samples:
+            with (out_dir / "metrics.jsonl").open("w") as f:
+                for m in samples:
+                    f.write(json.dumps(_metric_to_jsonl(m)) + "\n")
+
     (out_dir / "case.yaml").write_text(
         yaml.safe_dump(build_case_yaml(meta, inject_time, window), sort_keys=False)
     )
