@@ -183,6 +183,71 @@ class TestConvertCaseParquet:
         assert case.baseline_window == "300s"
 
 
+class TestParquetSpans:
+    def test_maps_columns_converts_us_to_ms_and_filters_window(self, tmp_path):
+        from datetime import datetime, timezone
+
+        from src.eval.rcaeval import load_parquet_spans
+
+        rows = [
+            {"traceID": "t1", "spanID": "s1", "parentSpanID": None,
+             "serviceName": "adservice", "operationName": "GET /x",
+             "startTimeMillis": 1700000000000, "duration": 18682, "statusCode": None},
+            {"traceID": "t1", "spanID": "s2", "parentSpanID": "s1",
+             "serviceName": "cartservice", "operationName": "GET",
+             "startTimeMillis": 1700009999000, "duration": 500, "statusCode": None},
+        ]
+        p = tmp_path / "traces.parquet"
+        _write_parquet(p, rows)
+        window = (
+            datetime.fromtimestamp(1699999999, tz=timezone.utc),
+            datetime.fromtimestamp(1700000100, tz=timezone.utc),
+        )
+        spans = load_parquet_spans(p, window)
+        assert len(spans) == 1  # second row outside window
+        s = spans[0]
+        assert s.service == "adservice"
+        assert s.span_id == "s1"
+        assert s.parent_span_id is None
+        assert s.duration_ms == pytest.approx(18.682)  # µs -> ms
+
+    def test_no_window_keeps_all(self, tmp_path):
+        from src.eval.rcaeval import load_parquet_spans
+
+        p = tmp_path / "traces.parquet"
+        _write_parquet(p, [
+            {"traceID": "t", "spanID": "a", "parentSpanID": None, "serviceName": "svc",
+             "operationName": "op", "startTimeMillis": 1700000000000, "duration": 1000,
+             "statusCode": None},
+        ])
+        assert len(load_parquet_spans(p)) == 1
+
+
+class TestParquetMetrics:
+    def test_melts_wide_columns_and_filters_window(self, tmp_path):
+        from datetime import datetime, timezone
+
+        from src.eval.rcaeval import load_parquet_metrics
+
+        rows = [
+            {"time": 1700000000, "carts_cpu": 0.5, "carts-db_cpu": 0.1, "front-end_mem": 42.0},
+            {"time": 1700009999, "carts_cpu": 0.9, "carts-db_cpu": 0.2, "front-end_mem": 43.0},
+        ]
+        p = tmp_path / "metrics.parquet"
+        _write_parquet(p, rows)
+        window = (
+            datetime.fromtimestamp(1699999999, tz=timezone.utc),
+            datetime.fromtimestamp(1700000100, tz=timezone.utc),
+        )
+        samples = load_parquet_metrics(p, window)
+        # one in-window row × 3 metric columns
+        assert len(samples) == 3
+        by = {(s.service, s.metric): s.value for s in samples}
+        assert by[("carts", "cpu")] == pytest.approx(0.5)
+        assert by[("carts-db", "cpu")] == pytest.approx(0.1)
+        assert by[("front-end", "mem")] == pytest.approx(42.0)
+
+
 class TestConvertCase:
     def test_output_loads_as_a_harness_case(self, tmp_path):
         from src.eval.case import load_case
