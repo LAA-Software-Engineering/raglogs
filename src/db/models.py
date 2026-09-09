@@ -143,6 +143,64 @@ class LogEmbedding(Base):
     log_entry: Mapped["LogEntry"] = relationship("LogEntry", back_populates="embedding")
 
 
+# ── Telemetry: traces + metrics (#118 multi-modal RCA) ─────────────────────────
+# Additive to log_entries; joined to logs only by (scope, service, time window).
+# Logs remain the default/fallback — these tables are optional evidence sources.
+
+
+class TraceSpan(Base):
+    __tablename__ = "trace_spans"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ingestion_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ingestion_jobs.id"), nullable=True
+    )
+    trace_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    span_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    parent_span_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    service: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    operation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    status_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Escape hatch for real span attributes (method/route/status/…); RCAEval
+    # leaves it null. First algorithm ignores it (#118 design review).
+    attributes: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    scope: Mapped[str] = mapped_column(
+        String(255), nullable=False, default=DEFAULT_LOG_SCOPE, server_default="default"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_trace_spans_scope_service_start", "scope", "service", "start_time"),
+        Index("ix_trace_spans_scope_trace", "scope", "trace_id"),
+    )
+
+
+class MetricSample(Base):
+    __tablename__ = "metric_samples"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ingestion_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ingestion_jobs.id"), nullable=True
+    )
+    service: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    metric: Mapped[str] = mapped_column(String(255), nullable=False)
+    value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ts: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Escape hatch for metric dimensions (route/status/region/…); RCAEval melts
+    # its wide {service}_{metric} columns to long form and leaves this null.
+    attributes: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    scope: Mapped[str] = mapped_column(
+        String(255), nullable=False, default=DEFAULT_LOG_SCOPE, server_default="default"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_metric_samples_scope_service_metric_ts", "scope", "service", "metric", "ts"),
+    )
+
+
 CLUSTER_EMBEDDING_UNIQUE = "ux_cluster_embeddings_scope_fingerprint"
 
 
