@@ -190,6 +190,11 @@ class Settings(BaseSettings):
     # volume-based selector, so raglogs runs unchanged without an artifact.
     rca_ranker_model_path: str = ""
 
+    # Path to the RCA confidence calibrator artifact (#118 D / #83): maps the
+    # ranked distribution to P(top-1 correct). Same non-pickle JSON format as the
+    # ranker. Empty = no calibrated confidence (fall back to ordinal confidence).
+    rca_calibrator_model_path: str = ""
+
 
 _settings: Settings | None = None
 
