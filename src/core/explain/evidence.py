@@ -49,6 +49,59 @@ class TriggerCandidate:
     service: Optional[str]
 
 
+def _primary_service(primary: Optional["ClusterData"]) -> Optional[str]:
+    """The erroring service a trigger must link to — the primary cluster's
+    top error-service, else its highest-volume service."""
+    if primary is None:
+        return None
+    esc = getattr(primary, "error_service_counts", None) or {}
+    pool = esc or (primary.services or {})
+    return max(pool.items(), key=lambda kv: kv[1])[0] if pool else None
+
+
+def _rare_event_triggers(
+    db: Session,
+    clusters: list["ClusterData"],
+    primary: Optional["ClusterData"],
+    window_start: datetime,
+    window_end: datetime,
+    scope: str,
+) -> tuple[list[TriggerCandidate], bool, bool]:
+    """Rare-event trigger detection (#82): rank rare fingerprints near onset, then
+    gate on trace/service linkage to the erroring service.
+
+    Returns ``(candidates, trigger_found, trigger_explains)``. ``trigger_found`` =
+    a rare change occurred near onset; ``trigger_explains`` = at least one such
+    change is *linked* to the erroring service (same service, or connected in the
+    trace-derived dependency graph). Queue/async boundaries that leave no span
+    edge simply don't link — a *skip, not fail* (found stays true, explains false),
+    which honestly reports "a change happened but nothing ties it to these errors".
+    """
+    from src.core.rca.linkage import build_service_graph
+    from src.core.rca.triggers import rare_event_candidates
+
+    onset = primary.first_seen if primary else None
+    # A cluster can't be its own trigger — exclude the primary error cluster from
+    # the candidate pool (else its own rarity/onset would "explain" itself).
+    pool = [c for c in clusters if c is not primary]
+    rare = rare_event_candidates(
+        pool, onset, rare_change_ratio=get_settings().trigger_rare_change_ratio
+    )
+    candidates = [
+        TriggerCandidate(message=r.message, timestamp=r.first_seen or onset or window_start, service=r.service)
+        for r in rare
+    ]
+    if not rare:
+        return candidates, False, False
+
+    root_service = _primary_service(primary)
+    graph = build_service_graph(db, scope, window_start, window_end)
+    explains = any(
+        r.service and root_service and graph.linked(r.service, root_service) for r in rare
+    )
+    return candidates, True, explains
+
+
 @dataclass
 class EvidencePacket:
     window_start: datetime
@@ -61,6 +114,12 @@ class EvidencePacket:
     services_affected: list[str]
     service_filter: Optional[str] = None
     environment_filter: Optional[str] = None
+    # #82: a rare change occurred near onset (trigger_found) vs. that change is
+    # rare AND linked to the erroring service (trigger_explains — the validated
+    # signal that may gate "high" confidence). None = not evaluated; confidence
+    # then falls back to bool(trigger_candidates) for exact back-compat.
+    trigger_found: Optional[bool] = None
+    trigger_explains: Optional[bool] = None
 
 
 def find_trigger_candidates(
@@ -310,16 +369,25 @@ def assemble_evidence(
         reverse=True,
     )[:4]
 
-    # Trigger candidates (lookback defaults to settings.trigger_lookback_minutes
-    # inside find_trigger_candidates — not repeated here to avoid a second
-    # source of truth for the default).
-    triggers = find_trigger_candidates(
-        db,
-        window_start,
-        window_end,
-        ingestion_job_id=ingestion_job_id,
-        scope=scope,
-    )
+    # Trigger candidates. Default "regex" mode uses the legacy TRIGGER_PATTERNS
+    # search; "rare_event" mode (#82) derives them from rare fingerprints near
+    # onset + trace/service linkage. trigger_found/trigger_explains stay None in
+    # regex mode so confidence is byte-identical (falls back to the old
+    # bool(trigger_candidates)).
+    trigger_found: Optional[bool] = None
+    trigger_explains: Optional[bool] = None
+    if get_settings().trigger_mode == "rare_event":
+        triggers, trigger_found, trigger_explains = _rare_event_triggers(
+            db, clusters, primary, window_start, window_end, scope
+        )
+    else:
+        triggers = find_trigger_candidates(
+            db,
+            window_start,
+            window_end,
+            ingestion_job_id=ingestion_job_id,
+            scope=scope,
+        )
 
     # Collect affected services
     services_set: set[str] = set()
@@ -348,6 +416,8 @@ def assemble_evidence(
         services_affected=services_affected,
         service_filter=service_filter,
         environment_filter=environment_filter,
+        trigger_found=trigger_found,
+        trigger_explains=trigger_explains,
     )
 
 

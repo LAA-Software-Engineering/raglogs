@@ -61,7 +61,11 @@ def compute_confidence_points(packet: EvidencePacket) -> int:
         elif pc.change_ratio > s.confidence_change_ratio_low:
             points += s.confidence_points_change_low
 
-    if packet.trigger_candidates:
+    # #82: a *found* trigger (rare change near onset) earns the points; whether it
+    # gates "high" depends on it being validated (see compute_confidence). None =
+    # legacy path -> fall back to bool(trigger_candidates) for exact back-compat.
+    found = packet.trigger_found if packet.trigger_found is not None else bool(packet.trigger_candidates)
+    if found:
         points += s.confidence_points_trigger
 
     if packet.secondary_clusters:
@@ -91,7 +95,14 @@ def compute_confidence(packet: EvidencePacket) -> str:
 
     s = get_settings()
     score = compute_confidence_points(packet)
-    has_trigger = bool(packet.trigger_candidates)
+    # #82: "high" requires a *validated* trigger (rare + linked), not a bare regex
+    # match. None (legacy) falls back to bool(trigger_candidates) so regex-mode
+    # confidence is byte-identical.
+    has_trigger = (
+        packet.trigger_explains
+        if packet.trigger_explains is not None
+        else bool(packet.trigger_candidates)
+    )
 
     if score >= s.confidence_threshold_high and has_trigger:
         return "high"

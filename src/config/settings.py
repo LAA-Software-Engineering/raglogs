@@ -50,6 +50,16 @@ class Settings(BaseSettings):
     # How far before window_start to search for trigger candidates (#76).
     trigger_lookback_minutes: int = 10
 
+    # Trigger detection strategy (#82): "regex" = the legacy TRIGGER_PATTERNS
+    # match (default, behaviour-preserving); "rare_event" = rare-fingerprint
+    # correlation + trace/service linkage, separating trigger_found from
+    # trigger_explains so an unvalidated match no longer manufactures "high"
+    # confidence. Default off until the RE2/RE3 eval delta is measured (T3).
+    trigger_mode: str = "regex"
+    # In rare_event mode, a fingerprint counts as rare when baseline_count == 0 or
+    # its change_ratio clears this threshold.
+    trigger_rare_change_ratio: float = 5.0
+
     # HTTP API authentication (G2). Default off so local demo and existing
     # TestClient tests stay unauthenticated. Production/Docker should set
     # AUTH_ENABLED=true. Keys are pinned to a scope (G8) unless minted with
