@@ -48,12 +48,16 @@ Case classes to generate:
 - **Deploy-class cases** — roll the demo from image tag A → B where B carries an
   injected regression, so the deploy line and the errors are causally linked and
   the deploy timestamp is the true trigger. (These don't exist in any public set.)
+  `otel_demo.generate_deploy_incident(..., roll=<kubectl set image / compose>)`
+  runs the loop and emits a `trigger.type: deploy` case.
 - **Negative cases** — load generator running, no fault; `expect_explanation:
   false`. A tool that invents an incident from healthy logs is worse than useless
   on-call.
 - **Confounded cases** — flip a flag *and* perform an unrelated deploy in the same
   window; the ground-truth trigger stays the flag flip. Separates causal reasoning
-  from "the most recent trigger-looking line wins".
+  from "the most recent trigger-looking line wins". Pass `generate_incident(...,
+  confounder=<unrelated action>, confounder_after=<s>)`; the distractor is recorded
+  in the case notes.
 
 For infrastructure faults flags can't express (network partitions, pod kills, I/O
 faults), layer [Chaos Mesh](https://chaos-mesh.org/docs/) (e.g. a `NetworkChaos`
