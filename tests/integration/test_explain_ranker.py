@@ -80,12 +80,23 @@ def _train_model(tmp_path):
     return str(p)
 
 
+def _write_calibrator(tmp_path):
+    import json
+
+    from src.core.rca.calibration import PlattCalibrator
+
+    p = tmp_path / "cal.json"
+    p.write_text(json.dumps(PlattCalibrator(a=4.0, b=-2.0).to_dict()))
+    return str(p)
+
+
 def test_ranker_localises_metric_only_root_cause(db_session, tmp_path, monkeypatch):
     from src.config import reload_settings
     from src.core.explain.summarizer import explain_window
 
     _seed(db_session)
     monkeypatch.setenv("RCA_RANKER_MODEL_PATH", _train_model(tmp_path))
+    monkeypatch.setenv("RCA_CALIBRATOR_MODEL_PATH", _write_calibrator(tmp_path))
     reload_settings()
     try:
         result = explain_window(
@@ -94,8 +105,12 @@ def test_ranker_localises_metric_only_root_cause(db_session, tmp_path, monkeypat
         )
         assert result.predicted_root_cause == "paymentservice"  # metric signal, not the noisy log service
         assert result.root_cause_candidates  # candidates exposed
+        # a calibrator is configured -> calibrated P(top-1 correct) in [0, 1]
+        assert result.predicted_root_cause_confidence is not None
+        assert 0.0 <= result.predicted_root_cause_confidence <= 1.0
     finally:
         monkeypatch.delenv("RCA_RANKER_MODEL_PATH", raising=False)
+        monkeypatch.delenv("RCA_CALIBRATOR_MODEL_PATH", raising=False)
         reload_settings()
 
 
@@ -111,6 +126,7 @@ def test_no_model_leaves_log_path_unchanged(db_session):
     )
     assert result.predicted_root_cause is None
     assert result.root_cause_candidates == []
+    assert result.predicted_root_cause_confidence is None
     # the log-cluster path still selects the noisy frontend cluster
     assert result.primary_cluster is not None
     assert "frontend" in result.primary_cluster["services"]

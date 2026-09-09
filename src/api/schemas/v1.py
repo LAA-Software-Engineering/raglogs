@@ -150,6 +150,9 @@ class ExplainResponse(BaseModel):
     # model is configured, so the response is unchanged by default.
     predicted_root_cause: Optional[str] = None
     root_cause_candidates: list[RootCauseCandidate] = Field(default_factory=list)
+    # Calibrated P(top-1 correct) for the ranker prediction (#118 D / #83); null
+    # unless a calibrator model is configured.
+    predicted_root_cause_confidence: Optional[float] = None
 
 
 class TimelineEventModel(BaseModel):
@@ -552,6 +555,11 @@ def explain_from_result(
         services_affected=list(result.services_affected or []),
         predicted_root_cause=result.predicted_root_cause if isinstance(result.predicted_root_cause, str) else None,
         root_cause_candidates=rca_candidates_from(result.root_cause_candidates),
+        predicted_root_cause_confidence=(
+            result.predicted_root_cause_confidence
+            if isinstance(result.predicted_root_cause_confidence, (int, float))
+            else None
+        ),
     )
 
 
@@ -608,6 +616,11 @@ def explain_from_cached(
         services_affected=list(payload.get("services_affected") or []),
         predicted_root_cause=payload.get("predicted_root_cause") if isinstance(payload.get("predicted_root_cause"), str) else None,
         root_cause_candidates=rca_candidates_from(payload.get("root_cause_candidates")),
+        predicted_root_cause_confidence=(
+            payload.get("predicted_root_cause_confidence")
+            if isinstance(payload.get("predicted_root_cause_confidence"), (int, float))
+            else None
+        ),
     )
 
 

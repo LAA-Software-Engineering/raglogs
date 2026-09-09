@@ -449,6 +449,18 @@
       },
       "title": "Root Cause Candidates",
       "type": "array"
+    },
+    "predicted_root_cause_confidence": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Predicted Root Cause Confidence"
     }
   },
   "required": [
