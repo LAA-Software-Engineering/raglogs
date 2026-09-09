@@ -2638,6 +2638,24 @@
             },
             "type": "array",
             "title": "Services Affected"
+          },
+          "predicted_root_cause": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Predicted Root Cause"
+          },
+          "root_cause_candidates": {
+            "items": {
+              "$ref": "#/components/schemas/RootCauseCandidate"
+            },
+            "type": "array",
+            "title": "Root Cause Candidates"
           }
         },
         "type": "object",
@@ -3210,6 +3228,58 @@
           "error_count"
         ],
         "title": "PushLinesResponse"
+      },
+      "RootCauseCandidate": {
+        "properties": {
+          "service": {
+            "type": "string",
+            "title": "Service"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          },
+          "modalities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Modalities"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/RootCauseEvidence"
+            },
+            "type": "array",
+            "title": "Evidence"
+          }
+        },
+        "type": "object",
+        "required": [
+          "service",
+          "score"
+        ],
+        "title": "RootCauseCandidate",
+        "description": "A ranked root-cause candidate from the learned multi-modal ranker (#118 C2)."
+      },
+      "RootCauseEvidence": {
+        "properties": {
+          "modality": {
+            "type": "string",
+            "title": "Modality"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "modality",
+          "detail"
+        ],
+        "title": "RootCauseEvidence",
+        "description": "One modality's contribution to a root-cause candidate (#118 C2)."
       },
       "SimilarMatchModel": {
         "properties": {

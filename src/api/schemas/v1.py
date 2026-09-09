@@ -111,6 +111,22 @@ class LlmProvenance(BaseModel):
     fell_back: bool
 
 
+class RootCauseEvidence(BaseModel):
+    """One modality's contribution to a root-cause candidate (#118 C2)."""
+
+    modality: str
+    detail: str
+
+
+class RootCauseCandidate(BaseModel):
+    """A ranked root-cause candidate from the learned multi-modal ranker (#118 C2)."""
+
+    service: str
+    score: float
+    modalities: list[str] = Field(default_factory=list)
+    evidence: list[RootCauseEvidence] = Field(default_factory=list)
+
+
 class ExplainResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -130,6 +146,10 @@ class ExplainResponse(BaseModel):
     total_logs: int = 0
     mode: str = "rules"
     services_affected: list[str] = Field(default_factory=list)
+    # Learned multi-modal RCA ranker output (#118 C2). Null / empty unless a ranker
+    # model is configured, so the response is unchanged by default.
+    predicted_root_cause: Optional[str] = None
+    root_cause_candidates: list[RootCauseCandidate] = Field(default_factory=list)
 
 
 class TimelineEventModel(BaseModel):
@@ -469,6 +489,32 @@ def confidence_from_value(raw: Any) -> Confidence:
     return Confidence(label=label, score=score_from_label(label))
 
 
+def rca_candidates_from(raw: Any) -> list[RootCauseCandidate]:
+    """Map RootCauseCandidate.to_dict() shapes into API models (#118 C2). Tolerant
+    of malformed / absent input (a non-list yields no candidates)."""
+    if not isinstance(raw, list):
+        return []
+    out: list[RootCauseCandidate] = []
+    for c in raw:
+        if not isinstance(c, dict):
+            continue
+        out.append(
+            RootCauseCandidate(
+                service=str(c.get("service") or ""),
+                score=float(c.get("score") or 0.0),
+                modalities=[str(m) for m in (c.get("modalities") or [])],
+                evidence=[
+                    RootCauseEvidence(
+                        modality=str(e.get("modality") or ""), detail=str(e.get("detail") or "")
+                    )
+                    for e in (c.get("evidence") or [])
+                    if isinstance(e, dict)
+                ],
+            )
+        )
+    return out
+
+
 def explain_from_result(
     result: ExplainResult,
     *,
@@ -504,6 +550,8 @@ def explain_from_result(
         total_logs=result.total_logs,
         mode=result.mode,
         services_affected=list(result.services_affected or []),
+        predicted_root_cause=result.predicted_root_cause if isinstance(result.predicted_root_cause, str) else None,
+        root_cause_candidates=rca_candidates_from(result.root_cause_candidates),
     )
 
 
@@ -558,6 +606,8 @@ def explain_from_cached(
         total_logs=int(payload.get("total_logs") or 0),
         mode=mode,
         services_affected=list(payload.get("services_affected") or []),
+        predicted_root_cause=payload.get("predicted_root_cause") if isinstance(payload.get("predicted_root_cause"), str) else None,
+        root_cause_candidates=rca_candidates_from(payload.get("root_cause_candidates")),
     )
 
 
