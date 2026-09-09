@@ -187,6 +187,11 @@ def extract():
         # candidate services: union across modalities, canonicalized to match label
         svcs = set(err) | set(rate) | set(met)
         truth = _canon(meta.service)
+        # modality presence at the CASE level: "0.0" for a feature is ambiguous
+        # (no anomaly vs no data), so record presence explicitly (ChatGPT review).
+        has_traces = int(bool(rate))
+        has_metrics = int(bool(met))
+        has_logs = int(bool(err))
         for s in svcs:
             rows.append({
                 "case": case, "system": meta.system, "service": s,
@@ -194,6 +199,7 @@ def extract():
                 "log_err": err.get(s, 0), "log_grp": grp.get(s, 0), "log_stack": stack.get(s, 0),
                 "tr_rate": rate.get(s, 0.0), "tr_dur": dur.get(s, 0.0),
                 "met_anom": met.get(s, 0.0),
+                "has_logs": has_logs, "has_traces": has_traces, "has_metrics": has_metrics,
             })
         pos = sum(1 for r in rows if r["case"] == case and r["label"])
         print(f"  {case}: {len(svcs)} svcs, {pos} labelled-positive")
@@ -201,47 +207,62 @@ def extract():
     print(f"\nwrote {len(rows)} rows for {len({r['case'] for r in rows})} cases -> {CACHE}")
 
 
-FEATS = ["log_err", "log_grp", "log_stack", "tr_rate", "tr_dur", "met_anom"]
+LOG = ["log_err", "log_grp", "log_stack"]
+TRACE = ["tr_rate", "tr_dur"]
+METRIC = ["met_anom"]
+PRESENCE = ["has_logs", "has_traces", "has_metrics"]
+
+# Ablations: which feature groups the model sees. Tests whether the lift is
+# real multi-modal signal vs a missingness shortcut (ChatGPT review point 2).
+VARIANTS = {
+    "logs-only": LOG,
+    "logs+traces": LOG + TRACE,
+    "logs+metrics": LOG + METRIC,
+    "all (no presence)": LOG + TRACE + METRIC,
+    "all + presence": LOG + TRACE + METRIC + PRESENCE,
+}
 
 
-def evaluate():
+def _loso(rows, by_case, systems, feats):
     import numpy as np
     from sklearn.ensemble import GradientBoostingClassifier
 
+    per_sys, hit_t, n_t = {}, 0, 0
+    for held in systems:
+        tr = [r for r in rows if r["system"] != held]
+        model = GradientBoostingClassifier(random_state=0).fit(
+            np.array([[r[f] for f in feats] for r in tr], dtype=float),
+            np.array([r["label"] for r in tr]),
+        )
+        cases = [c for c, rs in by_case.items() if rs[0]["system"] == held]
+        h = 0
+        for c in cases:
+            cr = by_case[c]
+            X = np.array([[r[f] for f in feats] for r in cr], dtype=float)
+            h += cr[int(np.argmax(model.predict_proba(X)[:, 1]))]["label"] == 1
+        per_sys[held] = (h, len(cases))
+        hit_t += h
+        n_t += len(cases)
+    return per_sys, hit_t, n_t
+
+
+def evaluate():
     rows = [json.loads(li) for li in CACHE.read_text().splitlines() if li.strip()]
     by_case = defaultdict(list)
     for r in rows:
         by_case[r["case"]].append(r)
     systems = sorted({r["system"] for r in rows})
 
-    def top1(case_rows, model):
-        X = np.array([[r[f] for f in FEATS] for r in case_rows], dtype=float)
-        p = model.predict_proba(X)[:, 1]
-        return case_rows[int(np.argmax(p))]["label"] == 1
-
+    # oracle ceiling: is the true service even a candidate?
+    oracle = sum(any(r["label"] for r in rs) for rs in by_case.values())
     print(f"\n=== multi-modal ranker, leave-one-system-out (RE3, {len(by_case)} cases) ===")
-    print("features:", FEATS)
-    overall_hit = overall_n = 0
-    for held in systems:
-        train_rows = [r for r in rows if r["system"] != held]
-        Xtr = np.array([[r[f] for f in FEATS] for r in train_rows], dtype=float)
-        ytr = np.array([r["label"] for r in train_rows])
-        model = GradientBoostingClassifier(random_state=0)
-        model.fit(Xtr, ytr)
-        test_cases = [c for c, rs in by_case.items() if rs[0]["system"] == held]
-        hit = sum(top1(by_case[c], model) for c in test_cases)
-        n = len(test_cases)
-        overall_hit += hit
-        overall_n += n
-        print(f"  hold-out {held}: {hit/n:5.1%} ({hit}/{n})")
-    print(f"  OVERALL (LOSO): {overall_hit/overall_n:5.1%} ({overall_hit}/{overall_n})   vs logs baseline 28.9%")
-    # feature importances from a full-data fit (context only)
-    Xall = np.array([[r[f] for f in FEATS] for r in rows], dtype=float)
-    yall = np.array([r["label"] for r in rows])
-    m = GradientBoostingClassifier(random_state=0).fit(Xall, yall)
-    print("\nfeature importances (full-data fit):")
-    for f, imp in sorted(zip(FEATS, m.feature_importances_), key=lambda x: -x[1]):
-        print(f"  {f:10s} {imp:.3f}")
+    print(f"oracle ceiling (truth is a candidate): {oracle}/{len(by_case)} = {oracle/len(by_case):.1%}")
+    print("logs volume baseline: 28.9%\n")
+    print(f"{'variant':20s} {'overall':>8s}   per-system (" + " ".join(systems) + ")")
+    for name, feats in VARIANTS.items():
+        per_sys, h, n = _loso(rows, by_case, systems, feats)
+        ps = "  ".join(f"{sy} {per_sys[sy][0]}/{per_sys[sy][1]}" for sy in systems)
+        print(f"{name:20s} {h/n:7.1%}   {ps}")
 
 
 def main():
