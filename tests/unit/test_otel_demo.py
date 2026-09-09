@@ -5,10 +5,13 @@ from datetime import datetime, timezone
 import pytest
 
 from src.eval.otel_demo import (
+    CHAOS_SCENARIOS,
     FLAG_SCENARIOS,
+    SCENARIOS_BY_CHAOS,
     SCENARIOS_BY_FLAG,
     build_deploy_case,
     build_incident_case,
+    generate_chaos_incident,
     generate_deploy_incident,
     generate_incident,
     patch_flag_variant,
@@ -94,6 +97,49 @@ class TestGenerateDeployIncident:
         case = load_case(out)
         assert case.trigger.type == "deploy"
         assert case.root_cause.service == "cart"
+
+
+class TestChaos:
+    def test_scenarios_valid(self):
+        valid = {"deploy", "config", "dependency", "resource", "code", "none"}
+        assert CHAOS_SCENARIOS and set(SCENARIOS_BY_CHAOS) == {s.name for s in CHAOS_SCENARIOS}
+        for s in CHAOS_SCENARIOS:
+            assert s.trigger_type in valid and s.service and s.kind
+
+    def test_generate_applies_then_deletes_and_emits_case(self, tmp_path):
+        from src.eval.case import load_case
+
+        events: list[str] = []
+        s = SCENARIOS_BY_CHAOS["cartRedisPartition"]
+        out = generate_chaos_incident(
+            tmp_path / "chaos_1", "chaos_1", scenario=s,
+            apply_chaos=lambda sc: events.append(f"apply:{sc.name}"),
+            delete_chaos=lambda sc: events.append(f"delete:{sc.name}"),
+            capture=lambda ws, we: ([{"timestamp": T0.isoformat(), "service": "cart", "message": "e", "level": "error"}], [], []),
+            sleep=lambda _s: None, now=lambda: T0, baseline_seconds=300, post_seconds=600,
+        )
+        assert events == ["apply:cartRedisPartition", "delete:cartRedisPartition"]
+        case = load_case(out)
+        assert case.root_cause.service == "cart"
+        assert case.trigger.type == "dependency"
+
+    def test_chaos_experiment_deleted_even_if_capture_fails(self, tmp_path):
+        import pytest as _pytest
+
+        events: list[str] = []
+        s = SCENARIOS_BY_CHAOS["checkoutPodKill"]
+
+        def boom(ws, we):
+            raise RuntimeError("capture failed")
+
+        with _pytest.raises(RuntimeError):
+            generate_chaos_incident(
+                tmp_path / "chaos_2", "chaos_2", scenario=s,
+                apply_chaos=lambda sc: events.append("apply"),
+                delete_chaos=lambda sc: events.append("delete"),
+                capture=boom, sleep=lambda _s: None, now=lambda: T0,
+            )
+        assert events == ["apply", "delete"]  # cleanup ran despite the failure
 
 
 class TestGenerateIncident:
