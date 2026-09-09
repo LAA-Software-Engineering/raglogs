@@ -212,6 +212,30 @@ class TestPredictionFromResult:
         assert pred.predicted_services == []
         assert pred.returned_any_trigger is False
 
+    def test_ranker_candidates_override_log_cluster(self):
+        # A model ran: its ranked services replace the log-cluster pick.
+        res = _result(primary_services=["frontend", "api"])
+        res.predicted_root_cause = "adservice"
+        res.root_cause_candidates = [{"service": "adservice"}, {"service": "cartservice"}]
+        pred = prediction_from_result(res)
+        assert pred.root_cause_service == "adservice"
+        assert pred.predicted_services == ["adservice", "cartservice"]
+        assert pred.produced_explanation is True
+
+    def test_ranker_predicts_without_a_log_cluster(self):
+        # Trace/metric-only root cause: no primary cluster, but the ranker fired.
+        res = _result(primary_services=None)
+        res.root_cause_candidates = [{"service": "carts"}]
+        pred = prediction_from_result(res)
+        assert pred.root_cause_service == "carts"
+        assert pred.produced_explanation is True  # the ranker produced a prediction
+
+    def test_no_ranker_falls_back_to_log_cluster(self):
+        # Default (no model): empty candidates leave the log-cluster pick intact.
+        pred = prediction_from_result(_result(primary_services=["billing-worker"]))
+        assert pred.root_cause_service == "billing-worker"
+        assert pred.predicted_services == ["billing-worker"]
+
 
 class TestOrderedServices:
     def _cluster(self, services, error_service_counts):
