@@ -81,12 +81,22 @@ NO:     fitting thresholds · retraining the ranker ·
 ```
 
 ```bash
+# 1. Train + FREEZE the artifacts on RCAEval (before generating/seeing OTel cases)
 python scripts/train_rca_ranker.py      --features mm_features_re2re3.jsonl --out models/rca_ranker.json
 python scripts/train_rca_calibrator.py  --features mm_features_re2re3.jsonl --out models/rca_calibrator.json
-RCA_RANKER_MODEL_PATH=models/rca_ranker.json \
-RCA_CALIBRATOR_MODEL_PATH=models/rca_calibrator.json \
-  raglogs eval --cases data/eval-cases/otel --json eval_otel.json
+
+# 2. One frozen evaluation over the independent corpus
+raglogs frozen-eval data/eval-cases/otel \
+    --ranker models/rca_ranker.json --calibrator models/rca_calibrator.json
 ```
+
+`raglogs frozen-eval` runs the frozen artifacts over the corpus and prints the
+report below with an explicit provenance banner (`OTel cases seen in training: 0`,
+`Model changes after capture: 0`), so the result is publishable and hard to later
+misrepresent. **Freeze the ranker + calibrator before this run** — retuning after
+seeing the corpus turns external validation into training on a third corpus, and
+the synthetic unit fixtures exist only to test the plumbing/metric math, never to
+tune anything.
 
 Measure — top-1 is no longer the only thing that matters:
 
