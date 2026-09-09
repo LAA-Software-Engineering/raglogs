@@ -58,8 +58,26 @@ def _scope_for(case: EvalCase) -> str:
     return f"eval:{case.id}"
 
 
+def _ingest_telemetry(db: Session, case: EvalCase, scope: str, job_id) -> None:
+    """Ingest a case's optional trace/metric sidecars under its scope.
+
+    Additive (#118): logs-only cases have no sidecars and this is a no-op. The
+    ingest is idempotent (deterministic PKs + ON CONFLICT), so re-running a case
+    does not inflate telemetry counts.
+    """
+    from src.core.ingestion.telemetry import persist_metric_samples, persist_spans
+    from src.eval.rcaeval import load_metrics_jsonl, load_spans_jsonl
+
+    if case.spans_path is not None:
+        persist_spans(db, load_spans_jsonl(case.spans_path), scope=scope, ingestion_job_id=job_id)
+    if case.metrics_path is not None:
+        persist_metric_samples(
+            db, load_metrics_jsonl(case.metrics_path), scope=scope, ingestion_job_id=job_id
+        )
+
+
 def run_case(db: Session, case: EvalCase) -> CaseResult:
-    """Ingest one case's logs, then score the raglogs and baseline arms."""
+    """Ingest one case's logs (and any telemetry), then score both arms."""
     from src.core.ingestion.service import ingest_files
 
     scope = _scope_for(case)
@@ -69,6 +87,7 @@ def run_case(db: Session, case: EvalCase) -> CaseResult:
         recursive=True,
         scope=scope,
     )
+    _ingest_telemetry(db, case, scope, job.id)
 
     result = explain_window(
         db=db,

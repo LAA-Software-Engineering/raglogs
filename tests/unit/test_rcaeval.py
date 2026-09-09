@@ -248,6 +248,70 @@ class TestParquetMetrics:
         assert by[("front-end", "mem")] == pytest.approx(42.0)
 
 
+class TestConvertCaseTelemetry:
+    def _case_with_telemetry(self, tmp_path):
+        src = tmp_path / "re3ob_adservice_f3_1"
+        src.mkdir()
+        (src / "inject_time.txt").write_text("1700000300")
+        _write_parquet(
+            src / "logs.parquet",
+            [{"timestamp": 1700000305, "container_name": "adservice", "message": "boom"}],
+        )
+        _write_parquet(
+            src / "traces.parquet",
+            [
+                {"traceID": "t1", "spanID": "s1", "parentSpanID": None,
+                 "serviceName": "adservice", "operationName": "GET /x",
+                 "startTimeMillis": 1700000305000, "duration": 18682, "statusCode": None},
+                {"traceID": "t1", "spanID": "s2", "parentSpanID": "s1",
+                 "serviceName": "cartservice", "operationName": "GET",
+                 "startTimeMillis": 1700099999000, "duration": 500, "statusCode": None},
+            ],
+        )
+        _write_parquet(
+            src / "metrics.parquet",
+            [
+                {"time": 1700000305, "adservice_cpu": 0.9, "cartservice_mem": 42.0},
+                {"time": 1700099999, "adservice_cpu": 0.1, "cartservice_mem": 43.0},
+            ],
+        )
+        return src
+
+    def test_emits_windowed_sidecars_and_they_round_trip(self, tmp_path):
+        from src.eval.rcaeval import convert_case, load_metrics_jsonl, load_spans_jsonl
+
+        out = tmp_path / "out"
+        assert convert_case(self._case_with_telemetry(tmp_path), out) is True
+
+        spans = load_spans_jsonl(out / "spans.jsonl")
+        assert len(spans) == 1  # far-future span dropped by the window
+        assert spans[0].service == "adservice"
+        assert spans[0].span_id == "s1"
+        assert spans[0].duration_ms == pytest.approx(18.682)  # µs -> ms survived round-trip
+        assert spans[0].start_time is not None
+
+        samples = load_metrics_jsonl(out / "metrics.jsonl")
+        assert len(samples) == 2  # one in-window row x 2 metric columns
+        by = {(s.service, s.metric): s.value for s in samples}
+        assert by[("adservice", "cpu")] == pytest.approx(0.9)
+        assert by[("cartservice", "mem")] == pytest.approx(42.0)
+
+    def test_logs_only_case_writes_no_sidecars(self, tmp_path):
+        from src.eval.rcaeval import convert_case
+
+        src = tmp_path / "re3ss_carts_f1_1"
+        src.mkdir()
+        (src / "inject_time.txt").write_text("1700000300")
+        _write_parquet(
+            src / "logs.parquet",
+            [{"timestamp": 1700000305, "container_name": "carts", "message": "boom"}],
+        )
+        out = tmp_path / "out"
+        assert convert_case(src, out) is True
+        assert not (out / "spans.jsonl").exists()
+        assert not (out / "metrics.jsonl").exists()
+
+
 class TestConvertCase:
     def test_output_loads_as_a_harness_case(self, tmp_path):
         from src.eval.case import load_case

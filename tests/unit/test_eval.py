@@ -64,6 +64,72 @@ class TestLoadCases:
         assert case.expect_explanation is False
         assert case.root_cause is None
 
+    def test_telemetry_sidecars_resolved_when_present(self, tmp_path):
+        from src.eval.case import load_case
+
+        d = tmp_path / "c1"
+        d.mkdir()
+        (d / "case.yaml").write_text(
+            "id: c1\n"
+            "window: {start: '2026-03-16T15:00:00+00:00', end: '2026-03-16T15:10:00+00:00'}\n"
+            "root_cause: {service: adservice}\n"
+        )
+        (d / "logs.jsonl").write_text("")
+        (d / "spans.jsonl").write_text("")
+        (d / "metrics.jsonl").write_text("")
+        case = load_case(d)
+        assert case.spans_path == d / "spans.jsonl"
+        assert case.metrics_path == d / "metrics.jsonl"
+
+    def test_telemetry_sidecars_absent_by_default(self):
+        # The seed cases are logs-only; no telemetry sidecars.
+        case = next(c for c in load_cases(CASES_DIR) if c.id == "sample-incident-001")
+        assert case.spans_path is None
+        assert case.metrics_path is None
+
+
+class TestIngestTelemetry:
+    def _case(self, spans=None, metrics=None) -> EvalCase:
+        c = _pos_case()
+        c.spans_path = spans
+        c.metrics_path = metrics
+        return c
+
+    def test_persists_both_sidecars_under_scope(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        from src.eval.rcaeval import _metric_to_jsonl, _span_to_jsonl
+        from src.eval.runner import _ingest_telemetry
+
+        import json as _json
+
+        from src.core.ingestion.telemetry import ParsedMetricSample, ParsedSpan
+
+        spans_p = tmp_path / "spans.jsonl"
+        spans_p.write_text(
+            _json.dumps(_span_to_jsonl(ParsedSpan(trace_id="t", span_id="s", service="svc", start_time=T0))) + "\n"
+        )
+        metrics_p = tmp_path / "metrics.jsonl"
+        metrics_p.write_text(
+            _json.dumps(_metric_to_jsonl(ParsedMetricSample(service="svc", metric="cpu", value=0.5, ts=T0))) + "\n"
+        )
+
+        db = MagicMock()
+        _ingest_telemetry(db, self._case(spans_p, metrics_p), scope="eval:pos", job_id=None)
+        # both an insert into trace_spans and one into metric_samples were issued
+        stmts = " ".join(str(c[0][0]).lower() for c in db.execute.call_args_list)
+        assert "insert into trace_spans" in stmts
+        assert "insert into metric_samples" in stmts
+
+    def test_logs_only_case_is_a_noop(self):
+        from unittest.mock import MagicMock
+
+        from src.eval.runner import _ingest_telemetry
+
+        db = MagicMock()
+        _ingest_telemetry(db, self._case(), scope="eval:pos", job_id=None)
+        db.execute.assert_not_called()
+
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
 

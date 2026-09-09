@@ -3,8 +3,9 @@
 
 Currently wires up **RCAEval RE2/RE3** (https://github.com/phamquiluan/RCAEval,
 MIT) — 360 labeled failure cases whose ``inject_time.txt`` is exactly the
-trigger label the harness needs. The raw data (~3.4 GB) and the converted cases
-are written to gitignored ``data/`` and are never committed.
+trigger label the harness needs. Logs plus optional telemetry (traces/metrics,
+for #118 multi-modal RCA) are fetched; the raw data and the converted cases are
+written to gitignored ``data/`` and are never committed.
 
 Usage:
 
@@ -43,9 +44,10 @@ def _download(suite: str) -> Path:
         )
         raise SystemExit(1)
 
-    # Fetch only what the converter needs (the label + the logs), not the far
-    # larger metrics.parquet / traces.parquet in each case directory.
-    print(f"Downloading RCAEval {suite} logs into {RAW_DIR}...")
+    # Fetch the label + logs, plus telemetry (traces/metrics) for multi-modal RCA
+    # (#118). Telemetry is optional per case — many RE2 and all sock-shop cases
+    # are logs-only — and the converter emits the sidecars only where present.
+    print(f"Downloading RCAEval {suite} logs + telemetry into {RAW_DIR}...")
     local = snapshot_download(
         repo_id=REPO_ID,
         repo_type="dataset",
@@ -53,6 +55,8 @@ def _download(suite: str) -> Path:
             f"{suite}*/inject_time.txt",
             f"{suite}*/logs.parquet",
             f"{suite}*/logs.csv",
+            f"{suite}*/traces.parquet",
+            f"{suite}*/metrics.parquet",
         ],
         local_dir=str(RAW_DIR),
     )

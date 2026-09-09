@@ -54,6 +54,11 @@ class EvalCase:
     # real pre-incident period; None uses the pipeline default. For corpora with
     # a short capture (e.g. RCAEval), point this at the pre-injection window.
     baseline_window: Optional[str] = None
+    # Optional telemetry sidecars (#118 multi-modal RCA): a `spans.jsonl` /
+    # `metrics.jsonl` in the case dir, ingested under the same scope as the logs.
+    # Absent for logs-only cases; the pipeline runs unchanged without them.
+    spans_path: Optional[Path] = None
+    metrics_path: Optional[Path] = None
 
 
 def _resolve_logs(case_dir: Path, raw: Optional[object]) -> list[Path]:
@@ -129,6 +134,8 @@ def load_case(case_dir: Path) -> EvalCase:
             f"{case_yaml}: root_cause is required unless expect_explanation is false"
         )
 
+    spans = case_dir / "spans.jsonl"
+    metrics = case_dir / "metrics.jsonl"
     return EvalCase(
         id=str(raw.get("id") or case_dir.name),
         window_start=parse_iso(str(window["start"])),
@@ -139,6 +146,8 @@ def load_case(case_dir: Path) -> EvalCase:
         notes=str(raw.get("notes", "")),
         logs_paths=_resolve_logs(case_dir, raw.get("logs")),
         baseline_window=(str(raw["baseline"]) if raw.get("baseline") else None),
+        spans_path=spans if spans.exists() else None,
+        metrics_path=metrics if metrics.exists() else None,
     )
 
 
