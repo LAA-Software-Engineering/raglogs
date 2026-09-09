@@ -17,18 +17,23 @@ regressions, healthy **negative** cases, and **confounded** cases.
 
 `scripts/eval/generate_incident.py` runs one loop: **baseline window → flip flag
 (record exact inject time) → incident window → emit `case.yaml` (+ telemetry
-sidecars) → flip back**. Logs/traces/metrics come from the demo's bundled OTel
-Collector (Prometheus/Jaeger/Grafana ship with it — no SaaS backend).
+sidecars) → flip back**. Telemetry comes from the demo's bundled OTel Collector:
+add a `file` exporter that writes OTLP-JSON to `./capture/{logs,traces,metrics}.json`
+(Prometheus/Jaeger/Grafana ship with it — no SaaS backend). `src/eval/otlp.py`
+converts that OTLP-JSON into the harness records (`logs.jsonl` +
+`ParsedSpan`/`ParsedMetricSample` sidecars), window-filtered — the same shapes the
+RCAEval path and the multi-modal feature layer already consume, so the frozen
+model runs on identical inputs.
 
 ```bash
 # positive case
 python scripts/eval/generate_incident.py --flag paymentServiceFailure \
-    --flagd-url http://localhost:8080 --telemetry-dir ./capture \
+    --flagd-url http://localhost:8080 --otlp-dir ./capture \
     --out data/eval-cases/otel/payment_1
 
 # healthy negative (raglogs must abstain)
 python scripts/eval/generate_incident.py --negative \
-    --telemetry-dir ./capture --out data/eval-cases/otel/healthy_1
+    --otlp-dir ./capture --out data/eval-cases/otel/healthy_1
 ```
 
 Built-in failure flags → root cause (`src/eval/otel_demo.py::FLAG_SCENARIOS`):

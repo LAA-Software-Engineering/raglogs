@@ -5,21 +5,20 @@ the frozen external-validation protocol.
 
     # positive case (flip a built-in failure flag)
     python scripts/eval/generate_incident.py --flag paymentServiceFailure \
-        --flagd-url http://localhost:8080 --telemetry-dir ./capture \
+        --flagd-url http://localhost:8080 --otlp-dir ./capture \
         --out data/eval-cases/otel/payment_1
 
     # healthy negative case (no flag flipped; raglogs must abstain)
     python scripts/eval/generate_incident.py --negative \
-        --telemetry-dir ./capture --out data/eval-cases/otel/healthy_1
+        --otlp-dir ./capture --out data/eval-cases/otel/healthy_1
 
-``--telemetry-dir`` holds ``logs.jsonl`` / ``spans.jsonl`` / ``metrics.jsonl`` for
-the window, captured from the demo's bundled OTel Collector (no SaaS backend
-needed). The tool records the exact flag-flip time as the ground-truth trigger.
+``--otlp-dir`` holds ``logs.json`` / ``traces.json`` / ``metrics.json`` (OTLP-JSON
+from the demo's bundled OTel Collector file exporter — no SaaS backend needed).
+The tool records the exact flag-flip time as the ground-truth trigger.
 """
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 import time
 from datetime import datetime, timezone
@@ -30,22 +29,7 @@ from src.eval.otel_demo import (
     generate_incident,
     set_flag_variant,
 )
-
-
-def _load_jsonl(path: Path) -> list:
-    if not path.exists():
-        return []
-    return [json.loads(li) for li in path.read_text().splitlines() if li.strip()]
-
-
-def _capture_from_dir(telemetry_dir: Path):
-    """Capture callable: read pre-collected sidecars for the window. Spans/metrics
-    are passed through as dicts (write_case serialises logs directly; span/metric
-    sidecars are emitted only when the loader is given ParsedSpan/-Sample objects,
-    so here we attach logs and copy any captured sidecars verbatim)."""
-    def capture(_ws: datetime, _we: datetime):
-        return (_load_jsonl(telemetry_dir / "logs.jsonl"), [], [])
-    return capture
+from src.eval.otlp import capture_from_otlp_dir
 
 
 def main() -> int:
@@ -53,7 +37,7 @@ def main() -> int:
     ap.add_argument("--flag", help="flagd failure flag (omit with --negative)")
     ap.add_argument("--negative", action="store_true", help="healthy case: flip nothing")
     ap.add_argument("--flagd-url", default="http://localhost:8080")
-    ap.add_argument("--telemetry-dir", type=Path, required=True)
+    ap.add_argument("--otlp-dir", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--baseline", type=int, default=300)
     ap.add_argument("--post", type=int, default=600)
@@ -78,7 +62,7 @@ def main() -> int:
         args.out,
         case_id,
         scenario=scenario,
-        capture=_capture_from_dir(args.telemetry_dir),
+        capture=capture_from_otlp_dir(args.otlp_dir),
         flip=flip,
         sleep=time.sleep,
         now=lambda: datetime.now(timezone.utc),
