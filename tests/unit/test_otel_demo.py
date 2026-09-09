@@ -7,7 +7,9 @@ import pytest
 from src.eval.otel_demo import (
     FLAG_SCENARIOS,
     SCENARIOS_BY_FLAG,
+    build_deploy_case,
     build_incident_case,
+    generate_deploy_incident,
     generate_incident,
     patch_flag_variant,
 )
@@ -66,6 +68,34 @@ class TestBuildIncidentCase:
         assert "confounder" in doc["notes"] and deploy.isoformat() in doc["notes"]
 
 
+class TestBuildDeployCase:
+    def test_deploy_trigger_and_root_cause(self):
+        doc = build_deploy_case("dep_1", T0, service="cart", from_tag="v1.0", to_tag="v1.1",
+                                baseline_seconds=300, post_seconds=600)
+        assert doc["root_cause"]["service"] == "cart"
+        assert doc["trigger"]["type"] == "deploy"
+        assert doc["trigger"]["timestamp"] == T0.isoformat()
+        assert doc["expect_explanation"] is True
+        assert "v1.0->v1.1" in doc["notes"]
+
+
+class TestGenerateDeployIncident:
+    def test_rolls_forward_then_back_and_emits_deploy_case(self, tmp_path):
+        from src.eval.case import load_case
+
+        rolls: list[str] = []
+        out = generate_deploy_incident(
+            tmp_path / "dep_1", "dep_1", service="cart", from_tag="v1.0", to_tag="v1.1",
+            roll=lambda tag: rolls.append(tag),
+            capture=lambda ws, we: ([{"timestamp": T0.isoformat(), "service": "cart", "message": "err", "level": "error"}], [], []),
+            sleep=lambda _s: None, now=lambda: T0, baseline_seconds=300, post_seconds=600,
+        )
+        assert rolls == ["v1.1", "v1.0"]  # forward to regressed tag, then roll back
+        case = load_case(out)
+        assert case.trigger.type == "deploy"
+        assert case.root_cause.service == "cart"
+
+
 class TestGenerateIncident:
     def test_loop_flips_records_and_flips_back(self, tmp_path):
         from src.eval.case import load_case
@@ -105,3 +135,20 @@ class TestGenerateIncident:
         )
         assert flips == []  # no flag touched on a healthy case
         assert load_case(out).expect_explanation is False
+
+    def test_confounder_fires_and_is_recorded(self, tmp_path):
+        from src.eval.case import load_case
+
+        actions: list[str] = []
+        s = SCENARIOS_BY_FLAG["cartServiceFailure"]
+        out = generate_incident(
+            tmp_path / "cart_conf_1", "cart_conf_1", scenario=s,
+            capture=lambda ws, we: ([{"timestamp": T0.isoformat(), "service": "cart", "message": "e", "level": "error"}], [], []),
+            flip=lambda f, v: actions.append(f"flag:{f}={v}"),
+            sleep=lambda _s: None, now=lambda: T0,
+            confounder=lambda: actions.append("unrelated-deploy"), confounder_after=60,
+        )
+        assert "unrelated-deploy" in actions
+        case = load_case(out)
+        assert case.trigger.type == "code"  # ground truth stays the flag, not the deploy
+        assert "confounder" in case.notes

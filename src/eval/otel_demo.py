@@ -96,6 +96,44 @@ def set_flag_variant(base_url: str, flag: str, variant: str, *, timeout: float =
 # ── case building ────────────────────────────────────────────────────────────
 
 
+def _case_doc(
+    case_id: str,
+    inject_time: datetime,
+    *,
+    root_cause_service: Optional[str],
+    trigger_type: Optional[str],
+    baseline_seconds: int,
+    post_seconds: int,
+    notes: str,
+    confounding_deploy_at: Optional[datetime] = None,
+) -> dict:
+    """Shared case.yaml builder. ``root_cause_service=None`` is a healthy negative
+    case (``expect_explanation: false``); otherwise the incident window starts at
+    ``inject_time`` with the given ground-truth service + trigger type. A
+    ``confounding_deploy_at`` records an unrelated in-window deploy in the notes
+    while the ground-truth trigger stays ``inject_time``."""
+    note_parts = [notes] if notes else []
+    if confounding_deploy_at is not None:
+        note_parts.append(f"confounder: unrelated deploy at {confounding_deploy_at.isoformat()}")
+
+    doc: dict = {
+        "id": case_id,
+        "window": {"start": inject_time.isoformat(),
+                   "end": (inject_time + timedelta(seconds=post_seconds)).isoformat()},
+        "baseline": f"{baseline_seconds}s",
+    }
+    if root_cause_service is None:
+        doc["expect_explanation"] = False
+        doc["notes"] = "; ".join(["healthy negative case (no fault injected)", *note_parts])
+        return doc
+
+    doc["root_cause"] = {"service": root_cause_service}
+    doc["trigger"] = {"timestamp": inject_time.isoformat(), "type": trigger_type or "none"}
+    doc["expect_explanation"] = True
+    doc["notes"] = "; ".join(note_parts)
+    return doc
+
+
 def build_incident_case(
     case_id: str,
     inject_time: datetime,
@@ -106,32 +144,43 @@ def build_incident_case(
     confounding_deploy_at: Optional[datetime] = None,
     notes: str = "",
 ) -> dict:
-    """Build a harness ``case.yaml`` dict. ``scenario=None`` is a **negative**
-    (healthy) case: raglogs must return insufficient-evidence, so it carries no
-    root cause and ``expect_explanation: false``. ``confounding_deploy_at`` records
-    an unrelated deploy inside the window (the ground-truth trigger stays the flag
-    flip) so trigger selection is tested against a distractor."""
-    incident_start = inject_time
-    end = inject_time + timedelta(seconds=post_seconds)
-    note_parts = [notes] if notes else []
-    if confounding_deploy_at is not None:
-        note_parts.append(f"confounder: unrelated deploy at {confounding_deploy_at.isoformat()}")
-
-    doc: dict = {
-        "id": case_id,
-        "window": {"start": incident_start.isoformat(), "end": end.isoformat()},
-        "baseline": f"{baseline_seconds}s",
-    }
+    """Build a flag (or healthy-negative) harness ``case.yaml`` dict.
+    ``scenario=None`` is a **negative** case (raglogs must abstain).
+    ``confounding_deploy_at`` records an unrelated in-window deploy so trigger
+    selection is tested against a distractor."""
     if scenario is None:
-        doc["expect_explanation"] = False
-        doc["notes"] = "; ".join(["healthy negative case (no fault injected)", *note_parts])
-        return doc
+        return _case_doc(case_id, inject_time, root_cause_service=None, trigger_type=None,
+                         baseline_seconds=baseline_seconds, post_seconds=post_seconds,
+                         notes=notes, confounding_deploy_at=confounding_deploy_at)
+    return _case_doc(
+        case_id, inject_time, root_cause_service=scenario.service, trigger_type=scenario.trigger_type,
+        baseline_seconds=baseline_seconds, post_seconds=post_seconds,
+        notes="; ".join(p for p in [f"OTel Demo flag={scenario.flag} ({scenario.incident_class})", notes] if p),
+        confounding_deploy_at=confounding_deploy_at,
+    )
 
-    doc["root_cause"] = {"service": scenario.service}
-    doc["trigger"] = {"timestamp": inject_time.isoformat(), "type": scenario.trigger_type}
-    doc["expect_explanation"] = True
-    doc["notes"] = "; ".join([f"OTel Demo flag={scenario.flag} ({scenario.incident_class})", *note_parts])
-    return doc
+
+def build_deploy_case(
+    case_id: str,
+    deploy_time: datetime,
+    *,
+    service: str,
+    from_tag: str,
+    to_tag: str,
+    baseline_seconds: int,
+    post_seconds: int,
+    confounding_deploy_at: Optional[datetime] = None,
+) -> dict:
+    """Build a **deploy-class** case: rolling ``service`` from image ``from_tag`` to
+    a regressed ``to_tag`` at ``deploy_time`` — the deploy line and the errors are
+    causally linked and the deploy timestamp is the true trigger (``type: deploy``).
+    This incident class exists in no public dataset."""
+    return _case_doc(
+        case_id, deploy_time, root_cause_service=service, trigger_type="deploy",
+        baseline_seconds=baseline_seconds, post_seconds=post_seconds,
+        notes=f"OTel Demo deploy {service} {from_tag}->{to_tag} (injected regression)",
+        confounding_deploy_at=confounding_deploy_at,
+    )
 
 
 def write_case(out_dir: Path, case_doc: dict, *, logs=None, spans=None, metrics=None) -> Path:
@@ -172,19 +221,31 @@ def generate_incident(
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     baseline_seconds: int = 300,
     post_seconds: int = 600,
+    confounder: Optional[Callable[[], None]] = None,
+    confounder_after: int = 0,
 ) -> Path:
     """Run one generation loop: collect the baseline window, flip the flag (record
     the exact inject time), collect the incident window, emit the case, flip back.
 
     ``capture`` / ``flip`` / ``sleep`` are injected so this is unit-testable with
     fakes and runnable against a live demo. For a negative case pass
-    ``scenario=None`` (no flag is flipped)."""
+    ``scenario=None`` (no flag is flipped). A ``confounder`` callable (an unrelated
+    action, e.g. a benign deploy) fires ``confounder_after`` seconds into the
+    incident window and is recorded as a distractor — the ground-truth trigger
+    stays the flag flip."""
     sleep(baseline_seconds)  # let the baseline window accrue
     inject_time = now()
     if scenario is not None and flip is not None:
         flip(scenario.flag, scenario.variant_on)
+    confounder_at: Optional[datetime] = None
     try:
-        sleep(post_seconds)  # let the incident window accrue
+        if confounder is not None:
+            sleep(confounder_after)
+            confounder_at = now()
+            confounder()
+            sleep(max(post_seconds - confounder_after, 0))
+        else:
+            sleep(post_seconds)  # let the incident window accrue
         window_start = inject_time - timedelta(seconds=baseline_seconds)
         window_end = inject_time + timedelta(seconds=post_seconds)
         logs, spans, metrics = capture(window_start, window_end)
@@ -194,6 +255,43 @@ def generate_incident(
 
     doc = build_incident_case(
         case_id, inject_time, scenario=scenario,
+        baseline_seconds=baseline_seconds, post_seconds=post_seconds,
+        confounding_deploy_at=confounder_at,
+    )
+    return write_case(out_dir, doc, logs=logs, spans=spans, metrics=metrics)
+
+
+def generate_deploy_incident(
+    out_dir: Path,
+    case_id: str,
+    *,
+    service: str,
+    from_tag: str,
+    to_tag: str,
+    roll: Callable[[str], None],
+    capture: CaptureFn,
+    sleep: Callable[[float], None],
+    now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    baseline_seconds: int = 300,
+    post_seconds: int = 600,
+) -> Path:
+    """Deploy-class loop: baseline → roll ``service`` to the regressed ``to_tag``
+    (record the exact deploy time) → incident → emit → roll back to ``from_tag``.
+    ``roll`` (e.g. ``kubectl set image`` / ``docker compose up``) is injected."""
+    sleep(baseline_seconds)
+    deploy_time = now()
+    roll(to_tag)
+    try:
+        sleep(post_seconds)
+        logs, spans, metrics = capture(
+            deploy_time - timedelta(seconds=baseline_seconds),
+            deploy_time + timedelta(seconds=post_seconds),
+        )
+    finally:
+        roll(from_tag)  # roll back to the good image
+
+    doc = build_deploy_case(
+        case_id, deploy_time, service=service, from_tag=from_tag, to_tag=to_tag,
         baseline_seconds=baseline_seconds, post_seconds=post_seconds,
     )
     return write_case(out_dir, doc, logs=logs, spans=spans, metrics=metrics)
