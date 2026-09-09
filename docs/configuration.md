@@ -26,6 +26,8 @@ Every setting is read from an environment variable (see `.env.example`). This ta
 | `MAX_EVIDENCE_ITEMS` | int | `8` |
 | `MAX_CLUSTERS_FOR_EXPLAIN` | int | `10` |
 | `TRIGGER_LOOKBACK_MINUTES` | int | `10` |
+| `TRIGGER_MODE` | str | `regex` |
+| `TRIGGER_RARE_CHANGE_RATIO` | float | `5.0` |
 | `AUTH_ENABLED` | bool | `false` |
 | `AUTH_MODE` | api_key \| oidc \| both | `api_key` |
 | `OIDC_ISSUER` | str | `""` |
