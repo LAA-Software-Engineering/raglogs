@@ -1,22 +1,26 @@
-"""Unit tests for RCA confidence calibration (#118 D / #83). No DB."""
+"""Unit tests for RCA confidence calibration (#118 D / #83). No DB.
+
+The calibrator is Platt scaling on the ranker top_score (model choice validated
+in docs/eval-rca-calibrator.md)."""
+import json
+
 import pytest
 
 from src.core.rca.calibration import (
     CALIBRATION_FEATURES,
+    PlattCalibrator,
     calibrated_confidence,
     calibration_features,
+    calibrator_from_dict,
     load_calibrator,
 )
-from src.core.rca.candidates import RootCauseCandidate
+from src.core.rca.candidates import ModalityEvidence, RootCauseCandidate
 from src.core.rca.features import ServiceFeatures
 
 
 def _cand(service, score, modalities):
-    sf = ServiceFeatures(service=service)
-    from src.core.rca.candidates import ModalityEvidence
-
     ev = [ModalityEvidence(modality=m, detail=m) for m in modalities]
-    return RootCauseCandidate(service=service, score=score, features=sf, evidence=ev)
+    return RootCauseCandidate(service=service, score=score, features=ServiceFeatures(service=service), evidence=ev)
 
 
 class TestCalibrationFeatures:
@@ -28,58 +32,67 @@ class TestCalibrationFeatures:
         ]
         f = calibration_features(cands)
         assert f["top_score"] == pytest.approx(0.8)
-        assert f["margin"] == pytest.approx(0.3)  # 0.8 - 0.5
+        assert f["margin"] == pytest.approx(0.3)
         assert f["n_candidates"] == 3.0
-        assert f["n_modalities"] == 2.0  # top has logs+metrics
-        # present modalities across all = {logs, metrics, traces} = 3; top has 2
+        assert f["n_modalities"] == 2.0
         assert f["cross_modal_agreement"] == pytest.approx(2 / 3)
 
     def test_single_candidate_zero_margin(self):
         f = calibration_features([_cand("a", 0.9, ["metrics"])])
         assert f["margin"] == 0.0
-        assert f["cross_modal_agreement"] == pytest.approx(1.0)  # top has the only modality present
+        assert f["cross_modal_agreement"] == pytest.approx(1.0)
 
     def test_empty_is_all_zero(self):
-        f = calibration_features([])
-        assert f == {k: 0.0 for k in CALIBRATION_FEATURES}
+        assert calibration_features([]) == {k: 0.0 for k in CALIBRATION_FEATURES}
 
 
-def _toy_calibrator():
-    """A calibrator keyed on margin: wide margin -> confident."""
-    import numpy as np
-    from sklearn.ensemble import GradientBoostingClassifier
+class TestPlattCalibrator:
+    def test_probability_is_sigmoid_and_monotonic(self):
+        cal = PlattCalibrator(a=4.0, b=-2.0)  # crosses 0.5 at top_score=0.5
+        assert cal.probability(0.5) == pytest.approx(0.5)
+        assert cal.probability(1.0) > cal.probability(0.5) > cal.probability(0.0)
+        assert 0.0 <= cal.probability(0.0) <= 1.0
 
-    from src.core.rca.ranker import from_dict, serialize_gbc
-
-    rng = np.random.default_rng(0)
-    X = rng.random((200, len(CALIBRATION_FEATURES)))
-    idx = CALIBRATION_FEATURES.index("margin")
-    y = (X[:, idx] > 0.5).astype(int)
-    clf = GradientBoostingClassifier(random_state=0).fit(X, y)
-    return from_dict(serialize_gbc(clf, CALIBRATION_FEATURES))
-
-
-class TestCalibratedConfidence:
-    def test_confidence_in_unit_interval_and_monotonic_in_margin(self):
-        cal = _toy_calibrator()
-        wide = [_cand("a", 0.95, ["logs", "metrics"]), _cand("b", 0.05, ["traces"])]
-        narrow = [_cand("a", 0.55, ["logs"]), _cand("b", 0.5, ["traces"])]
-        c_wide = calibrated_confidence(cal, wide)
-        c_narrow = calibrated_confidence(cal, narrow)
-        assert 0.0 <= c_narrow <= 1.0 and 0.0 <= c_wide <= 1.0
-        assert c_wide > c_narrow  # a wider margin reads as more confident
+    def test_confidence_uses_top_score(self):
+        cal = PlattCalibrator(a=4.0, b=-2.0)
+        cands = [_cand("a", 0.9, ["metrics"]), _cand("b", 0.1, ["logs"])]
+        assert calibrated_confidence(cal, cands) == pytest.approx(cal.probability(0.9))
 
     def test_none_for_empty(self):
-        assert calibrated_confidence(_toy_calibrator(), []) is None
+        assert calibrated_confidence(PlattCalibrator(a=1.0, b=0.0), []) is None
 
-    def test_uses_calibrator_feature_order(self):
-        # A calibrator declaring a subset/reordered feature_names still scores.
-        cal = _toy_calibrator()
-        cal.feature_names = list(reversed(CALIBRATION_FEATURES))
-        assert calibrated_confidence(cal, [_cand("a", 0.9, ["metrics"])]) is not None
+    def test_roundtrip(self):
+        cal = PlattCalibrator(a=3.5, b=-1.25)
+        restored = calibrator_from_dict(json.loads(json.dumps(cal.to_dict())))
+        assert (restored.a, restored.b, restored.feature) == (3.5, -1.25, "top_score")
+
+
+class TestFromDict:
+    def test_rejects_unknown_type_or_version(self):
+        with pytest.raises(ValueError):
+            calibrator_from_dict({"version": 1, "type": "gbc", "a": 1.0, "b": 0.0})
+        with pytest.raises(ValueError):
+            calibrator_from_dict({"version": 99, "type": "platt", "a": 1.0, "b": 0.0})
+
+    def test_rejects_unknown_feature(self):
+        with pytest.raises(ValueError):
+            calibrator_from_dict({"version": 1, "type": "platt", "feature": "bogus", "a": 1.0, "b": 0.0})
 
 
 class TestLoadCalibrator:
     def test_absent_falls_back_to_none(self, tmp_path):
         assert load_calibrator(None) is None
+        assert load_calibrator("") is None
         assert load_calibrator(str(tmp_path / "nope.json")) is None
+
+    def test_unparseable_falls_back(self, tmp_path):
+        p = tmp_path / "bad.json"
+        p.write_text("{not json")
+        assert load_calibrator(str(p)) is None
+
+    def test_loads_valid_artifact(self, tmp_path):
+        p = tmp_path / "cal.json"
+        p.write_text(json.dumps(PlattCalibrator(a=2.0, b=-0.5).to_dict()))
+        cal = load_calibrator(str(p))
+        assert isinstance(cal, PlattCalibrator)
+        assert cal.a == 2.0
