@@ -207,6 +207,58 @@
       "title": "LlmProvenance",
       "type": "object"
     },
+    "RootCauseCandidate": {
+      "description": "A ranked root-cause candidate from the learned multi-modal ranker (#118 C2).",
+      "properties": {
+        "service": {
+          "title": "Service",
+          "type": "string"
+        },
+        "score": {
+          "title": "Score",
+          "type": "number"
+        },
+        "modalities": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Modalities",
+          "type": "array"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/RootCauseEvidence"
+          },
+          "title": "Evidence",
+          "type": "array"
+        }
+      },
+      "required": [
+        "service",
+        "score"
+      ],
+      "title": "RootCauseCandidate",
+      "type": "object"
+    },
+    "RootCauseEvidence": {
+      "description": "One modality's contribution to a root-cause candidate (#118 C2).",
+      "properties": {
+        "modality": {
+          "title": "Modality",
+          "type": "string"
+        },
+        "detail": {
+          "title": "Detail",
+          "type": "string"
+        }
+      },
+      "required": [
+        "modality",
+        "detail"
+      ],
+      "title": "RootCauseEvidence",
+      "type": "object"
+    },
     "TimeWindow": {
       "description": "Inclusive analysis window. Serialized as ``from`` / ``to`` (ISO-8601).",
       "properties": {
@@ -377,6 +429,25 @@
         "type": "string"
       },
       "title": "Services Affected",
+      "type": "array"
+    },
+    "predicted_root_cause": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Predicted Root Cause"
+    },
+    "root_cause_candidates": {
+      "items": {
+        "$ref": "#/$defs/RootCauseCandidate"
+      },
+      "title": "Root Cause Candidates",
       "type": "array"
     }
   },

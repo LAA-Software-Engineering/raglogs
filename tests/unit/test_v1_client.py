@@ -25,6 +25,8 @@ def _explain_result() -> MagicMock:
     result.secondary_clusters = []
     result.trigger_candidates = []
     result.evidence_items = []
+    result.predicted_root_cause = None
+    result.root_cause_candidates = []
     return result
 
 

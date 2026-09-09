@@ -324,6 +324,8 @@ class TestScopeApi:
         mock_result.secondary_clusters = []
         mock_result.trigger_candidates = []
         mock_result.evidence_items = []
+        mock_result.predicted_root_cause = None
+        mock_result.root_cause_candidates = []
         mock_db = _ctx_db()
 
         with patch("src.db.session.get_db", side_effect=lambda: mock_db), \
@@ -352,6 +354,8 @@ class TestScopeApi:
         mock_result.secondary_clusters = []
         mock_result.trigger_candidates = []
         mock_result.evidence_items = []
+        mock_result.predicted_root_cause = None
+        mock_result.root_cause_candidates = []
         mock_db = _ctx_db()
 
         with patch("src.db.session.get_db", side_effect=lambda: mock_db), \
@@ -400,6 +404,8 @@ class TestScopeApi:
         mock_result.secondary_clusters = []
         mock_result.trigger_candidates = []
         mock_result.evidence_items = []
+        mock_result.predicted_root_cause = None
+        mock_result.root_cause_candidates = []
         mock_db = _ctx_db()
         settings = _auth_settings()
         key = _key("query", scope="incident:A", allow_scope_override=True)

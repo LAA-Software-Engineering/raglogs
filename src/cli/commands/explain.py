@@ -88,6 +88,8 @@ def explain_cmd(
             "secondary_clusters": result.secondary_clusters,
             "trigger_candidates": result.trigger_candidates,
             "evidence": result.evidence_items,
+            "predicted_root_cause": result.predicted_root_cause,
+            "root_cause_candidates": result.root_cause_candidates,
         }
         console.print_json(json.dumps(output, default=str))
     elif fmt == "markdown":
@@ -120,3 +122,18 @@ def explain_cmd(
         console.print()
         console.print(Panel(result.summary_text, title=f"[bold cyan]raglogs explain[/bold cyan] {mode_label}", expand=False))
         console.print()
+        # Learned multi-modal ranker prediction (#118 C2), shown only when a model
+        # is configured and produced candidates.
+        if result.predicted_root_cause:
+            console.print(
+                f"[bold]Predicted root cause:[/bold] [cyan]{result.predicted_root_cause}[/cyan] "
+                "[dim](learned ranker)[/dim]"
+            )
+            for c in result.root_cause_candidates[:3]:
+                mods = ", ".join(c.get("modalities") or [])
+                console.print(
+                    f"  [dim]{c.get('service')}  score={float(c.get('score', 0.0)):.2f}"
+                    + (f"  [{mods}]" if mods else "")
+                    + "[/dim]"
+                )
+            console.print()

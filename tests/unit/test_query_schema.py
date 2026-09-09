@@ -54,6 +54,8 @@ def _explain_result(**overrides: object) -> MagicMock:
     result.secondary_clusters = []
     result.trigger_candidates = []
     result.evidence_items = ["184 similar failures in billing-worker"]
+    result.predicted_root_cause = None
+    result.root_cause_candidates = []
     for key, value in overrides.items():
         setattr(result, key, value)
     return result
