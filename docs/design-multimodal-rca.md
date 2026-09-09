@@ -63,12 +63,19 @@ so logs-only inference is in-distribution. Baseline window reuses
 
 - **Model lifecycle.** Train offline (`scripts/train_rca_ranker.py`) on labeled
   corpora → serialize a small model artifact (gradient-boosted trees; the spike
-  used sklearn defaults) checked into `models/` or fetched by version. At
-  inference: load once, `predict_proba` over the candidate feature matrix, rank.
-- **No hard ML dependency at runtime for the logs-only path.** If the model
-  artifact is absent or `scikit-learn` isn't installed, fall back to the current
-  volume selector — same graceful-degradation contract as the LLM `noop`
-  provider. The ranker is an *enhancement*, not a requirement.
+  used sklearn defaults) checked into `models/` (versioned). At inference: load
+  once, score the candidate feature matrix, rank.
+- **Serialization: never pickle.** A pickled sklearn model executes arbitrary
+  code on load and is undiffable. Instead export the tree ensemble to a **plain
+  JSON** artifact (thresholds/leaf values per tree) — a ~KB file that is
+  reviewable in PRs and safe to load — and score it with a tiny pure-Python
+  evaluator (no sklearn needed at inference). ONNX is an alternative but heavier.
+- **Fallback keys on the *model artifact*, not on sklearn.** `scikit-learn` is
+  already a hard dependency (clustering uses it), so absence-of-sklearn is not
+  the trigger. When the **model artifact is absent** (or no non-log modality is
+  present for the window), fall back to the current volume selector — same
+  graceful-degradation contract as the LLM `noop` provider. The ranker is an
+  *enhancement*, not a requirement.
 - Output: an ordered list of `(service, P(root cause))`; the top is the primary,
   and `P` feeds confidence.
 
@@ -78,6 +85,16 @@ so logs-only inference is in-distribution. Baseline window reuses
   modality is present, `select_primary_cluster` is replaced by "primary = cluster
   of the top-ranked service"; otherwise unchanged. Attribution and evidence
   narrative are unchanged (still human-readable).
+- **When the top-ranked service has no error cluster** (a resource/network fault
+  can surface only in traces/metrics — e.g. a CPU-hogged service with elevated
+  latency but no error logs): map it to the service's *highest-importance* cluster
+  of any level (warn/info) if one exists; else **synthesize a primary evidence
+  item from the winning modality** — e.g. "elevated p95 latency / CPU in
+  `svc` (from traces/metrics); no error logs in window" — rather than forcing a
+  fabricated error cluster. The `EvidencePacket` gains an optional
+  `primary_service` + `primary_signal` so the explanation can name a root cause
+  that logs alone never surfaced. This is the whole point of going multi-modal;
+  the narrative stays honest about *which* signal implicated the service.
 - **Confidence (#83) becomes real:** the ranker's `P(root cause)` is a genuine
   calibrated probability (reliability-curve calibrated on held-out folds),
   replacing the ordinal placeholder. This is the honest 0-1 the v1 schema always
@@ -104,9 +121,9 @@ so logs-only inference is in-distribution. Baseline window reuses
 
 ## Open questions for review
 
-- **Model in-repo vs fetched?** A ~KB gradient-boosted model checked into
-  `models/` keeps the tool self-contained; a fetched artifact avoids binary
-  churn. Leaning in-repo (tiny, versioned, reviewable).
+- **Model in-repo vs fetched?** Resolved (review): **in-repo, as a non-pickle
+  JSON artifact** — tiny, versioned, diffable, and safe to load (no code
+  execution). See the Ranker section.
 - **Metric anomaly quality.** The spike's `met_anom` is a crude mean-change;
   a robust change-point detector (BARO-style) likely lifts the number. Ship
   crude first (reproduce the spike), improve behind the eval.
