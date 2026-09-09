@@ -1,8 +1,9 @@
 # Design: multi-modal root-cause ranking (#118, Phase C build)
 
 **Status:** draft for review. Proposes how to turn the validated spike
-(`docs/spike-multimodal-rca.md`: 48.9% top-1 RE3 leave-one-system-out, +20pp)
-into real `src/core` work, **without breaking the logs-only path**.
+(`docs/spike-multimodal-rca.md`: **60.0% top-1 RE3 leave-one-system-out** with
+modality-presence flags — 48.9% without — vs a 28.9% logs-only baseline) into
+real `src/core` work, **without breaking the logs-only path**.
 
 ## Principles (unchanged)
 

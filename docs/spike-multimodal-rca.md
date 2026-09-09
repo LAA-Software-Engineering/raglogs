@@ -26,20 +26,34 @@ held-out third).
 
 ## Result — RE3, 90 cases, leave-one-system-out
 
-| held-out system | top-1 |
-|---|---|
-| online-boutique | 56.7% (17/30) |
-| sock-shop | 50.0% (15/30) |
-| train-ticket | 40.0% (12/30) |
-| **overall** | **48.9% (44/90)** |
+Oracle ceiling (the true service is a candidate at all): **100%** — no
+candidate-generation loss. Modality ablation (each row is a full LOSO run):
 
-vs the logs-only volume baseline **28.9%** → **+20pp**, and it beats the baseline
-on **every held-out system it never trained on**.
+| features | overall | online-boutique | sock-shop | train-ticket |
+|---|---|---|---|---|
+| logs-only | 20.0% | 6/30 | 7/30 | 5/30 |
+| logs + traces | 31.1% | 6/30 | 13/30 | 9/30 |
+| logs + metrics | 45.6% | 17/30 | 23/30 | 1/30 |
+| all, no presence flags | 48.9% | 17/30 | 15/30 | 12/30 |
+| **all + modality-presence flags** | **60.0%** | 17/30 | 21/30 | 16/30 |
 
-Feature importances (full-data fit): `met_anom 0.40`, `log_grp 0.28`,
-`log_err 0.13`, `log_stack 0.11`, `tr_dur 0.05`, `tr_rate 0.04`. Genuinely
-multi-modal and metric-led — no single modality carries it, and logs alone
-(which capped at ~29%) never could.
+vs the logs-only volume baseline **28.9%**. The winning variant **beats the
+baseline on every held-out system it never trained on** (57% / 70% / 53%).
+
+Reading the ablation:
+
+- **Complementary by system:** metrics carry online-boutique + sock-shop
+  (`logs+metrics` 17/23), traces carry train-ticket (`logs+traces` tt 9 vs
+  metrics' 1). No single modality wins everywhere.
+- **Presence flags matter a lot (ChatGPT review point 2, confirmed).** Without
+  them, adding traces *hurt* sock-shop (23→15): `tr_rate = 0` there means "no
+  traces", and the model couldn't tell that from "no anomaly". Adding
+  `has_logs/has_traces/has_metrics` recovered sock-shop (→21) and lifted overall
+  **48.9% → 60.0%**. The number the design was anchored on was *suppressed* by
+  the missingness ambiguity; fixing it is a +11pp gain, not just a de-risk.
+- Feature importances (all, no presence): `met_anom 0.40`, `log_grp 0.28`,
+  `log_err 0.13`, `log_stack 0.11`, `tr_dur 0.05`, `tr_rate 0.04` — metric-led,
+  genuinely multi-modal; logs alone capped at ~29%.
 
 ## What this establishes
 
@@ -57,14 +71,17 @@ multi-modal and metric-led — no single modality carries it, and logs alone
 
 ## Honest caveats
 
-- 90 cases / 3 systems / 3 LOSO folds — small; the 40–57% spread shows real
-  variance. All folds beat baseline, but the point estimate will move with more
+- 90 cases / 3 systems / 3 LOSO folds — small; per-system counts (17–21/30)
+  are noisy. All folds beat baseline, but the point estimate will move with more
   data (the OTel corpus #79 is the natural third-party check).
 - RE3 (code faults) only. RE2 (resource/network) is expected to be *even more*
-  metric-driven; not yet run through the ranker.
+  metric-driven; not yet run through the ranker — **required before C2 wires in**.
 - `met_anom` is a crude mean-change feature; a real implementation would use
   proper change-point/robust anomaly detection (BARO-style) and likely do
-  better.
+  better. Ship the crude form first so C1b reproduces this number.
 - No hyperparameter tuning (deliberately — avoids fitting to a validation set).
+- `predict_proba` here is a *ranking score*, not calibrated `P(top-1 correct)` —
+  confidence calibration is a separate Phase D step (see the design doc).
 
-_Part of #118 / #74. Numbers 2026-09-08._
+_Part of #118 / #74. Numbers 2026-09-09. Headline: **60.0% RE3 LOSO** with
+modality-presence flags (48.9% without); logs-only baseline 28.9%._
