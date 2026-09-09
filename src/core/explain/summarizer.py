@@ -49,6 +49,11 @@ class ExplainResult:
     trigger_candidates: list[dict] = field(default_factory=list)
     total_logs: int = 0
     mode: str = "rules"
+    # Learned multi-modal RCA ranker output (#118 C2), populated only when a model
+    # artifact is configured (settings.rca_ranker_model_path). Empty otherwise, so
+    # the log-cluster path is unchanged when no model is present.
+    predicted_root_cause: Optional[str] = None
+    root_cause_candidates: list[dict] = field(default_factory=list)
 
 
 def get_latest_ingestion_job_id(
@@ -165,6 +170,14 @@ def _explain_window(
     # 3. Confidence
     confidence = compute_confidence(packet)
 
+    # 3.5 Learned multi-modal RCA ranker (#118 C2). When a model artifact is
+    # configured it ranks candidate services across logs/traces/metrics — this can
+    # localise trace/metric-only root causes that have no distinctive log cluster.
+    # With no model this is skipped entirely and the log-cluster path is unchanged.
+    predicted_root_cause, rca_candidates = _rank_candidates(
+        db, scope, window_start, window_end, baseline_window, settings
+    )
+
     # 4. Handle empty case
     if not clusters or packet.primary_cluster is None:
         return ExplainResult(
@@ -176,6 +189,8 @@ def _explain_window(
             services_affected=packet.services_affected,
             total_logs=packet.total_logs,
             mode="rules",
+            predicted_root_cause=predicted_root_cause,
+            root_cause_candidates=rca_candidates,
         )
 
     # 5. Generate summary
@@ -249,7 +264,48 @@ def _explain_window(
             }
             for t in packet.trigger_candidates
         ],
+        predicted_root_cause=predicted_root_cause,
+        root_cause_candidates=rca_candidates,
     )
+
+
+def _rank_candidates(
+    db: Session,
+    scope: str,
+    window_start: datetime,
+    window_end: datetime,
+    baseline_window: str,
+    settings,
+    top_k: int = 5,
+) -> tuple[Optional[str], list[dict]]:
+    """Rank candidate services with the learned ranker, or ``(None, [])`` when no
+    model artifact is configured (graceful fallback — the caller then relies on
+    the existing log-cluster selection)."""
+    from src.core.rca.ranker import load_ranker
+
+    ranker = load_ranker(settings.rca_ranker_model_path)
+    if ranker is None:
+        return None, []
+
+    from src.core.rca.candidates import build_candidates
+    from src.core.rca.features import compute_features
+    from src.utils.time import parse_duration
+
+    try:
+        baseline_start = window_start - parse_duration(baseline_window)
+    except (ValueError, TypeError):
+        baseline_start = window_start
+    table = compute_features(
+        db,
+        scope,
+        incident_start=window_start,
+        incident_end=window_end,
+        baseline_start=baseline_start,
+    )
+    candidates = build_candidates(table, scorer=ranker.score)
+    if not candidates:
+        return None, []
+    return candidates[0].service, [c.to_dict() for c in candidates[:top_k]]
 
 
 def _packet_to_dict(packet: EvidencePacket) -> dict:

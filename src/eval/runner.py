@@ -34,8 +34,19 @@ def prediction_from_result(result: ExplainResult) -> Prediction:
     arm is treated as having produced no explanation.
     """
     pc = result.primary_cluster
-    produced = pc is not None
     services = list(pc["services"]) if pc and pc.get("services") else []
+    root_cause = services[0] if services else None
+    predicted = services
+    produced = pc is not None
+
+    # When the learned RCA ranker ran (a model artifact is configured), its ranked
+    # services override the log-cluster pick — this is the #118 C2 signal, and it
+    # can localise a trace/metric-only root cause with no primary log cluster.
+    ranked = [c["service"] for c in getattr(result, "root_cause_candidates", []) if c.get("service")]
+    if ranked:
+        root_cause = result.predicted_root_cause or ranked[0]
+        predicted = ranked
+        produced = True
 
     top_trigger_ts = None
     for cand in result.trigger_candidates:
@@ -46,8 +57,8 @@ def prediction_from_result(result: ExplainResult) -> Prediction:
 
     return Prediction(
         produced_explanation=produced,
-        root_cause_service=services[0] if services else None,
-        predicted_services=services,
+        root_cause_service=root_cause,
+        predicted_services=predicted,
         top_trigger_timestamp=top_trigger_ts,
         returned_any_trigger=bool(result.trigger_candidates),
         confidence=result.confidence,
