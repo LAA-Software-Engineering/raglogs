@@ -19,6 +19,7 @@ def _build_app() -> typer.Typer:
     from src.cli.commands.keys import app as keys_app
     from src.cli.commands.purge import purge_cmd
     from src.cli.commands.eval_cmd import eval_cmd
+    from src.cli.commands.rca_features import rca_features_cmd
 
     _app = typer.Typer(
         name="raglogs",
@@ -40,6 +41,7 @@ def _build_app() -> typer.Typer:
     _app.command("purge")(purge_cmd)
     _app.command("ask")(ask_cmd)
     _app.command("eval")(eval_cmd)
+    _app.command("rca-features")(rca_features_cmd)
     _app.add_typer(keys_app, name="keys")
     return _app
 
