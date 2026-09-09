@@ -267,6 +267,97 @@ def load_parquet_logs(
     return records
 
 
+def load_parquet_spans(
+    path: Path, window: tuple[datetime, datetime] | None = None
+) -> list:
+    """Convert an RCAEval ``traces.parquet`` into ``ParsedSpan`` records.
+
+    HF schema: ``traceID, spanID, parentSpanID, serviceName, operationName,
+    startTimeMillis, duration, statusCode`` (RE3 ships ``statusCode`` null).
+    Corpus quirks are quarantined here: span ``duration`` is microseconds, so it
+    is converted to milliseconds for ``duration_ms``.
+    """
+    import pyarrow.parquet as pq
+
+    from src.core.ingestion.telemetry import ParsedSpan
+
+    table = pq.read_table(str(path))
+    names = table.column_names
+    # _pick_column matches lowercased column names, so candidates are lowercase.
+    tcol = _pick_column(names, "starttimemillis", "starttime", "timestamp", "time")
+    scol = _pick_column(names, "servicename", "service", "container_name")
+    if tcol is None or scol is None:
+        raise ValueError(f"traces.parquet columns not recognized: {names}")
+    tr = _pick_column(names, "traceid", "trace_id")
+    sp = _pick_column(names, "spanid", "span_id")
+    par = _pick_column(names, "parentspanid", "parent_span_id")
+    op = _pick_column(names, "operationname", "operation", "methodname")
+    dur = _pick_column(names, "duration", "duration_ms")
+    st = _pick_column(names, "statuscode", "status_code", "status")
+
+    spans: list = []
+    for row in table.to_pylist():
+        ts = _parse_log_time(str(row.get(tcol)))
+        if ts is None or (window is not None and not (window[0] <= ts <= window[1])):
+            continue
+        duration_ms = None
+        if dur is not None and row.get(dur) is not None:
+            try:
+                duration_ms = float(row.get(dur)) / 1000.0  # RCAEval spans are µs
+            except (TypeError, ValueError):
+                duration_ms = None
+        status = row.get(st) if st else None
+        spans.append(ParsedSpan(
+            trace_id=str(row.get(tr)) if tr and row.get(tr) is not None else None,
+            span_id=str(row.get(sp)) if sp and row.get(sp) is not None else None,
+            parent_span_id=str(row.get(par)) if par and row.get(par) is not None else None,
+            service=str(row.get(scol)).strip() if row.get(scol) is not None else None,
+            operation=str(row.get(op)) if op and row.get(op) is not None else None,
+            start_time=ts,
+            duration_ms=duration_ms,
+            status_code=str(status) if status is not None else None,
+        ))
+    return spans
+
+
+def load_parquet_metrics(
+    path: Path, window: tuple[datetime, datetime] | None = None
+) -> list:
+    """Convert an RCAEval ``metrics.parquet`` into ``ParsedMetricSample`` records.
+
+    HF schema is *wide*: a ``time`` column plus one column per
+    ``{service}_{metric}`` (e.g. ``carts_cpu``). Melted to long form here —
+    ``service`` is everything before the last ``_``, ``metric`` the suffix.
+    """
+    import pyarrow.parquet as pq
+
+    from src.core.ingestion.telemetry import ParsedMetricSample
+
+    table = pq.read_table(str(path))
+    names = table.column_names
+    tcol = _pick_column(names, "time", "timestamp", "ts")
+    if tcol is None:
+        raise ValueError(f"metrics.parquet has no time column: {names[:5]}")
+    value_cols = [c for c in names if c != tcol and "_" in c]
+
+    samples: list = []
+    for row in table.to_pylist():
+        ts = _parse_log_time(str(row.get(tcol)))
+        if ts is None or (window is not None and not (window[0] <= ts <= window[1])):
+            continue
+        for c in value_cols:
+            v = row.get(c)
+            if v is None:
+                continue
+            try:
+                value = float(v)
+            except (TypeError, ValueError):
+                continue
+            service, metric = c.rsplit("_", 1)
+            samples.append(ParsedMetricSample(service=service, metric=metric, value=value, ts=ts))
+    return samples
+
+
 def window_around(
     inject_time: datetime,
     pre_seconds: int = DEFAULT_PRE_SECONDS,
