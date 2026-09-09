@@ -164,11 +164,12 @@ def _canon(s):
     return s.replace("-", "").replace("_", "").lower()
 
 
-def extract():
+def extract(suites=("re3",), out: Path = CACHE):
     from huggingface_hub import HfApi
 
     files = HfApi().list_repo_files(REPO_ID, repo_type="dataset")
-    cases = sorted({f.split("/")[0] for f in files if f.startswith("re3") and "/" in f})
+    prefixes = tuple(suites)
+    cases = sorted({f.split("/")[0] for f in files if f.startswith(prefixes) and "/" in f})
     rows = []
     for case in cases:
         try:
@@ -203,8 +204,8 @@ def extract():
             })
         pos = sum(1 for r in rows if r["case"] == case and r["label"])
         print(f"  {case}: {len(svcs)} svcs, {pos} labelled-positive")
-    CACHE.write_text("\n".join(json.dumps(r) for r in rows))
-    print(f"\nwrote {len(rows)} rows for {len({r['case'] for r in rows})} cases -> {CACHE}")
+    Path(out).write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    print(f"\nwrote {len(rows)} rows for {len({r['case'] for r in rows})} cases -> {out}")
 
 
 LOG = ["log_err", "log_grp", "log_stack"]
@@ -269,9 +270,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--extract", action="store_true")
     ap.add_argument("--eval", action="store_true")
+    ap.add_argument("--suites", default="re3", help="comma-separated RCAEval suites, e.g. re2,re3")
+    ap.add_argument("--out", type=Path, default=CACHE, help="feature table output path")
     args = ap.parse_args()
     if args.extract:
-        extract()
+        extract(suites=tuple(s.strip() for s in args.suites.split(",") if s.strip()), out=args.out)
     if args.eval or not args.extract:
         evaluate()
 
