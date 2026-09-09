@@ -2656,6 +2656,17 @@
             },
             "type": "array",
             "title": "Root Cause Candidates"
+          },
+          "predicted_root_cause_confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Predicted Root Cause Confidence"
           }
         },
         "type": "object",

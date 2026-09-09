@@ -89,6 +89,7 @@ def explain_cmd(
             "trigger_candidates": result.trigger_candidates,
             "evidence": result.evidence_items,
             "predicted_root_cause": result.predicted_root_cause,
+            "predicted_root_cause_confidence": result.predicted_root_cause_confidence,
             "root_cause_candidates": result.root_cause_candidates,
         }
         console.print_json(json.dumps(output, default=str))
@@ -125,9 +126,14 @@ def explain_cmd(
         # Learned multi-modal ranker prediction (#118 C2), shown only when a model
         # is configured and produced candidates.
         if result.predicted_root_cause:
+            conf = (
+                f" · confidence {result.predicted_root_cause_confidence:.0%}"
+                if result.predicted_root_cause_confidence is not None
+                else ""
+            )
             console.print(
-                f"[bold]Predicted root cause:[/bold] [cyan]{result.predicted_root_cause}[/cyan] "
-                "[dim](learned ranker)[/dim]"
+                f"[bold]Predicted root cause:[/bold] [cyan]{result.predicted_root_cause}[/cyan]"
+                f" [dim](learned ranker{conf})[/dim]"
             )
             for c in result.root_cause_candidates[:3]:
                 mods = ", ".join(c.get("modalities") or [])

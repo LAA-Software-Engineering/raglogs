@@ -2,6 +2,8 @@
 response (#118 C2 follow-up). No DB."""
 from datetime import datetime, timezone
 
+import pytest
+
 from src.api.schemas.v1 import explain_from_result, rca_candidates_from
 from src.core.explain.summarizer import ExplainResult
 from src.core.rca.candidates import build_candidates
@@ -60,3 +62,9 @@ class TestExplainResponseSurface:
         resp = explain_from_result(_result(), no_llm=True, cached=False)
         assert resp.predicted_root_cause is None
         assert resp.root_cause_candidates == []
+        assert resp.predicted_root_cause_confidence is None
+
+    def test_carries_calibrated_confidence(self):
+        result = _result(predicted_root_cause="pay", predicted_root_cause_confidence=0.83)
+        resp = explain_from_result(result, no_llm=True, cached=False)
+        assert resp.predicted_root_cause_confidence == pytest.approx(0.83)

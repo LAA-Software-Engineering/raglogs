@@ -54,6 +54,9 @@ class ExplainResult:
     # the log-cluster path is unchanged when no model is present.
     predicted_root_cause: Optional[str] = None
     root_cause_candidates: list[dict] = field(default_factory=list)
+    # Calibrated P(top-1 correct) for the ranker prediction (#118 D / #83). Set
+    # only when a calibrator model is configured; None otherwise.
+    predicted_root_cause_confidence: Optional[float] = None
 
 
 def get_latest_ingestion_job_id(
@@ -174,7 +177,7 @@ def _explain_window(
     # configured it ranks candidate services across logs/traces/metrics — this can
     # localise trace/metric-only root causes that have no distinctive log cluster.
     # With no model this is skipped entirely and the log-cluster path is unchanged.
-    predicted_root_cause, rca_candidates = _rank_candidates(
+    predicted_root_cause, rca_candidates, rca_confidence = _rank_candidates(
         db, scope, window_start, window_end, baseline_window, settings
     )
 
@@ -191,6 +194,7 @@ def _explain_window(
             mode="rules",
             predicted_root_cause=predicted_root_cause,
             root_cause_candidates=rca_candidates,
+            predicted_root_cause_confidence=rca_confidence,
         )
 
     # 5. Generate summary
@@ -266,6 +270,7 @@ def _explain_window(
         ],
         predicted_root_cause=predicted_root_cause,
         root_cause_candidates=rca_candidates,
+        predicted_root_cause_confidence=rca_confidence,
     )
 
 
@@ -277,7 +282,7 @@ def _rank_candidates(
     baseline_window: str,
     settings,
     top_k: int = 5,
-) -> tuple[Optional[str], list[dict]]:
+) -> tuple[Optional[str], list[dict], Optional[float]]:
     """Rank candidate services with the learned ranker, or ``(None, [])`` when no
     model artifact is configured (graceful fallback — the caller then relies on
     the existing log-cluster selection)."""
@@ -285,7 +290,7 @@ def _rank_candidates(
 
     ranker = load_ranker(settings.rca_ranker_model_path)
     if ranker is None:
-        return None, []
+        return None, [], None
 
     from src.core.rca.candidates import build_candidates
     from src.core.rca.features import compute_features
@@ -304,8 +309,13 @@ def _rank_candidates(
     )
     candidates = build_candidates(table, scorer=ranker.score)
     if not candidates:
-        return None, []
-    return candidates[0].service, [c.to_dict() for c in candidates[:top_k]]
+        return None, [], None
+    # Calibrated P(top-1 correct) — only when a calibrator model is configured.
+    from src.core.rca.calibration import calibrated_confidence, load_calibrator
+
+    calibrator = load_calibrator(settings.rca_calibrator_model_path)
+    confidence = calibrated_confidence(calibrator, candidates) if calibrator is not None else None
+    return candidates[0].service, [c.to_dict() for c in candidates[:top_k]], confidence
 
 
 def _packet_to_dict(packet: EvidencePacket) -> dict:
