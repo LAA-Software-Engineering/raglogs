@@ -30,16 +30,24 @@ class ServiceGraph:
 
     edges: set[tuple[str, str]] = field(default_factory=set)
     services: set[str] = field(default_factory=set)
+    _adj_cache: Optional[dict[str, set[str]]] = field(
+        default=None, init=False, compare=False, repr=False
+    )
 
     @property
     def empty(self) -> bool:
         return not self.services
 
     def _adj(self) -> dict[str, set[str]]:
-        adj: dict[str, set[str]] = defaultdict(set)
-        for a, b in self.edges:
-            adj[a].add(b)
-        return adj
+        # Built once and cached; the graph is populated during construction and
+        # only queried (read-only) afterwards, so linked()'s two reachable()
+        # calls share one adjacency map instead of rebuilding it each time.
+        if self._adj_cache is None:
+            adj: dict[str, set[str]] = defaultdict(set)
+            for a, b in self.edges:
+                adj[a].add(b)
+            self._adj_cache = adj
+        return self._adj_cache
 
     def reachable(self, src: str, dst: str) -> bool:
         """Is ``dst`` reachable from ``src`` following caller→callee edges

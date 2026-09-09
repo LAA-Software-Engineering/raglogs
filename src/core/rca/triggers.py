@@ -19,10 +19,20 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from src.core.normalization.patterns import infer_trigger_type
+
+
+def _epoch(dt: Optional[datetime]) -> float:
+    """Sort key seconds, comparable across naive/aware inputs (naive := UTC);
+    +inf sorts missing timestamps last."""
+    if dt is None:
+        return math.inf
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
 
 
 @dataclass
@@ -93,6 +103,7 @@ def rare_event_candidates(
             score=score,
         ))
 
-    # Tiebreak on earliest first_seen (tz-safe via epoch seconds; +inf when absent).
-    out.sort(key=lambda t: (-t.score, t.first_seen.timestamp() if t.first_seen else math.inf))
+    # Tiebreak on earliest first_seen; _epoch normalizes naive/aware and sorts
+    # missing timestamps last.
+    out.sort(key=lambda t: (-t.score, _epoch(t.first_seen)))
     return out[:max_candidates]

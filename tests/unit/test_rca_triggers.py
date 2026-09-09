@@ -73,3 +73,16 @@ class TestRanking:
         ]
         ranked = rare_event_candidates(clusters, None, rare_change_ratio=5.0)
         assert ranked[0].fingerprint == "rare"  # baseline_count 0 -> rarity 1.0 beats 1/4
+
+    def test_tiebreak_mixed_naive_aware_first_seen(self):
+        # Equal score (both never-seen, no onset) -> tiebreak on first_seen.
+        # A naive timestamp is treated as UTC, so it must order against an aware
+        # one by wall-clock without raising on naive/aware comparison.
+        naive_earlier = datetime(2026, 1, 1, 11, 0, 0)  # 11:00, naive == UTC
+        aware_later = datetime(2026, 1, 1, 11, 30, 0, tzinfo=timezone.utc)
+        clusters = [
+            _c("aware", "x", "s", 0, 1.0, aware_later),
+            _c("naive", "y", "s", 0, 1.0, naive_earlier),
+        ]
+        ranked = rare_event_candidates(clusters, None)
+        assert [t.fingerprint for t in ranked] == ["naive", "aware"]  # earlier wall-clock first
