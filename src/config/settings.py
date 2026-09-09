@@ -185,6 +185,11 @@ class Settings(BaseSettings):
     rca_weight_anomaly: float = 0.0
     rca_weight_onset: float = 0.0
 
+    # Path to the learned multi-modal RCA ranker artifact (non-pickle JSON tree
+    # ensemble, #118 C2). Empty = no model: the pipeline falls back to the
+    # volume-based selector, so raglogs runs unchanged without an artifact.
+    rca_ranker_model_path: str = ""
+
 
 _settings: Settings | None = None
 
