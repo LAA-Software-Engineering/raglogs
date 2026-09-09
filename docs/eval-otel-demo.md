@@ -62,7 +62,11 @@ Case classes to generate:
 For infrastructure faults flags can't express (network partitions, pod kills, I/O
 faults), layer [Chaos Mesh](https://chaos-mesh.org/docs/) (e.g. a `NetworkChaos`
 partition between cart and Redis; see Coroot's OTel-Demo + Chaos-Mesh recipe).
-Generated cases are small enough to commit as permanent regression fixtures.
+`otel_demo.generate_chaos_incident(..., apply_chaos=/delete_chaos=<kubectl
+apply/delete -f>)` runs the loop over a `ChaosScenario` (`CHAOS_SCENARIOS` has
+representative NetworkChaos / PodChaos / IOChaos / StressChaos faults) and always
+deletes the experiment on the way out. Generated cases are small enough to commit
+as permanent regression fixtures.
 
 ## The experiment: frozen external validation
 

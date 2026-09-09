@@ -69,6 +69,37 @@ FLAG_SCENARIOS: tuple[FlagScenario, ...] = (
 SCENARIOS_BY_FLAG: dict[str, FlagScenario] = {s.flag: s for s in FLAG_SCENARIOS}
 
 
+@dataclass(frozen=True)
+class ChaosScenario:
+    """A Chaos Mesh infrastructure fault — the classes feature flags can't express
+    (network partitions, pod kills, I/O faults). ``kind`` is the Chaos Mesh CRD
+    (NetworkChaos / PodChaos / IOChaos / StressChaos); ``service`` is the target =
+    the injected root cause."""
+
+    name: str
+    service: str
+    trigger_type: str
+    kind: str
+    incident_class: str
+
+
+# Representative infra faults; the operator supplies the matching Chaos Mesh
+# manifest (see the Coroot OTel-Demo + Chaos-Mesh recipe). ``service`` is the
+# target/root cause — verify it matches the running demo's service.name.
+CHAOS_SCENARIOS: tuple[ChaosScenario, ...] = (
+    ChaosScenario("cartRedisPartition", "cart", "dependency", "NetworkChaos",
+                  "Network partition between cart and its Redis"),
+    ChaosScenario("checkoutPodKill", "checkout", "dependency", "PodChaos",
+                  "Pod kill / restart on checkout"),
+    ChaosScenario("productCatalogIoFault", "product-catalog", "resource", "IOChaos",
+                  "I/O latency / errors on product-catalog"),
+    ChaosScenario("recommendationCpuStress", "recommendation", "resource", "StressChaos",
+                  "CPU stress on recommendation"),
+)
+
+SCENARIOS_BY_CHAOS: dict[str, ChaosScenario] = {s.name: s for s in CHAOS_SCENARIOS}
+
+
 # ── flagd control ──────────────────────────────────────────────────────────────
 
 
@@ -183,6 +214,26 @@ def build_deploy_case(
     )
 
 
+def build_chaos_case(
+    case_id: str,
+    inject_time: datetime,
+    *,
+    scenario: ChaosScenario,
+    baseline_seconds: int,
+    post_seconds: int,
+    confounding_deploy_at: Optional[datetime] = None,
+) -> dict:
+    """Build a **Chaos-Mesh infra-fault** case: the ``scenario.kind`` experiment
+    targeting ``scenario.service`` is the injected root cause; the injection time is
+    the trigger."""
+    return _case_doc(
+        case_id, inject_time, root_cause_service=scenario.service, trigger_type=scenario.trigger_type,
+        baseline_seconds=baseline_seconds, post_seconds=post_seconds,
+        notes=f"OTel Demo chaos {scenario.kind}={scenario.name} ({scenario.incident_class})",
+        confounding_deploy_at=confounding_deploy_at,
+    )
+
+
 def write_case(out_dir: Path, case_doc: dict, *, logs=None, spans=None, metrics=None) -> Path:
     """Write ``case.yaml`` (+ any telemetry sidecars) into ``out_dir``."""
     import yaml
@@ -292,6 +343,41 @@ def generate_deploy_incident(
 
     doc = build_deploy_case(
         case_id, deploy_time, service=service, from_tag=from_tag, to_tag=to_tag,
+        baseline_seconds=baseline_seconds, post_seconds=post_seconds,
+    )
+    return write_case(out_dir, doc, logs=logs, spans=spans, metrics=metrics)
+
+
+def generate_chaos_incident(
+    out_dir: Path,
+    case_id: str,
+    *,
+    scenario: ChaosScenario,
+    apply_chaos: Callable[[ChaosScenario], None],
+    delete_chaos: Callable[[ChaosScenario], None],
+    capture: CaptureFn,
+    sleep: Callable[[float], None],
+    now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    baseline_seconds: int = 300,
+    post_seconds: int = 600,
+) -> Path:
+    """Chaos-Mesh loop: baseline → apply the chaos experiment (record the exact
+    inject time) → incident → emit → delete the experiment. ``apply_chaos`` /
+    ``delete_chaos`` (e.g. ``kubectl apply/delete -f <manifest>``) are injected."""
+    sleep(baseline_seconds)
+    inject_time = now()
+    apply_chaos(scenario)
+    try:
+        sleep(post_seconds)
+        logs, spans, metrics = capture(
+            inject_time - timedelta(seconds=baseline_seconds),
+            inject_time + timedelta(seconds=post_seconds),
+        )
+    finally:
+        delete_chaos(scenario)  # always clean up the experiment
+
+    doc = build_chaos_case(
+        case_id, inject_time, scenario=scenario,
         baseline_seconds=baseline_seconds, post_seconds=post_seconds,
     )
     return write_case(out_dir, doc, logs=logs, spans=spans, metrics=metrics)
