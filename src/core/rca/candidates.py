@@ -105,9 +105,16 @@ def _evidence_for(sf: ServiceFeatures) -> list[ModalityEvidence]:
 def build_candidates(
     table: FeatureTable,
     scorer: Callable[[ServiceFeatures], float] = default_scorer,
+    exclude: frozenset[str] = frozenset(),
 ) -> list[RootCauseCandidate]:
     """Turn a :class:`FeatureTable` into scored, evidence-backed candidates,
-    highest score first (ties broken by service name for determinism)."""
+    highest score first (ties broken by service name for determinism).
+
+    ``exclude`` drops services that are never a root cause — a deployment-specific
+    denylist for traffic generators / infra sidecars (e.g. a load generator, a flag
+    daemon, an ingress proxy) that carry heavy telemetry but can't be the fault.
+    Empty by default so core stays deployment-agnostic (the names live in config,
+    not here — #81)."""
     candidates = [
         RootCauseCandidate(
             service=sf.service,
@@ -116,6 +123,7 @@ def build_candidates(
             evidence=_evidence_for(sf),
         )
         for sf in table.services
+        if sf.service not in exclude
     ]
     candidates.sort(key=lambda c: (-c.score, c.service))
     return candidates

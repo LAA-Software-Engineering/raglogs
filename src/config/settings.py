@@ -218,6 +218,12 @@ class Settings(BaseSettings):
     # ranker. Empty = no calibrated confidence (fall back to ordinal confidence).
     rca_calibrator_model_path: str = ""
 
+    # Comma-separated services that are never a root cause and should be dropped
+    # from RCA candidates (#79): traffic generators / infra sidecars that carry
+    # heavy telemetry but can't be the fault (e.g. load-generator,flagd,
+    # frontend-proxy). Empty by default (deployment-specific; keeps core generic).
+    rca_excluded_services: str = ""
+
 
 _settings: Settings | None = None
 

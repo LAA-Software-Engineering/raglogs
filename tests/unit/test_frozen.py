@@ -100,6 +100,17 @@ class TestScoreFrozen:
         assert r["per_fault_class"]["code"]["top1"] == pytest.approx(1.0)
         assert r["per_fault_class"]["deploy"]["top1"] == pytest.approx(0.0)
 
+    def test_per_case_detail_is_emitted(self):
+        results = [
+            _fr(case_id="c1", ranked_services=["cart", "web", "db"]),
+            _fr(case_id="neg", is_negative=True, truth_service=None, produced=False),
+        ]
+        cases = score_frozen(results)["cases"]
+        assert [c["id"] for c in cases] == ["c1", "neg"]
+        assert cases[0]["truth_service"] == "cart" and cases[0]["correct_top1"] is True
+        assert cases[0]["predicted_services"] == ["cart", "web", "db"]  # top-3
+        assert cases[1]["is_negative"] is True and cases[1]["produced"] is False
+
     def test_confounded_and_modality_breakdown(self):
         results = [
             _fr(is_confounded=True, trigger_correct=True, modalities="logs+metrics"),

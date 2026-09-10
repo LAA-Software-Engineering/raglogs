@@ -325,7 +325,10 @@ def _rank_candidates(
         incident_end=window_end,
         baseline_start=baseline_start,
     )
-    candidates = build_candidates(table, scorer=ranker.score)
+    excluded = frozenset(
+        s.strip() for s in (get_settings().rca_excluded_services or "").split(",") if s.strip()
+    )
+    candidates = build_candidates(table, scorer=ranker.score, exclude=excluded)
     if not candidates:
         return None, [], None
     # Calibrated P(top-1 correct) — only when a calibrator model is configured.
