@@ -17,6 +17,11 @@ on:
       limit:
         description: "Max cases per suite (keeps the run bounded)"
         default: "30"
+      trigger_mode:
+        description: "Trigger detection mode (#82): regex (legacy) or rare_event"
+        type: choice
+        options: ["regex", "rare_event"]
+        default: "regex"
 
 permissions:
   contents: read
@@ -41,6 +46,9 @@ jobs:
           --health-retries 5
     env:
       DB_URL: postgresql+psycopg://postgres:postgres@localhost:5432/raglogs
+      # #82 T3: score with the legacy regex detector or the rare-event + linkage
+      # redesign, so trigger_hit can be compared before/after on the same corpus.
+      TRIGGER_MODE: ${{ inputs.trigger_mode }}
     steps:
       - uses: actions/checkout@v7
       - name: Set up Python
