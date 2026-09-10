@@ -18,6 +18,7 @@ this layer only *finds and ranks* candidates and marks whether each is rare.
 from __future__ import annotations
 
 import math
+import statistics
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -107,3 +108,79 @@ def rare_event_candidates(
     # missing timestamps last.
     out.sort(key=lambda t: (-t.score, _epoch(t.first_seen)))
     return out[:max_candidates]
+
+
+@dataclass
+class AnomalyOnset:
+    """A metric's first significant deviation from its pre-incident baseline — a
+    trigger candidate for faults that write no log line (RCAEval RE2 resource /
+    network faults; #82 T3 showed logs-only rare-event finds nothing on these)."""
+
+    service: Optional[str]
+    metric: str
+    onset: datetime
+    magnitude: float  # deviation in baseline sigmas (or relative units when flat)
+    score: float
+
+
+def metric_anomaly_onsets(
+    samples,
+    incident_start: datetime,
+    incident_end: datetime,
+    *,
+    min_baseline: int = 3,
+    z_threshold: float = 3.0,
+    rel_threshold: float = 0.5,
+    max_candidates: int = 5,
+) -> list[AnomalyOnset]:
+    """Earliest per-(service, metric) deviation from baseline, as onset candidates.
+
+    ``samples`` are duck-typed rows with ``service`` / ``metric`` / ``value`` /
+    ``ts``. Baseline = points with ``ts < incident_start`` (needs ``min_baseline``
+    of them); a point in ``[incident_start, incident_end]`` is anomalous when it is
+    more than ``z_threshold`` baseline sigmas from the baseline mean, or — when the
+    baseline is flat (sigma ~ 0) — more than ``rel_threshold`` of |mean| away. The
+    earliest anomalous point per series is its onset; ranked by earliness x
+    magnitude. This surfaces the injection time on faults that never log.
+    """
+    baseline: dict[tuple, list[float]] = {}
+    incident: dict[tuple, list[tuple[datetime, float]]] = {}
+    for m in samples:
+        service = getattr(m, "service", None)
+        metric = getattr(m, "metric", None)
+        ts = getattr(m, "ts", None)
+        value = getattr(m, "value", None)
+        if metric is None or ts is None or value is None:
+            continue
+        key = (service, metric)
+        if ts < incident_start:
+            baseline.setdefault(key, []).append(float(value))
+        elif incident_start <= ts <= incident_end:
+            incident.setdefault(key, []).append((ts, float(value)))
+
+    onsets: list[AnomalyOnset] = []
+    for key, base in baseline.items():
+        pts = incident.get(key)
+        if pts is None or len(base) < min_baseline:
+            continue
+        mean = statistics.mean(base)
+        sigma = statistics.pstdev(base)
+        for ts, value in sorted(pts, key=lambda p: p[0]):
+            dev = abs(value - mean)
+            if sigma > 0:
+                mag = dev / sigma
+                anomalous = mag >= z_threshold
+            else:
+                denom = abs(mean) if mean else 1.0
+                mag = dev / denom
+                anomalous = dev > rel_threshold * denom
+            if anomalous:
+                lead = max((incident_end - ts).total_seconds(), 0.0)
+                onsets.append(AnomalyOnset(
+                    service=key[0], metric=key[1], onset=ts, magnitude=mag,
+                    score=mag * math.log1p(lead),
+                ))
+                break  # earliest anomalous point per series is the onset
+
+    onsets.sort(key=lambda o: (-o.score, _epoch(o.onset)))
+    return onsets[:max_candidates]
