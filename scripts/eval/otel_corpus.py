@@ -25,31 +25,53 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import subprocess
+
 from src.eval.otel_demo import (
+    CHAOS_SCENARIOS,
     FLAG_SCENARIOS,
+    generate_chaos_incident,
     generate_incident,
     set_flag_variant,
 )
 from src.eval.otlp import capture_from_otlp_dir
 
 
-def _real_hooks(flagd_url: str, otlp_dir: Path):
+def _flagd_flip(flagd_url: str):
     def flip(flag: str, variant: str) -> None:
         set_flag_variant(flagd_url, flag, variant)
         print(f"    flagd: {flag} -> {variant}", flush=True)
 
-    return flip, capture_from_otlp_dir(otlp_dir), time.sleep
+    return flip
 
 
-def _dry_hooks():
-    """No cluster: log flips, emit one synthetic error log line, don't wait."""
-    def flip(flag: str, variant: str) -> None:
-        print(f"    [dry] flagd: {flag} -> {variant}", flush=True)
+def _dry_flip(flag: str, variant: str) -> None:
+    print(f"    [dry] flagd: {flag} -> {variant}", flush=True)
 
-    def capture(ws: datetime, we: datetime):
-        return ([{"timestamp": ws.isoformat(), "service": "checkout", "message": "dry-run", "level": "error"}], [], [])
 
-    return flip, capture, (lambda _s: None)
+def _dry_capture(ws: datetime, we: datetime):
+    return ([{"timestamp": ws.isoformat(), "service": "checkout", "message": "dry-run", "level": "error"}], [], [])
+
+
+def _kubectl_chaos_hooks(chaos_dir: Path):
+    """apply/delete a Chaos Mesh experiment via `kubectl` from a per-scenario
+    manifest (deploy/otel-demo/chaos/<scenario.name>.yaml)."""
+    def _run(verb: str, sc, extra=()):
+        manifest = chaos_dir / f"{sc.name}.yaml"
+        subprocess.run(["kubectl", verb, "-f", str(manifest), *extra], check=(verb == "apply"))
+        print(f"    kubectl {verb}: {sc.kind}={sc.name}", flush=True)
+
+    return (lambda sc: _run("apply", sc)), (lambda sc: _run("delete", sc, ("--ignore-not-found",)))
+
+
+def _dry_chaos_hooks():
+    def apply(sc):
+        print(f"    [dry] kubectl apply: {sc.kind}={sc.name}", flush=True)
+
+    def delete(sc):
+        print(f"    [dry] kubectl delete: {sc.kind}={sc.name}", flush=True)
+
+    return apply, delete
 
 
 def main() -> int:
@@ -60,6 +82,10 @@ def main() -> int:
     ap.add_argument("--baseline", type=int, default=300)
     ap.add_argument("--post", type=int, default=600)
     ap.add_argument("--negatives", type=int, default=2, help="how many healthy negative cases")
+    ap.add_argument("--chaos", action="store_true",
+                    help="generate Chaos-Mesh infra-fault cases (kubectl apply/delete); needs k8s")
+    ap.add_argument("--chaos-dir", type=Path, default=Path("deploy/otel-demo/chaos"),
+                    help="dir of Chaos-Mesh manifests, one per scenario name")
     ap.add_argument("--dry-run", action="store_true", help="no cluster: validate the loop + case emission")
     args = ap.parse_args()
 
@@ -67,10 +93,30 @@ def main() -> int:
         print("--otlp-dir is required unless --dry-run", file=sys.stderr)
         return 2
 
-    flip, capture, sleep = _dry_hooks() if args.dry_run else _real_hooks(args.flagd_url, args.otlp_dir)
+    capture = _dry_capture if args.dry_run else capture_from_otlp_dir(args.otlp_dir)
+    sleep = (lambda _s: None) if args.dry_run else time.sleep
     now = (lambda: datetime.now(timezone.utc))
-
     written: list[Path] = []
+
+    # Chaos-Mesh infra faults (k8s + Chaos Mesh) — a separate mode from the
+    # flag/negative corpus. Reads deploy/otel-demo/chaos/<scenario>.yaml.
+    if args.chaos:
+        apply_chaos, delete_chaos = _dry_chaos_hooks() if args.dry_run else _kubectl_chaos_hooks(args.chaos_dir)
+        for sc in CHAOS_SCENARIOS:
+            case_id = f"otel_chaos_{sc.name}"
+            print(f"[{len(written)+1}] chaos {sc.kind}={sc.name} ({sc.service})", flush=True)
+            out = generate_chaos_incident(
+                args.out_dir / case_id, case_id, scenario=sc,
+                apply_chaos=apply_chaos, delete_chaos=delete_chaos,
+                capture=capture, sleep=sleep, now=now,
+                baseline_seconds=args.baseline, post_seconds=args.post,
+            )
+            written.append(out)
+        print(f"\nwrote {len(written)} chaos cases -> {args.out_dir}")
+        return 0
+
+    flip = _dry_flip if args.dry_run else _flagd_flip(args.flagd_url)
+
     # one case per built-in failure flag
     for sc in FLAG_SCENARIOS:
         case_id = f"otel_{sc.flag}"

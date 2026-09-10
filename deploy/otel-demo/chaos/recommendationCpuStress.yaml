@@ -1,0 +1,16 @@
+# Chaos Mesh: CPU stress on recommendation (#79). Verify namespace + labels.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: recommendation-cpu-stress
+  namespace: otel-demo
+spec:
+  mode: all
+  selector:
+    namespaces: [otel-demo]
+    labelSelectors:
+      app.kubernetes.io/component: recommendation
+  stressors:
+    cpu:
+      workers: 2
+      load: 100

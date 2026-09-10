@@ -52,8 +52,25 @@ helm install chaos-mesh chaos-mesh/chaos-mesh -n chaos-mesh --create-namespace
 kubectl port-forward svc/otel-demo-frontendproxy 8080:8080
 ```
 
-Then drive `otel_demo.generate_chaos_incident(...)` for `NetworkChaos` / `PodChaos`
-/ `IOChaos` / `StressChaos` (Coroot's "OTel Demo + Chaos Mesh" post is the recipe).
+Then generate the infra-fault cases (Chaos-Mesh manifests are in
+`deploy/otel-demo/chaos/`, one per `CHAOS_SCENARIOS` entry):
+
+```bash
+# dry-run first (no cluster): logs the apply/delete + emits the 4 case dirs
+python scripts/eval/otel_corpus.py --chaos --dry-run --out-dir /tmp/otel-chaos-dry
+
+# for real (needs kubectl context on the cluster + the Collector export at --otlp-dir)
+python scripts/eval/otel_corpus.py --chaos \
+    --otlp-dir /path/to/collector/export --out-dir data/eval-cases/otel
+```
+
+The driver `kubectl apply`s each manifest, waits the incident window, captures, and
+`kubectl delete`s it. **Before a real run, edit the manifests** in
+`deploy/otel-demo/chaos/` so the namespace + label selectors (and `IOChaos`
+`volumePath`) match your deployment — see the comments in each file. On k8s you
+must also make the Collector's OTLP-JSON export reachable at `--otlp-dir` (a
+hostPath/PV mount, or periodic `kubectl cp`). Coroot's "OTel Demo + Chaos Mesh"
+post is the reference recipe.
 
 ## The frozen run (the milestone)
 

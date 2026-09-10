@@ -1,0 +1,24 @@
+# Chaos Mesh: network partition between cart and its Redis/Valkey (#79).
+# Applied/deleted by `otel_corpus.py --chaos`. Verify the namespace and label
+# selectors match your OTel Demo deployment (labels drift across chart versions;
+# check `kubectl get pods -n otel-demo --show-labels`). No `duration` — the driver
+# deletes it after the incident window.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: cart-redis-partition
+  namespace: otel-demo
+spec:
+  action: partition
+  direction: both
+  mode: all
+  selector:
+    namespaces: [otel-demo]
+    labelSelectors:
+      app.kubernetes.io/component: cart
+  target:
+    mode: all
+    selector:
+      namespaces: [otel-demo]
+      labelSelectors:
+        app.kubernetes.io/component: valkey-cart   # cart's Redis/Valkey (was `redis-cart`)
