@@ -96,6 +96,9 @@ Every setting is read from an environment variable (see `.env.example`). This ta
 | `CONFIDENCE_THRESHOLD_HIGH` | int | `5` |
 | `CONFIDENCE_THRESHOLD_MEDIUM_HIGH` | int | `4` |
 | `CONFIDENCE_THRESHOLD_MEDIUM` | int | `2` |
+| `CONFIDENCE_CALIBRATED_HIGH` | float | `0.8` |
+| `CONFIDENCE_CALIBRATED_MEDIUM_HIGH` | float | `0.65` |
+| `CONFIDENCE_CALIBRATED_MEDIUM` | float | `0.45` |
 | `CONFIDENCE_SCORE_LOW` | float | `0.25` |
 | `CONFIDENCE_SCORE_MEDIUM` | float | `0.5` |
 | `CONFIDENCE_SCORE_MEDIUM_HIGH` | float | `0.72` |

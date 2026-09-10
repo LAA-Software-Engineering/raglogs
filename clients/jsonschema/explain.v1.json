@@ -123,11 +123,16 @@
           "type": "string"
         },
         "score": {
-          "description": "Ordinal confidence rank in [0,1] derived from the label, not a calibrated probability. Prefer `label`.",
+          "description": "When `calibrated`, a calibrated P(predicted root-cause service correct) in [0,1]; otherwise an ordinal rank derived from the label (not a probability) \u2014 prefer `label`.",
           "maximum": 1.0,
           "minimum": 0.0,
           "title": "Score",
           "type": "number"
+        },
+        "calibrated": {
+          "default": false,
+          "title": "Calibrated",
+          "type": "boolean"
         }
       },
       "required": [

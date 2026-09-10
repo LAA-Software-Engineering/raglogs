@@ -173,6 +173,19 @@ class Settings(BaseSettings):
     confidence_threshold_high: int = 5  # score for "high" (also requires trigger)
     confidence_threshold_medium_high: int = 4  # score for "medium-high"
     confidence_threshold_medium: int = 2  # score for "medium"
+
+    # Calibrated-confidence label bands (#83). When a ranker + calibrator are
+    # configured, the confidence LABEL is bucketed from the calibrated
+    # P(top-1 root-cause correct) instead of the ordinal points. The score is a
+    # genuine probability (nested-LOSO ECE RE2 0.07 / RE3 0.20, #135), so the bands
+    # are probability ranges chosen against that reliability data, deliberately
+    # conservative: RCAEval top-1 base rates are ~0.61 (RE3) / ~0.77 (RE2), so
+    # "high" requires a probability well above them (>=0.80) — on RE3, where the
+    # score sits near base rate, almost nothing reaches "high", which is honest.
+    # (e.g. 0.85 -> high, 0.62 -> medium, 0.31 -> low.)
+    confidence_calibrated_high: float = 0.80
+    confidence_calibrated_medium_high: float = 0.65
+    confidence_calibrated_medium: float = 0.45
     # Ordinal rank (NOT a calibrated probability) each label maps to in the v1
     # schema's ``score`` field. See the field's schema description.
     confidence_score_low: float = 0.25

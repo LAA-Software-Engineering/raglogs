@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from src.config import get_settings
 from src.core.clustering.clusterer import run_clustering
-from src.core.explain.confidence import compute_confidence
+from src.core.explain.confidence import compute_confidence, label_from_calibrated_probability
 from src.core.explain.evidence import EvidencePacket, assemble_evidence
 from src.core.explain.templates import render_insufficient_evidence, render_text_summary
 from src.core.llm.provider import build_llm_provider
@@ -57,6 +57,11 @@ class ExplainResult:
     # Calibrated P(top-1 correct) for the ranker prediction (#118 D / #83). Set
     # only when a calibrator model is configured; None otherwise.
     predicted_root_cause_confidence: Optional[float] = None
+    # True when the `confidence` label was bucketed from the calibrated probability
+    # (#83) — i.e. `confidence` means P(root-cause service correct). False on the
+    # legacy ordinal path and the insufficient-evidence case (where the label stays
+    # "low" for narrative coherence even if the ranker was confident).
+    confidence_calibrated: bool = False
 
 
 def get_latest_ingestion_job_id(
@@ -181,7 +186,10 @@ def _explain_window(
         db, scope, window_start, window_end, baseline_window, settings
     )
 
-    # 4. Handle empty case
+    # 4. Handle empty case. The insufficient-evidence narrative keeps a "low"
+    # label even if a metric/trace-only ranker was confident — the calibrated
+    # probability still rides on predicted_root_cause_confidence, but overriding
+    # the label here would pair "insufficient evidence" prose with a "high" badge.
     if not clusters or packet.primary_cluster is None:
         return ExplainResult(
             window_start=window_start,
@@ -196,6 +204,15 @@ def _explain_window(
             root_cause_candidates=rca_candidates,
             predicted_root_cause_confidence=rca_confidence,
         )
+
+    # #83: with a real explanation, when a ranker + calibrator produced a
+    # calibrated P(top-1 root-cause correct), the confidence LABEL is bucketed from
+    # that probability instead of the (uncalibrated) ordinal points. It then means
+    # "confidence the predicted root-cause service is correct", not the whole
+    # narrative. No calibrator -> rca_confidence is None -> legacy ordinal label.
+    confidence_calibrated = rca_confidence is not None
+    if confidence_calibrated:
+        confidence = label_from_calibrated_probability(rca_confidence)
 
     # 5. Generate summary
     mode = "rules"
@@ -271,6 +288,7 @@ def _explain_window(
         predicted_root_cause=predicted_root_cause,
         root_cause_candidates=rca_candidates,
         predicted_root_cause_confidence=rca_confidence,
+        confidence_calibrated=confidence_calibrated,
     )
 
 

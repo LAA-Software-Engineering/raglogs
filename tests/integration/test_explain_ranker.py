@@ -108,6 +108,45 @@ def test_ranker_localises_metric_only_root_cause(db_session, tmp_path, monkeypat
         # a calibrator is configured -> calibrated P(top-1 correct) in [0, 1]
         assert result.predicted_root_cause_confidence is not None
         assert 0.0 <= result.predicted_root_cause_confidence <= 1.0
+        # #83: the confidence label is bucketed from that probability (the
+        # summarizer override, exercised through the real pipeline)
+        from src.core.explain.confidence import label_from_calibrated_probability
+        assert result.confidence_calibrated is True
+        assert result.confidence == label_from_calibrated_probability(result.predicted_root_cause_confidence)
+    finally:
+        monkeypatch.delenv("RCA_RANKER_MODEL_PATH", raising=False)
+        monkeypatch.delenv("RCA_CALIBRATOR_MODEL_PATH", raising=False)
+        reload_settings()
+
+
+def test_empty_case_keeps_low_label_despite_confident_ranker(db_session, tmp_path, monkeypatch):
+    # metrics only, no logs -> no clusters -> insufficient-evidence case. Even
+    # though a ranker+calibrator produce a confident metric-only root cause, the
+    # confidence LABEL stays "low" (narrative coherence), while the calibrated
+    # probability is still exposed separately. (#83 review coherence point.)
+    from src.config import reload_settings
+    from src.core.explain.summarizer import explain_window
+    from src.core.ingestion.telemetry import ParsedMetricSample, persist_metric_samples
+
+    persist_metric_samples(db_session, [
+        ParsedMetricSample(service="paymentservice", metric="cpu", value=1.0, ts=BASELINE_START + timedelta(seconds=5)),
+        ParsedMetricSample(service="paymentservice", metric="cpu", value=50.0, ts=INJECT + timedelta(seconds=5)),
+    ], scope=SCOPE)
+    db_session.flush()
+
+    monkeypatch.setenv("RCA_RANKER_MODEL_PATH", _train_model(tmp_path))
+    monkeypatch.setenv("RCA_CALIBRATOR_MODEL_PATH", _write_calibrator(tmp_path))
+    reload_settings()
+    try:
+        result = explain_window(
+            db=db_session, window_start=INJECT, window_end=WINDOW_END,
+            no_llm=True, baseline_window_str="300s", scope=SCOPE,
+        )
+        assert result.primary_cluster is None  # no logs -> insufficient evidence
+        assert result.confidence == "low"
+        assert result.confidence_calibrated is False
+        # the RCA probability is still available on its own field
+        assert result.predicted_root_cause_confidence is not None
     finally:
         monkeypatch.delenv("RCA_RANKER_MODEL_PATH", raising=False)
         monkeypatch.delenv("RCA_CALIBRATOR_MODEL_PATH", raising=False)

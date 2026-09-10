@@ -210,7 +210,7 @@ curl -X POST http://localhost:8000/v1/query/explain \
   "schema_version": "1.0",
   "scope": "default",
   "window": {"from": "2026-03-12T22:00:00+00:00", "to": "2026-03-12T22:30:00+00:00"},
-  "confidence": {"label": "medium-high", "score": 0.72},
+  "confidence": {"label": "medium-high", "score": 0.72, "calibrated": false},
   "summary": "Stripe signature verification failed for endpoint /webhooks/stripe",
   "trigger": {"detected": false, "type": null, "service": null, "at": null, "correlation": null},
   "primary_cluster": {
@@ -233,6 +233,8 @@ curl -X POST http://localhost:8000/v1/query/explain \
 ```
 
 **Explain** — `POST /v1/query/explain` accepts the same window filters as the CLI. Optional `"format": "markdown"` adds a paste-ready `markdown` incident report field alongside the JSON payload (same shape as `raglogs explain --format markdown`).
+
+> **`confidence.score` semantics (#83).** By default `calibrated` is `false` and `score` is an *ordinal rank* derived from `label` (not a probability) — read `label`. When a ranker + calibrator are configured, `calibrated` is `true` and `score` is a **calibrated P(the predicted root-cause service is correct)** — confidence in the root-cause *service*, not the whole narrative/trigger. **Consumers that read `score` as an ordinal must check `calibrated`** to avoid misinterpreting a probability. The RCA probability is also available on its own as `predicted_root_cause_confidence`.
 
 ### Per-request query overrides
 
