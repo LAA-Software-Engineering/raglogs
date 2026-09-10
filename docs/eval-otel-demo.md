@@ -85,9 +85,13 @@ NO:     fitting thresholds · retraining the ranker ·
 python scripts/train_rca_ranker.py      --features mm_features_re2re3.jsonl --out models/rca_ranker.json
 python scripts/train_rca_calibrator.py  --features mm_features_re2re3.jsonl --out models/rca_calibrator.json
 
-# 2. One frozen evaluation over the independent corpus
+# 2. One frozen evaluation over the independent corpus.
+# RCA_EXCLUDED_SERVICES drops non-service infra the ranker never trained against
+# (traffic generator, flag daemon, ingress proxy) — they aren't root causes and
+# otherwise dominate the ranking. --format json includes per-case predictions.
+RCA_EXCLUDED_SERVICES=load-generator,flagd,frontend-proxy,image-provider \
 raglogs frozen-eval data/eval-cases/otel \
-    --ranker models/rca_ranker.json --calibrator models/rca_calibrator.json
+    --ranker models/rca_ranker.json --calibrator models/rca_calibrator.json --format json
 ```
 
 `raglogs frozen-eval` runs the frozen artifacts over the corpus and prints the

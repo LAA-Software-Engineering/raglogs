@@ -146,6 +146,22 @@ def score_frozen(results: list[FrozenCaseResult]) -> dict:
         ),
         "per_fault_class": by_fault,
         "per_modality": by_modality,
+        # Per-case detail so a result is diagnosable without re-running (which
+        # service was predicted vs the truth, top-3, confidence).
+        "cases": [
+            {
+                "id": r.case_id,
+                "fault_class": r.fault_class,
+                "is_negative": r.is_negative,
+                "truth_service": r.truth_service,
+                "predicted_services": r.ranked_services[:3],
+                "correct_top1": r.correct_top1,
+                "correct_top3": r.correct_top3,
+                "confidence": r.confidence,
+                "produced": r.produced,
+            }
+            for r in results
+        ],
     }
 
 

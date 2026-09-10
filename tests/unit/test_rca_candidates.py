@@ -45,6 +45,14 @@ class TestScoringAndOrder:
         ranked = build_candidates(table)
         assert [c.service for c in ranked] == ["b", "c", "a"]  # 5,5 (b<c), then 1
 
+    def test_exclude_drops_infra_services(self):
+        # a traffic generator that scores highest is dropped, so the real top wins
+        table = FeatureTable(
+            services=[_sf("load-generator", log_grp=99), _sf("cart", log_grp=5), _sf("flagd", log_grp=50)],
+        )
+        ranked = build_candidates(table, exclude=frozenset({"load-generator", "flagd"}))
+        assert [c.service for c in ranked] == ["cart"]  # infra excluded despite higher scores
+
     def test_injectable_scorer_overrides(self):
         table = FeatureTable(services=[_sf("a", log_grp=1, met_anom=9.0), _sf("b", log_grp=5)])
         ranked = build_candidates(table, scorer=lambda sf: sf.met_anom)
