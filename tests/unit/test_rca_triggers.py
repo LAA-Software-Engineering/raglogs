@@ -86,3 +86,45 @@ class TestRanking:
         ]
         ranked = rare_event_candidates(clusters, None)
         assert [t.fingerprint for t in ranked] == ["naive", "aware"]  # earlier wall-clock first
+
+
+class TestMetricAnomalyOnsets:
+    from datetime import datetime as _dt, timezone as _tz
+    I0 = _dt(2026, 1, 1, 12, 0, 0, tzinfo=_tz.utc)
+
+    def _s(self, service, metric, value, ts):
+        from types import SimpleNamespace
+        return SimpleNamespace(service=service, metric=metric, value=value, ts=ts)
+
+    def test_detects_earliest_deviation_after_flat_baseline(self):
+        from datetime import timedelta
+        from src.core.rca.triggers import metric_anomaly_onsets
+        I0 = self.I0
+        samples = (
+            # flat baseline mean 1.0 before incident
+            [self._s("cart", "cpu", 1.0, I0 - timedelta(seconds=s)) for s in (40, 30, 20, 10)]
+            # incident: normal, normal, then a spike at +120s
+            + [self._s("cart", "cpu", 1.0, I0 + timedelta(seconds=30)),
+               self._s("cart", "cpu", 1.05, I0 + timedelta(seconds=60)),
+               self._s("cart", "cpu", 9.0, I0 + timedelta(seconds=120))]
+        )
+        onsets = metric_anomaly_onsets(samples, I0, I0 + timedelta(seconds=600))
+        assert len(onsets) == 1
+        assert onsets[0].service == "cart" and onsets[0].metric == "cpu"
+        assert onsets[0].onset == I0 + timedelta(seconds=120)  # the spike, not the earlier normal points
+
+    def test_needs_enough_baseline(self):
+        from datetime import timedelta
+        from src.core.rca.triggers import metric_anomaly_onsets
+        I0 = self.I0
+        samples = [self._s("cart", "cpu", 1.0, I0 - timedelta(seconds=10)),  # only 1 baseline point
+                   self._s("cart", "cpu", 9.0, I0 + timedelta(seconds=30))]
+        assert metric_anomaly_onsets(samples, I0, I0 + timedelta(seconds=600), min_baseline=3) == []
+
+    def test_stable_metric_yields_no_onset(self):
+        from datetime import timedelta
+        from src.core.rca.triggers import metric_anomaly_onsets
+        I0 = self.I0
+        samples = ([self._s("cart", "cpu", 1.0, I0 - timedelta(seconds=s)) for s in (40, 30, 20, 10)]
+                   + [self._s("cart", "cpu", 1.0, I0 + timedelta(seconds=s)) for s in (30, 60, 120)])
+        assert metric_anomaly_onsets(samples, I0, I0 + timedelta(seconds=600)) == []

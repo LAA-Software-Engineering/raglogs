@@ -89,3 +89,24 @@ def test_unrelated_service_rare_change_found_not_explained(db_session, monkeypat
     pkt = _assemble(db_session, _clusters("billing"), monkeypatch)
     assert pkt.trigger_found is True
     assert pkt.trigger_explains is False
+
+
+def test_metric_anomaly_onset_triggers_without_any_log_line(db_session, monkeypatch):
+    # RE2-class: the only cluster is the primary error (no rare LOG candidate),
+    # but a metric on the erroring service spikes -> trigger found via metrics.
+    from src.core.ingestion.telemetry import ParsedMetricSample, persist_metric_samples
+
+    persist_metric_samples(db_session, (
+        # flat baseline before the window, then a spike inside it
+        [ParsedMetricSample(service="cart", metric="cpu", value=1.0, ts=T0 - timedelta(seconds=s)) for s in (40, 30, 20, 10)]
+        + [ParsedMetricSample(service="cart", metric="cpu", value=9.0, ts=T0 + timedelta(seconds=60))]
+    ), scope=SCOPE)
+    db_session.flush()
+
+    # only the primary error cluster (excluded from the candidate pool) -> no log trigger
+    primary = _cluster("err", "NullPointer in cart", {"cart": 80}, count=80, baseline_count=3,
+                       change_ratio=20.0, first_seen=T0 + timedelta(seconds=30), error_services={"cart": 80})
+    pkt = _assemble(db_session, [primary], monkeypatch)
+    assert pkt.trigger_found is True  # from the metric onset, not a log line
+    assert pkt.trigger_explains is True  # cart metric on cart errors (same service)
+    assert any("cpu anomaly" in t.message for t in pkt.trigger_candidates)

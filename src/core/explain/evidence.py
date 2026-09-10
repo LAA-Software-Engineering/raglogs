@@ -87,19 +87,44 @@ def _rare_event_triggers(
     rare = rare_event_candidates(
         pool, onset, rare_change_ratio=get_settings().trigger_rare_change_ratio
     )
-    candidates = [
-        TriggerCandidate(message=r.message, timestamp=r.first_seen or onset or window_start, service=r.service)
+    # (service, timestamp) trigger candidates: log rare-events, then metric
+    # anomaly onsets — the latter catch faults that write no log line (RE2), the
+    # #82 T3 gap. Each carries its service for the linkage gate below.
+    scored: list[tuple[Optional[str], TriggerCandidate]] = [
+        (r.service, TriggerCandidate(message=r.message, timestamp=r.first_seen or onset or window_start, service=r.service))
         for r in rare
     ]
-    if not rare:
+    for o in _metric_onsets(db, scope, window_start, window_end):
+        scored.append((o.service, TriggerCandidate(
+            message=f"{o.metric} anomaly onset", timestamp=o.onset, service=o.service)))
+
+    candidates = [tc for _svc, tc in scored]
+    if not candidates:
         return candidates, False, False
 
     root_service = _primary_service(primary)
     graph = build_service_graph(db, scope, window_start, window_end)
     explains = any(
-        r.service and root_service and graph.linked(r.service, root_service) for r in rare
+        svc and root_service and graph.linked(svc, root_service) for svc, _tc in scored
     )
     return candidates, True, explains
+
+
+def _metric_onsets(db: Session, scope: str, window_start: datetime, window_end: datetime):
+    """Metric anomaly-onset trigger candidates from ``metric_samples`` — baseline
+    is the pre-window (bounded to the incident duration), incident is the window."""
+    from src.core.rca.triggers import metric_anomaly_onsets
+    from src.db.models import MetricSample
+
+    lookback = window_end - window_start
+    rows = db.execute(
+        select(MetricSample.service, MetricSample.metric, MetricSample.value, MetricSample.ts).where(
+            MetricSample.scope == scope,
+            MetricSample.ts >= window_start - lookback,
+            MetricSample.ts <= window_end,
+        )
+    ).all()
+    return metric_anomaly_onsets(rows, window_start, window_end)
 
 
 @dataclass
