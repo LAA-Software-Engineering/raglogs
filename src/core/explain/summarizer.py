@@ -57,6 +57,11 @@ class ExplainResult:
     # Calibrated P(top-1 correct) for the ranker prediction (#118 D / #83). Set
     # only when a calibrator model is configured; None otherwise.
     predicted_root_cause_confidence: Optional[float] = None
+    # True when the `confidence` label was bucketed from the calibrated probability
+    # (#83) — i.e. `confidence` means P(root-cause service correct). False on the
+    # legacy ordinal path and the insufficient-evidence case (where the label stays
+    # "low" for narrative coherence even if the ranker was confident).
+    confidence_calibrated: bool = False
 
 
 def get_latest_ingestion_job_id(
@@ -181,21 +186,16 @@ def _explain_window(
         db, scope, window_start, window_end, baseline_window, settings
     )
 
-    # #83: when a ranker + calibrator produced a calibrated P(top-1 root-cause
-    # correct), the confidence LABEL is bucketed from that probability instead of
-    # the (uncalibrated) ordinal points. It then means "confidence the predicted
-    # root-cause service is correct", not the whole narrative. No calibrator ->
-    # rca_confidence is None -> legacy ordinal label (unchanged).
-    if rca_confidence is not None:
-        confidence = label_from_calibrated_probability(rca_confidence)
-
-    # 4. Handle empty case
+    # 4. Handle empty case. The insufficient-evidence narrative keeps a "low"
+    # label even if a metric/trace-only ranker was confident — the calibrated
+    # probability still rides on predicted_root_cause_confidence, but overriding
+    # the label here would pair "insufficient evidence" prose with a "high" badge.
     if not clusters or packet.primary_cluster is None:
         return ExplainResult(
             window_start=window_start,
             window_end=window_end,
             summary_text=render_insufficient_evidence(window_start, window_end, packet.total_logs),
-            confidence=confidence if rca_confidence is not None else "low",
+            confidence="low",
             evidence_items=packet.evidence_items,
             services_affected=packet.services_affected,
             total_logs=packet.total_logs,
@@ -204,6 +204,15 @@ def _explain_window(
             root_cause_candidates=rca_candidates,
             predicted_root_cause_confidence=rca_confidence,
         )
+
+    # #83: with a real explanation, when a ranker + calibrator produced a
+    # calibrated P(top-1 root-cause correct), the confidence LABEL is bucketed from
+    # that probability instead of the (uncalibrated) ordinal points. It then means
+    # "confidence the predicted root-cause service is correct", not the whole
+    # narrative. No calibrator -> rca_confidence is None -> legacy ordinal label.
+    confidence_calibrated = rca_confidence is not None
+    if confidence_calibrated:
+        confidence = label_from_calibrated_probability(rca_confidence)
 
     # 5. Generate summary
     mode = "rules"
@@ -279,6 +288,7 @@ def _explain_window(
         predicted_root_cause=predicted_root_cause,
         root_cause_candidates=rca_candidates,
         predicted_root_cause_confidence=rca_confidence,
+        confidence_calibrated=confidence_calibrated,
     )
 
 

@@ -484,10 +484,15 @@ def trigger_from_mapping(
 
 
 def _confidence_for_result(result: ExplainResult) -> Confidence:
-    """Confidence for a fresh result: calibrated P(root cause) as the score when a
-    calibrator produced it (#83), else the legacy ordinal rank."""
+    """Confidence for a fresh result: calibrated P(root cause) as the score only
+    when the label was calibrated-bucketed (#83); else the legacy ordinal rank.
+
+    Keyed on ``confidence_calibrated`` (not just the presence of a probability) so
+    the insufficient-evidence case — where the label stays "low" but a metric/trace
+    ranker may still have a probability — reports the coherent legacy Confidence,
+    with the RCA probability separate on ``predicted_root_cause_confidence``."""
     p = getattr(result, "predicted_root_cause_confidence", None)
-    if isinstance(p, (int, float)):
+    if getattr(result, "confidence_calibrated", False) and isinstance(p, (int, float)):
         return Confidence(label=str(result.confidence), score=float(p), calibrated=True)
     return confidence_from_value(result.confidence)
 
