@@ -1,0 +1,18 @@
+# Chaos Mesh: I/O latency on product-catalog (#79). IOChaos needs the container
+# name and the volume mount path inside it — set `volumePath`/`container` to match
+# your deployment (`kubectl describe pod` to find the mount). Verify namespace/labels.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: IOChaos
+metadata:
+  name: product-catalog-io-latency
+  namespace: otel-demo
+spec:
+  action: latency
+  mode: all
+  selector:
+    namespaces: [otel-demo]
+    labelSelectors:
+      app.kubernetes.io/component: product-catalog
+  volumePath: /tmp        # <-- set to a real mount in the container
+  delay: "100ms"
+  percent: 100
