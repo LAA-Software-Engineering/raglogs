@@ -30,25 +30,36 @@ def _packet(**kw) -> EvidencePacket:
     return EvidencePacket(**base)
 
 
-class TestValidatedTriggerGatesHigh:
-    def test_found_but_unlinked_trigger_does_not_reach_high(self):
-        # a rare change near onset, but not linked to the erroring service
+class TestRareEventModeNeverClaimsHigh:
+    # T3 (#82): a rare+linked trigger fires on nearly every log-announced incident,
+    # so rare_event mode must not ride confidence on it. In that mode the label is
+    # evidence-volume-only, capped at "medium-high" — no "high" claim until
+    # confidence is calibrated (#83 / Phase D).
+    def test_found_but_unlinked_trigger_caps_at_medium_high(self):
         pkt = _packet(
             trigger_candidates=[TriggerCandidate("deploy Y", T0, "unrelated")],
             trigger_found=True, trigger_explains=False,
         )
-        assert compute_confidence(pkt) == "medium-high"  # capped, not high
+        assert compute_confidence(pkt) == "medium-high"
 
-    def test_validated_trigger_reaches_high(self):
+    def test_validated_trigger_still_capped_at_medium_high(self):
+        # even a rare + linked ("explains") trigger no longer reaches "high"
         pkt = _packet(
             trigger_candidates=[TriggerCandidate("deploy cart", T0, "cart")],
             trigger_found=True, trigger_explains=True,
         )
-        assert compute_confidence(pkt) == "high"
-
-    def test_no_trigger_found_caps_at_medium_high(self):
-        pkt = _packet(trigger_found=False, trigger_explains=False)
         assert compute_confidence(pkt) == "medium-high"
+
+    def test_trigger_adds_no_points_in_rare_event_mode(self):
+        # confidence is identical whether or not a rare-event trigger was found
+        from src.core.explain.confidence import compute_confidence_points
+
+        with_trigger = _packet(
+            trigger_candidates=[TriggerCandidate("x", T0, "cart")],
+            trigger_found=True, trigger_explains=True,
+        )
+        without = _packet(trigger_found=False, trigger_explains=False)
+        assert compute_confidence_points(with_trigger) == compute_confidence_points(without)
 
 
 class TestLegacyBackCompat:

@@ -61,11 +61,11 @@ def compute_confidence_points(packet: EvidencePacket) -> int:
         elif pc.change_ratio > s.confidence_change_ratio_low:
             points += s.confidence_points_change_low
 
-    # #82: a *found* trigger (rare change near onset) earns the points; whether it
-    # gates "high" depends on it being validated (see compute_confidence). None =
-    # legacy path -> fall back to bool(trigger_candidates) for exact back-compat.
-    found = packet.trigger_found if packet.trigger_found is not None else bool(packet.trigger_candidates)
-    if found:
+    # Only legacy regex triggers contribute confidence points. In rare_event mode
+    # (trigger_found is not None) the rare-event trigger fires on nearly every
+    # log-announced incident (#82 T3), so it carries no information about whether
+    # the explanation is correct and must not inflate confidence.
+    if packet.trigger_found is None and packet.trigger_candidates:
         points += s.confidence_points_trigger
 
     if packet.secondary_clusters:
@@ -95,15 +95,23 @@ def compute_confidence(packet: EvidencePacket) -> str:
 
     s = get_settings()
     score = compute_confidence_points(packet)
-    # #82: "high" requires a *validated* trigger (rare + linked), not a bare regex
-    # match. None (legacy) falls back to bool(trigger_candidates) so regex-mode
-    # confidence is byte-identical.
-    has_trigger = (
-        packet.trigger_explains
-        if packet.trigger_explains is not None
-        else bool(packet.trigger_candidates)
-    )
 
+    # rare_event mode (trigger_found is not None): T3 (#82) showed a rare+linked
+    # trigger fires on nearly every log-announced incident, so it does NOT
+    # validate the explanation — gating "high" on it over-promoted (RE3: 56/90
+    # "high" at 21% accuracy, below base rate). Until confidence is calibrated
+    # against measured accuracy (#83 / Phase D), rare_event mode makes no "high"
+    # claim: the label rides on evidence volume only, capped at "medium-high".
+    if packet.trigger_found is not None:
+        if score >= s.confidence_threshold_medium_high:
+            return "medium-high"
+        elif score >= s.confidence_threshold_medium:
+            return "medium"
+        return "low"
+
+    # Legacy regex mode: "high" requires a (regex) trigger candidate — byte-identical
+    # to pre-#82 behaviour.
+    has_trigger = bool(packet.trigger_candidates)
     if score >= s.confidence_threshold_high and has_trigger:
         return "high"
     elif score >= s.confidence_threshold_medium_high:
