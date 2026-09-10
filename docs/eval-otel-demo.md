@@ -117,3 +117,33 @@ is the most important result available: it says raglogs has a good
 training/eval material for the next generation. Only if the **frozen** model holds
 up reasonably is there evidence to consider shipping a model on-by-default and
 closing #118.
+
+## First frozen result (2026-09-10, preliminary)
+
+First end-to-end Path-A run: docker-compose demo, 9 flag + 2 negative cases,
+**short 40/80 s windows**, single run (small corpus). Frozen RCAEval RE2+RE3
+ranker + calibrator, untouched.
+
+| metric | RCAEval (LOSO) | OTel-Demo (frozen) |
+|---|---|---|
+| root-cause top-1 | RE3 60% / RE2 77% | **0%** (0/9) |
+| root-cause top-3 | — | 22% (2/9) |
+| negative abstention | — | 0/2 |
+| confidence ECE | RE2 0.07 / RE3 0.20 | **0.61** |
+
+**The model does not transfer.** Per-case it ranks high-traffic / infra services
+first — `load-generator`, `flagd`, `frontend-proxy`, `quote` — pushing the injected
+service to #2–#4 or off the list (paymentFailure → `load-generator`; adHighCpu →
+`quote`, truth `ad` at #2; productCatalogFailure → `flagd`, truth `product-catalog`
+at #4). RCAEval has no load generator or `flagd`, so the ranker never learned to
+discount a traffic driver — a real distribution gap. It is also badly
+**overconfident** (~0.55 confidence at 0% accuracy → ECE 0.61) and never abstains
+on healthy windows. This is the intended verdict of external validation: **a good
+RCAEval-benchmark model, not yet a general RCA model.**
+
+Caveats (why this is preliminary): short windows may not let faults fully manifest;
+11 cases / single run; `kafka` can't match (infra, no `service.name`); propagation
+faults (payment fails → checkout errors) mean the erroring service ≠ the injected
+one. Next steps before a verdict: longer windows, more cases, and a candidate
+filter that drops non-service infra (load-generator / flagd / proxy) — then re-judge
+whether the gap is the model or the harness.

@@ -44,24 +44,27 @@ class FlagScenario:
 
 
 # The demo's built-in failure flags (opentelemetry.io/docs/demo/feature-flags).
-# ``service`` is the injected root cause; verify the string matches the running
-# demo's ``service.name`` (it has changed across demo versions) — a generation-time
-# check, like RCAEval's service canonicalisation.
+# Flag names, ``service`` (the injected root cause = its service.name), and the
+# enable ``variant_on`` are all verified against the running demo — all three have
+# drifted across demo versions (flag names dropped the "Service" infix; some flags
+# use percentage/duration variants rather than "on"). Confirmed against demo
+# collector v0.159 / demo.flagd.json (#79 Path A run, 2026-09-10).
 FLAG_SCENARIOS: tuple[FlagScenario, ...] = (
     FlagScenario("productCatalogFailure", "product-catalog", "dependency",
                  "Downstream dependency errors on a specific code path"),
-    FlagScenario("paymentServiceFailure", "payment", "code",
-                 "Service-level error on a critical path"),
-    FlagScenario("paymentServiceUnreachable", "payment", "dependency",
+    FlagScenario("paymentFailure", "payment", "code",
+                 "Service-level error on a critical path", variant_on="100%"),
+    FlagScenario("paymentUnreachable", "payment", "dependency",
                  "Payment dependency unreachable"),
-    FlagScenario("cartServiceFailure", "cart", "code",
-                 "Error on every EmptyCart call"),
-    FlagScenario("recommendationServiceCacheFailure", "recommendation", "resource",
+    FlagScenario("cartFailure", "cart", "code",
+                 "Error on every EmptyCart call", variant_on="100%"),
+    FlagScenario("recommendationCacheFailure", "recommendation", "resource",
                  "Memory growth / slow-burn degradation"),
     FlagScenario("kafkaQueueProblems", "kafka", "resource",
                  "Queue overload + consumer lag"),
     FlagScenario("adHighCpu", "ad", "resource", "CPU saturation / latency degradation"),
-    FlagScenario("imageSlowLoad", "frontend", "resource", "Image load latency degradation"),
+    FlagScenario("imageSlowLoad", "frontend", "resource",
+                 "Image load latency degradation", variant_on="10sec"),
     FlagScenario("loadGeneratorFloodHomepage", "frontend", "resource",
                  "Traffic-driven saturation"),
 )
@@ -122,6 +125,16 @@ def set_flag_variant(base_url: str, flag: str, variant: str, *, timeout: float =
     with httpx.Client(base_url=base_url, timeout=timeout) as client:
         config = client.get("/feature/api/read").raise_for_status().json()
         client.post("/feature/api/write", json=patch_flag_variant(config, flag, variant)).raise_for_status()
+
+
+def set_flag_variant_file(flagd_file: Path, flag: str, variant: str) -> None:
+    """Flip a flag by patching flagd's source JSON (``demo.flagd.json``) in place;
+    flagd's file sync watcher hot-reloads it. More robust than the flagd-ui write
+    API (whose payload contract varies by demo version), and the same mechanism as
+    patching the ConfigMap on Kubernetes."""
+    path = Path(flagd_file)
+    config = json.loads(path.read_text())
+    path.write_text(json.dumps(patch_flag_variant(config, flag, variant), indent=2))
 
 
 # ── case building ────────────────────────────────────────────────────────────

@@ -47,7 +47,7 @@ class TestPatchFlagVariant:
 
 class TestBuildIncidentCase:
     def test_positive_case_has_root_cause_and_trigger(self):
-        s = SCENARIOS_BY_FLAG["paymentServiceFailure"]
+        s = SCENARIOS_BY_FLAG["paymentFailure"]
         doc = build_incident_case("payment_1", T0, scenario=s, baseline_seconds=300, post_seconds=600)
         assert doc["root_cause"]["service"] == "payment"
         assert doc["trigger"]["timestamp"] == T0.isoformat()
@@ -63,7 +63,7 @@ class TestBuildIncidentCase:
         assert "healthy negative" in doc["notes"]
 
     def test_confounder_recorded_but_ground_truth_is_the_flag(self):
-        s = SCENARIOS_BY_FLAG["cartServiceFailure"]
+        s = SCENARIOS_BY_FLAG["cartFailure"]
         deploy = datetime(2026, 1, 1, 12, 3, tzinfo=timezone.utc)
         doc = build_incident_case("cart_conf_1", T0, scenario=s, baseline_seconds=300,
                                   post_seconds=600, confounding_deploy_at=deploy)
@@ -153,7 +153,7 @@ class TestGenerateIncident:
             captured_windows.append((ws, we))
             return ([{"timestamp": T0.isoformat(), "service": "payment", "message": "boom", "level": "error"}], [], [])
 
-        s = SCENARIOS_BY_FLAG["paymentServiceFailure"]
+        s = SCENARIOS_BY_FLAG["paymentFailure"]
         out = generate_incident(
             tmp_path / "payment_1", "payment_1", scenario=s,
             capture=capture, flip=lambda f, v: flips.append((f, v)),
@@ -161,7 +161,7 @@ class TestGenerateIncident:
             baseline_seconds=300, post_seconds=600,
         )
         # flag flipped on before capture, off after
-        assert flips == [("paymentServiceFailure", "on"), ("paymentServiceFailure", "off")]
+        assert flips == [("paymentFailure", "100%"), ("paymentFailure", "off")]
         # the captured window spans baseline..incident around the flip
         assert captured_windows[0][0] < T0 < captured_windows[0][1]
         case = load_case(out)
@@ -186,7 +186,7 @@ class TestGenerateIncident:
         from src.eval.case import load_case
 
         actions: list[str] = []
-        s = SCENARIOS_BY_FLAG["cartServiceFailure"]
+        s = SCENARIOS_BY_FLAG["cartFailure"]
         out = generate_incident(
             tmp_path / "cart_conf_1", "cart_conf_1", scenario=s,
             capture=lambda ws, we: ([{"timestamp": T0.isoformat(), "service": "cart", "message": "e", "level": "error"}], [], []),
