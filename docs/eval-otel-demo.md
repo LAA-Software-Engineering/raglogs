@@ -151,3 +151,50 @@ faults (payment fails → checkout errors) mean the erroring service ≠ the inj
 one. Next steps before a verdict: longer windows, more cases, and a candidate
 filter that drops non-service infra (load-generator / flagd / proxy) — then re-judge
 whether the gap is the model or the harness.
+
+## Re-run with the candidate filter (2026-09-10)
+
+The candidate filter now exists (`RCA_EXCLUDED_SERVICES`, #152). Re-running the
+**same frozen artifacts over the same 11 cases** — the only change being
+`RCA_EXCLUDED_SERVICES=load-generator,flagd,frontend-proxy,image-provider`, applied
+at ranking time, no re-capture and no re-training — isolates how much of the miss
+was infra distractors vs a real model gap:
+
+| metric | frozen, no filter | frozen + filter |
+|---|---|---|
+| root-cause top-1 | 0% (0/9) | **0%** (0/9) |
+| root-cause top-3 | 22% (2/9) | **44%** (4/9) |
+| negative abstention | 0/2 | 0/2 |
+| confidence ECE | 0.61 | 0.63 |
+
+**The distractors accounted for half the top-3 gap, but not the top-1 gap.**
+Dropping the traffic driver / flag daemon / ingress proxy doubles top-3 recall
+(22% → 44%) — the injected service reaches the shortlist in twice as many cases —
+which confirms the filter is a genuine improvement on unseen data, not just eval
+hygiene. But **top-1 stays at 0%**: in every case where the truth now makes top-3,
+it lands at position **#2 or #3, never #1** (adHighCpu → `ad` #2; productCatalog →
+`product-catalog` #2; recommendationCache → `recommendation` #2;
+loadGeneratorFlood → `frontend` #3).
+
+The surviving misses skew toward the model ranking a high-traffic **caller** over
+the true culprit — `paymentFailure`/`paymentUnreachable` (truth `payment`) rank
+`checkout` / `cart` / `ad` first; `cartFailure` ranks `product-catalog` first. This
+is the propagation-fault signature `docs/rca-direction.md` predicted: the exception
+surfaces downstream of the injected service, and the ranker settles on the busy
+neighbour rather than walking call-direction back to the origin — even though traces
+are captured. So the residual gap is a **model/feature gap in top-1 precision**, not
+merely distractor contamination.
+
+Two caveats stand unchanged by the filter: **abstention is still 0/2** (both healthy
+windows produce an explanation from load-generator background traffic — a real
+false-alarm/calibration gap), and `kafka` remains unwinnable as posed (no
+`service.name=kafka` in telemetry, so it can never be a candidate — a corpus fix,
+not a model one).
+
+**Verdict.** The filter is worth keeping (top-3 recall doubled, deployment-agnostic
+default-empty per #81). It does **not** rescue top-1 on an unseen deployment — the
+"good RCAEval-benchmark model, not yet a general RCA model" conclusion holds, and the
+next generation needs call-direction features that survive leave-one-system-out, plus
+an abstention path for healthy windows, before a model-on-by-default is defensible.
+Not yet measured: longer capture windows (unlikely to move a top-1 that is a
+precision/feature gap rather than a signal-volume one) and a larger corpus.
