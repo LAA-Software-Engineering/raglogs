@@ -1,0 +1,26 @@
+# raglogs #79 — make the OTel Demo Collector write OTLP-JSON for the corpus
+# generator. The demo merges this file into its base collector config
+# (src/otel-collector/otelcol-config-extras.yml). Copy it there.
+#
+# One `file` exporter per signal, written to /export (mounted by
+# deploy/otel-demo/compose.override.yml). The file exporter appends one OTLP-JSON
+# object per line; scripts/eval/otel_corpus.py reads logs.json / traces.json /
+# metrics.json and window-filters per case (src/eval/otlp.py).
+exporters:
+  file/logs:
+    path: /export/logs.json
+  file/traces:
+    path: /export/traces.json
+  file/metrics:
+    path: /export/metrics.json
+
+# The demo deep-merges pipelines, so listing the file exporter here adds it
+# alongside the demo's existing exporters rather than replacing them.
+service:
+  pipelines:
+    logs:
+      exporters: [file/logs]
+    traces:
+      exporters: [file/traces]
+    metrics:
+      exporters: [file/metrics]

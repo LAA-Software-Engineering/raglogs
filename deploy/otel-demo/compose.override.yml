@@ -1,0 +1,14 @@
+# raglogs #79 — mount an export dir into the OTel Demo Collector so its file
+# exporters (see otelcol-config-extras.yml) land where the corpus generator reads.
+#
+# Usage: copy this into your opentelemetry-demo checkout as
+# `docker-compose.override.yml` (compose auto-merges it), create ./export, then
+# `docker compose up -d`. Point the generator at that dir:
+#   python scripts/eval/otel_corpus.py --otlp-dir /abs/path/to/opentelemetry-demo/export
+#
+# The service name matches the OTel Demo's collector container. If your demo
+# version names it differently (older versions used `otelcol`), rename the key.
+services:
+  otel-collector:
+    volumes:
+      - ./export:/export
