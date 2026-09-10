@@ -33,6 +33,7 @@ from src.eval.otel_demo import (
     generate_chaos_incident,
     generate_incident,
     set_flag_variant,
+    set_flag_variant_file,
 )
 from src.eval.otlp import capture_from_otlp_dir
 
@@ -41,6 +42,14 @@ def _flagd_flip(flagd_url: str):
     def flip(flag: str, variant: str) -> None:
         set_flag_variant(flagd_url, flag, variant)
         print(f"    flagd: {flag} -> {variant}", flush=True)
+
+    return flip
+
+
+def _flagd_file_flip(flagd_file: Path):
+    def flip(flag: str, variant: str) -> None:
+        set_flag_variant_file(flagd_file, flag, variant)
+        print(f"    flagd(file): {flag} -> {variant}", flush=True)
 
     return flip
 
@@ -77,6 +86,8 @@ def _dry_chaos_hooks():
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--flagd-url", default="http://localhost:8080")
+    ap.add_argument("--flagd-file", type=Path, default=None,
+                    help="patch flagd's demo.flagd.json directly (hot-reload) instead of the write API")
     ap.add_argument("--otlp-dir", type=Path, help="Collector OTLP-JSON export dir (required unless --dry-run)")
     ap.add_argument("--out-dir", type=Path, default=Path("data/eval-cases/otel"))
     ap.add_argument("--baseline", type=int, default=300)
@@ -115,7 +126,12 @@ def main() -> int:
         print(f"\nwrote {len(written)} chaos cases -> {args.out_dir}")
         return 0
 
-    flip = _dry_flip if args.dry_run else _flagd_flip(args.flagd_url)
+    if args.dry_run:
+        flip = _dry_flip
+    elif args.flagd_file is not None:
+        flip = _flagd_file_flip(args.flagd_file)
+    else:
+        flip = _flagd_flip(args.flagd_url)
 
     # one case per built-in failure flag
     for sc in FLAG_SCENARIOS:
