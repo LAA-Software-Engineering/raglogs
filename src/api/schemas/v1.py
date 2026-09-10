@@ -61,18 +61,22 @@ class TimeWindow(BaseModel):
 
 class Confidence(BaseModel):
     label: str
-    # Ordinal rank in [0,1] derived from ``label`` — NOT a calibrated
-    # probability. A "high" ranks above a "medium"; the number is not
-    # P(explanation correct). Configurable via ``confidence_score_*`` and not
-    # yet fitted to measured accuracy (#83). Read ``label`` for the decision.
+    # When ``calibrated`` is true (a ranker + calibrator are configured, #83),
+    # ``score`` is a calibrated **P(the predicted root-cause service is correct)**
+    # and ``label`` is bucketed from it — NB this is confidence in the root-cause
+    # *service*, not that the whole narrative / trigger / causal chain is right.
+    # When false (legacy path), ``score`` is an ordinal rank derived from
+    # ``label`` (not a probability); read ``label`` for the decision.
     score: float = Field(
         ge=0.0,
         le=1.0,
         description=(
-            "Ordinal confidence rank in [0,1] derived from the label, not a "
-            "calibrated probability. Prefer `label`."
+            "When `calibrated`, a calibrated P(predicted root-cause service "
+            "correct) in [0,1]; otherwise an ordinal rank derived from the label "
+            "(not a probability) — prefer `label`."
         ),
     )
+    calibrated: bool = False
 
 
 class TriggerInfo(BaseModel):
@@ -479,6 +483,15 @@ def trigger_from_mapping(
     return trigger_from_candidates(candidates, primary)
 
 
+def _confidence_for_result(result: ExplainResult) -> Confidence:
+    """Confidence for a fresh result: calibrated P(root cause) as the score when a
+    calibrator produced it (#83), else the legacy ordinal rank."""
+    p = getattr(result, "predicted_root_cause_confidence", None)
+    if isinstance(p, (int, float)):
+        return Confidence(label=str(result.confidence), score=float(p), calibrated=True)
+    return confidence_from_value(result.confidence)
+
+
 def confidence_from_value(raw: Any) -> Confidence:
     if isinstance(raw, Confidence):
         return raw
@@ -537,7 +550,7 @@ def explain_from_result(
         schema_version=SCHEMA_VERSION,
         scope=scope,
         window=window_from_bounds(result.window_start, result.window_end),
-        confidence=confidence_from_value(result.confidence),
+        confidence=_confidence_for_result(result),
         summary=short_summary(prose),
         trigger=trigger_from_candidates(result.trigger_candidates, primary),
         primary_cluster=primary,

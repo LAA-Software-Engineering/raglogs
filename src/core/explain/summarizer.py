@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from src.config import get_settings
 from src.core.clustering.clusterer import run_clustering
-from src.core.explain.confidence import compute_confidence
+from src.core.explain.confidence import compute_confidence, label_from_calibrated_probability
 from src.core.explain.evidence import EvidencePacket, assemble_evidence
 from src.core.explain.templates import render_insufficient_evidence, render_text_summary
 from src.core.llm.provider import build_llm_provider
@@ -181,13 +181,21 @@ def _explain_window(
         db, scope, window_start, window_end, baseline_window, settings
     )
 
+    # #83: when a ranker + calibrator produced a calibrated P(top-1 root-cause
+    # correct), the confidence LABEL is bucketed from that probability instead of
+    # the (uncalibrated) ordinal points. It then means "confidence the predicted
+    # root-cause service is correct", not the whole narrative. No calibrator ->
+    # rca_confidence is None -> legacy ordinal label (unchanged).
+    if rca_confidence is not None:
+        confidence = label_from_calibrated_probability(rca_confidence)
+
     # 4. Handle empty case
     if not clusters or packet.primary_cluster is None:
         return ExplainResult(
             window_start=window_start,
             window_end=window_end,
             summary_text=render_insufficient_evidence(window_start, window_end, packet.total_logs),
-            confidence="low",
+            confidence=confidence if rca_confidence is not None else "low",
             evidence_items=packet.evidence_items,
             services_affected=packet.services_affected,
             total_logs=packet.total_logs,

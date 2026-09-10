@@ -34,6 +34,24 @@ def score_from_label(label: str) -> float:
     return _label_scores().get(label, 0.0)
 
 
+def label_from_calibrated_probability(p: float) -> str:
+    """Bucket a calibrated P(top-1 root-cause correct) into a confidence label
+    (#83). Bands are probability ranges (``confidence_calibrated_*`` settings)
+    because the input is a genuine calibrated probability, not an ordinal score.
+
+    NB the label here means "confidence that the predicted root-cause **service**
+    is correct" — not that the whole narrative / trigger / causal chain is right.
+    """
+    s = get_settings()
+    if p >= s.confidence_calibrated_high:
+        return "high"
+    if p >= s.confidence_calibrated_medium_high:
+        return "medium-high"
+    if p >= s.confidence_calibrated_medium:
+        return "medium"
+    return "low"
+
+
 def compute_confidence_points(packet: EvidencePacket) -> int:
     """Integer evidence score used by ``compute_confidence``.
 
