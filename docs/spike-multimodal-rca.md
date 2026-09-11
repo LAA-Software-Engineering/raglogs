@@ -83,5 +83,45 @@ Reading the ablation:
 - `predict_proba` here is a *ranking score*, not calibrated `P(top-1 correct)` —
   confidence calibration is a separate Phase D step (see the design doc).
 
+## Gen-2 attempt: call-direction feature — NEGATIVE (2026-09-11)
+
+The frozen OTel-Demo run (#79, `docs/eval-otel-demo.md`) showed the ranker's top-1
+gap is the *propagation* signature: it ranks the busy **caller** (e.g. `checkout`)
+over the true culprit **callee** (`payment`) it depends on. So the obvious gen-2
+feature is a **call-direction** score `tr_calldir` per candidate service: from the
+caller→callee trace graph (`src/core/rca/linkage.ServiceGraph`), weighted by
+log-error volume,
+
+  `tr_calldir = (erroring_callers − erroring_callees) / (sum + eps)  ∈ [−1, 1]`
+
+`+1` = every failing neighbour *depends on* the service (propagation origin);
+`−1` = it only *calls* failing downstream services (symptom). Added as the
+`all + presence + calldir` ablation (`_call_direction` + graph columns in
+`_trace_features`).
+
+**Result — a wash on RE3 LOSO:**
+
+| variant | overall | ob | ss | tt |
+|---|---|---|---|---|
+| all + presence | **63.3%** | 17/30 | 24/30 | 16/30 |
+| all + presence + calldir | **63.3%** | 17/30 | 25/30 | 15/30 |
+
+The feature is *directionally correct* — true root causes score a mean **+0.5**
+when traces exist (`tt`/`ob`; `ss` has no traces so it is always 0), never
+negative — and separable (positives mean `tr_calldir` 0.344 vs 0.041 for
+non-causes). But it yields **no top-1 lift**: on RCAEval the propagation
+information it encodes is already carried by the trace-rate and metric-anomaly
+features the ranker uses, so it is redundant (the ±1-case per-system move is noise
+from a 10th feature perturbing tree splits). It also fires on only ~⅓ of positives
+because it weights by *log* errors, which the trace-only propagation faults lack.
+
+**Decision:** held as a negative result — **not** shipped into
+`src/core/rca/features.py` / `FEATURE_NAMES` / the model artifact (kept only as
+this reproducible spike ablation), same disposition as the earlier onset/novelty
+washes. It targets a failure mode (OTel top-1) that is *frozen for model
+selection*, so a wash on the RCAEval dev corpus is the stop signal. Revisit only
+if a future external corpus shows the existing trace/metric features fail to
+capture propagation there.
+
 _Part of #118 / #74. Numbers 2026-09-09. Headline: **60.0% RE3 LOSO** with
 modality-presence flags (48.9% without); logs-only baseline 28.9%._
