@@ -53,18 +53,25 @@ input `x` must itself be a **stabilized, dimensionless-ish effect size** *before
 the saturating transform maps it to `[0, 1]`:
 
 ```
-x_log = log(1 + incident_error_rate) − log(1 + baseline_error_rate)   # stabilized effect size
-s_log = 1 − exp(−x_log / τ_log)                                       # then saturate to [0,1]
+x_log = max(0, log(1 + incident_error_rate) − log(1 + baseline_error_rate))   # stabilized, clamped ≥ 0
+s_log = 1 − exp(−x_log / τ_log)                                               # then saturate to [0,1]
 ```
 
-- **Log arm** — use the stabilized log-rate difference (or another dimensionless,
-  bounded-ish anomaly) as `x_log`, **not** the raw incident/baseline ratio. The
-  `log(1+·)` on each rate keeps a near-zero baseline from producing a pathological
-  input in the first place; `1 − exp(−x_log/τ_log)` then saturates it.
+- **Clamp the effect size at 0.** The log-rate difference is **negative** when the
+  incident window is *quieter* than baseline; fed straight into `1 − exp(−x/τ)` that
+  yields a negative "anomaly score". The gate only cares about elevation, so take
+  `x = max(0, effect size)` before saturating — a below-baseline window is simply
+  "no anomaly" (`s = 0`), not negative evidence.
+- **Log arm** — use the clamped stabilized log-rate difference (or another
+  dimensionless, bounded-ish anomaly) as `x_log`, **not** the raw incident/baseline
+  ratio. The `log(1+·)` on each rate keeps a near-zero baseline from producing a
+  pathological input in the first place; the clamp + `1 − exp(−x_log/τ_log)` then
+  saturates it.
 - **Trace arm** (`tr_rate`/`tr_dur`) and **metric arm** (`met_anom`) get the *same*
-  treatment: form a stabilized effect size, then the same saturating family with
-  their own scales, so all three arms live on an equivalent `[0, 1]` scale before
-  fusion.
+  treatment: form a stabilized effect size, **clamp at 0** (a two-sided metric uses
+  `|deviation|` or the relevant one-sided elevation), then the same saturating
+  family with their own scales, so all three arms live on an equivalent `[0, 1]`
+  scale before fusion.
 
 ### Fusion
 
@@ -131,11 +138,24 @@ like the ranker/calibrator artifact paths. Rationale:
 
 ## Calibration & eval plan
 
-- Select `τ_log` / `τ_trace` / `τ_metric` **and** the abstention threshold on
-  **RCAEval development data only** (incident windows vs pre-injection healthy
-  windows, as in the spike), then **freeze all of them** before the next untouched
-  external run — otherwise the external corpus quietly becomes training data (same
-  discipline as the frozen ranker/calibrator and #83).
+- **Select on training folds, measure on held-out folds — nested / system-wise.**
+  Because we tune several hyperparameters (`τ_log`/`τ_trace`/`τ_metric`) *plus* an
+  operating point (the threshold), selecting them and then reporting on the *same*
+  RCAEval cases would overfit the threshold and inflate the result. Use
+  leave-one-system-out folds, consistent with the rest of #118:
+
+  ```
+  for each held-out system:
+      train systems:  choose τ_log / τ_trace / τ_metric
+                      choose threshold satisfying the recall constraint
+      held-out system: measure incident recall + healthy abstention
+  # rotate over systems; report the held-out numbers
+  ```
+
+  The *shipped* `τ_*` + threshold are then re-fit on all RCAEval development data and
+  **frozen** before the next untouched external run — but the reported performance is
+  the held-out estimate, not the in-sample fit (same discipline as the frozen
+  ranker/calibrator and #83).
 - **Choose the threshold by a constrained objective, not balanced accuracy** — the
   cost is asymmetric (suppressing a real incident is the expensive mistake):
 
