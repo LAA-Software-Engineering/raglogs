@@ -44,24 +44,27 @@ service?" (see *Where it plugs in*).
 
 ### Per-modality normalization (the important part)
 
-Each modality's raw anomaly quantity `x ≥ 0` (relative/anomaly quantities, not raw
-counts, wherever possible) is mapped to `[0, 1]` by a **fixed saturating transform**:
+**Stabilize first, saturate second.** Bounding a quantity is *not* the same as
+making it portable. `s = 1 − exp(−x/τ)` stops a `1e8` ratio from exploding
+numerically, but if `x_log` is enormous *because the baseline error rate is nearly
+zero*, saturation just maps `4.7e7 → 0.999999…` — the instability is hidden, not
+removed, and the score still isn't comparable across workloads. So each modality's
+input `x` must itself be a **stabilized, dimensionless-ish effect size** *before*
+the saturating transform maps it to `[0, 1]`:
 
 ```
-s = 1 − exp(−x / τ)            # preferred: smooth, saturating, one scale τ
+x_log = log(1 + incident_error_rate) − log(1 + baseline_error_rate)   # stabilized effect size
+s_log = 1 − exp(−x_log / τ_log)                                       # then saturate to [0,1]
 ```
 
-(equivalently a clipped log transform `s = clip(log(1+x) / log(1+x_cap), 0, 1)`).
-
-- **Log arm** is the one that must be tamed: `x_log` is a relative error-anomaly
-  (e.g. incident-vs-baseline error-rate elevation), passed through `1 − exp(−x/τ_log)`
-  so verbosity/volume can't push it off-scale. `τ_log` is a **fixed scale chosen on
-  the development corpus, then frozen** — it is part of the transform, not a
-  per-deployment knob.
-- **Trace arm** (`tr_rate`/`tr_dur` ratios) and **metric arm** (`met_anom` change
-  ratio) are already bounded-ish; put them through the *same* family of saturating
-  transforms with their own fixed `τ_trace` / `τ_metric` so all three arms live on
-  an equivalent `[0, 1]` scale before fusion.
+- **Log arm** — use the stabilized log-rate difference (or another dimensionless,
+  bounded-ish anomaly) as `x_log`, **not** the raw incident/baseline ratio. The
+  `log(1+·)` on each rate keeps a near-zero baseline from producing a pathological
+  input in the first place; `1 − exp(−x_log/τ_log)` then saturates it.
+- **Trace arm** (`tr_rate`/`tr_dur`) and **metric arm** (`met_anom`) get the *same*
+  treatment: form a stabilized effect size, then the same saturating family with
+  their own scales, so all three arms live on an equivalent `[0, 1]` scale before
+  fusion.
 
 ### Fusion
 
@@ -73,17 +76,29 @@ window_anomaly = max(s_log, s_trace, s_metric)   # over AVAILABLE modalities onl
 matches the spike (a fault that surfaces only in metrics, RE2-style, still trips the
 gate). A missing modality is dropped from the `max`, **not** fed in as `0`: absence
 of traces must not read as "traces say all-clear". Availability is tracked with the
-existing `has_logs` / `has_traces` / `has_metrics` flags.
+existing `has_logs` / `has_traces` / `has_metrics` flags. **With no available
+modalities → abstain** (there is no evidence to diagnose from).
+
+**Caveat `max` hides — the null distribution grows with modality count.** Each `[0,1]`
+arm still has some healthy-window spread, and `max` over more arms gives that noise
+more chances to trip the gate: a tri-modal (`L+T+M`) deployment and a logs-only
+(`L`) deployment do **not** share the same null distribution for
+`max(s_log, s_trace, s_metric)`, even though both scores live in `[0, 1]`. So `[0,1]`
+membership alone does **not** guarantee one universal threshold works everywhere. We
+still start with `max` (it matches the fault model), but the calibration plan below
+makes the per-availability check a hard requirement rather than an afterthought.
 
 ### Two hard rules (portability)
 
-1. **The transform is fixed; only the threshold is learned.** `τ_*` and the fusion
-   are frozen constants. The single number selected from development data is the
-   **abstention threshold** on the `[0, 1]` fused score.
+1. **All parameters are selected on development data, then frozen — the transform
+   scales `τ_*` *and* the abstention threshold alike (the `τ_*` are hyperparameters
+   too). At deployment time, none of them are adapted from local traffic.** That is
+   the scientific contract: the entire mapping from raw signals to abstain/proceed
+   is fixed before a deployment ever runs.
 2. **No inference-time corpus normalization.** Never normalize by corpus min/max or
    percentiles at inference — that would make `0.25` mean different things in
    different installations, re-introducing the very problem we're removing. The
-   `[0, 1]` mapping comes only from the fixed transforms.
+   `[0, 1]` mapping comes only from the frozen transforms.
 
 ## Where it plugs in
 
@@ -121,10 +136,22 @@ like the ranker/calibrator artifact paths. Rationale:
   windows, as in the spike), then **freeze all of them** before the next untouched
   external run — otherwise the external corpus quietly becomes training data (same
   discipline as the frozen ranker/calibrator and #83).
-- Report, at the chosen threshold: incident-explain rate (recall of real
-  incidents — the number that must stay high; suppressing a real incident is the
-  costly error) and healthy-abstention rate, per suite and per system, plus the
-  threshold-free AUC (already RE3 0.927 / RE2 0.917).
+- **Choose the threshold by a constrained objective, not balanced accuracy** — the
+  cost is asymmetric (suppressing a real incident is the expensive mistake):
+
+  ```
+  maximize  healthy-window abstention
+  subject to  incident recall ≥ 99%
+  ```
+
+  The exact floor (99% here) can be measured/debated, but the asymmetry must be
+  explicit in the operating point.
+- **Report per modality-availability pattern.** Because `max`'s null distribution
+  grows with modality count (above), report healthy-abstention and incident-recall
+  **separately for `L`, `L+T`, `L+M`, `L+T+M`** (plus the threshold-free AUC, already
+  RE3 0.927 / RE2 0.917). If those distributions differ materially, **reject a single
+  universal threshold** and calibrate per availability pattern — do not let `[0, 1]`
+  membership give a false sense of universality.
 - Validate the *frozen* gate on a fresh external corpus (a genuinely healthy
   production-style window, not a pre-injection proxy) before considering default-on.
 
@@ -136,9 +163,24 @@ like the ranker/calibrator artifact paths. Rationale:
 2. **Log-arm input `x_log`:** incident-vs-baseline error-rate elevation is the
    spike's signal; should novelty (a cluster absent from baseline) feed it too, or
    does that re-enter the `change_ratio` entanglement we're avoiding?
-3. **Asymmetric cost:** bias the threshold toward *explaining* (never suppress a
-   real incident) even at the cost of more false alarms — i.e. pick the operating
-   point from the recall side, not balanced accuracy?
+3. **Asymmetric cost — resolved:** pick the operating point from the recall side
+   (maximize healthy abstention subject to incident recall ≥ ~99%), not balanced
+   accuracy. Open only on the exact recall floor.
+
+## Where this sits
+
+The gate completes a clean separation of three distinct questions, each its own
+stable signal with its own calibration:
+
+```
+1. Is there actually an incident?        ← abstention gate    (this doc)
+2. Which service is the root cause?       ← RCA ranker         (#118)
+3. How likely is that prediction right?   ← confidence calibrator (#83)
+```
+
+Keeping them separate is the point: the gate must not reuse the ranker's cluster
+`change_ratio` machinery, and the calibrator's `P(top-1 correct)` is not a
+fault-vs-no-fault signal.
 
 _Part of #79 / #118 / #74. No `src/core` change in this doc — design only, pending
 review of posture and the score contract above._
