@@ -112,6 +112,9 @@ def _met_change(case, ws, we, bs, be):
     for c in cols:
         if c == tcol or "_" not in c:
             continue
+        # RCAEval metric columns are `{service}_{metric}` (e.g. `carts_cpu`); split
+        # on the last `_`. A metric name itself containing `_` would misattribute
+        # the service — fine for the RCAEval melt, noted for portability.
         svc = c.rsplit("_", 1)[0]
         vals = t.column(c).to_pylist()
         w, b = [], []

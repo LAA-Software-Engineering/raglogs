@@ -50,7 +50,8 @@ tells "fault vs no fault".
   direct fix for the frozen-eval false alarms (0/2 abstention).
 - It is **multi-modal by construction**: the score maxes over log/trace/metric
   deviations, so a fault that only shows in metrics (RE2-style) can still trip it —
-  though that arm is not yet measured (see caveats).
+  confirmed by the RE2 run above (AUC 0.917), where the metric/trace arms carry the
+  separation.
 
 ## Honest caveats (what a productized version must fix)
 
