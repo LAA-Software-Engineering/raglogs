@@ -41,7 +41,8 @@ from src.core.rca.abstention import (
 from src.eval.rcaeval import _infer_level, parse_case_dir_name, parse_inject_time
 
 REPO_ID = "phamquiluan/RCAEval"
-CACHE = Path("/tmp/claude-1000/-home-leonardo-GitHub-raglogs/21cfcd59-4c37-42e9-abfd-55fe8b41ef92/scratchpad/abstention_cal.jsonl")
+# Repo-relative, under the gitignored data/ dir — portable and never committed.
+CACHE = Path(__file__).resolve().parents[1] / "data" / "abstention_cal.jsonl"
 TAU_GRID = [0.25, 0.5, 1.0, 2.0, 4.0]
 
 
@@ -155,6 +156,7 @@ def extract(suites, width, out: Path):
             print(f"  {case}")
         except Exception as e:  # noqa: BLE001
             print(f"  skip {case}: {type(e).__name__} {str(e)[:80]}")
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
     print(f"wrote {len(rows)} window-rows -> {out}")
     return rows
