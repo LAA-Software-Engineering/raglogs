@@ -165,14 +165,14 @@ def _avail_pattern(row) -> str:
     return "".join(k for k, m in (("L", "logs"), ("T", "traces"), ("M", "metrics")) if row[m])
 
 
-def _score(row, taus) -> float:
+def _score(row, taus, drop=frozenset()) -> float:
     tl, tt, tm = taus
     logs = traces = metrics = None
-    if row["logs"]:
+    if row["logs"] and "logs" not in drop:
         logs = max(log_rate_anomaly(i, b, tl) for i, b in row["logs"].values())
-    if row["traces"]:
+    if row["traces"] and "traces" not in drop:
         traces = max(ratio_anomaly(r, tt) for r in row["traces"].values())
-    if row["metrics"]:
+    if row["metrics"] and "metrics" not in drop:
         metrics = max(magnitude_anomaly(c, tm) for c in row["metrics"].values())
     return window_anomaly(logs=logs, traces=traces, metrics=metrics).score
 
@@ -188,13 +188,15 @@ def _threshold_for_recall(pos_scores, floor):
     return best
 
 
-def _select(train, floor):
+def _select(train, floor, drop=frozenset()):
     """Grid-search taus; for each, threshold = recall-floor point; pick the taus
     maximising healthy abstention on train at that threshold."""
     best = None
-    for taus in product(TAU_GRID, TAU_GRID, TAU_GRID):
-        pos = [_score(r, taus) for r in train if r["label"] == 1]
-        neg = [_score(r, taus) for r in train if r["label"] == 0]
+    # A dropped arm's tau is irrelevant — collapse its grid to one value.
+    grids = tuple([1.0] if m in drop else TAU_GRID for m in ("logs", "traces", "metrics"))
+    for taus in product(*grids):
+        pos = [_score(r, taus, drop) for r in train if r["label"] == 1]
+        neg = [_score(r, taus, drop) for r in train if r["label"] == 0]
         if not pos or not neg:
             continue
         thr = _threshold_for_recall(pos, floor)
@@ -205,9 +207,10 @@ def _select(train, floor):
     return best[1], best[2]  # taus, threshold
 
 
-def calibrate(rows, floor):
+def calibrate(rows, floor, drop=frozenset()):
     systems = sorted({r["system"] for r in rows})
-    print(f"\n=== abstention calibration (nested LOSO, recall floor {floor:.0%}) ===")
+    print(f"\n=== abstention calibration (nested LOSO, recall floor {floor:.0%}"
+          f"{', DROP ' + ','.join(sorted(drop)) if drop else ''}) ===")
     print(f"systems: {systems}  windows: {len(rows)}")
 
     ho_pos, ho_neg = defaultdict(list), defaultdict(list)  # per availability pattern
@@ -215,9 +218,9 @@ def calibrate(rows, floor):
     for held in systems:
         train = [r for r in rows if r["system"] != held]
         test = [r for r in rows if r["system"] == held]
-        taus, thr = _select(train, floor)
+        taus, thr = _select(train, floor, drop)
         for r in test:
-            s = _score(r, taus)
+            s = _score(r, taus, drop)
             pat = _avail_pattern(r)
             if r["label"] == 1:
                 overall["rec_n"] += 1
@@ -241,7 +244,7 @@ def calibrate(rows, floor):
         print(f"  {pat:5s} recall {pr:>8s}  abstention {nr:>8s}")
 
     # Final frozen params: re-fit on ALL development data.
-    taus, thr = _select(rows, floor)
+    taus, thr = _select(rows, floor, drop)
     print(f"\nFROZEN defaults (re-fit on all dev data): tau_log/trace/metric={taus} threshold={thr:.3f}")
     print("  (report the HELD-OUT numbers above as the gate's performance, not an in-sample fit)")
 
@@ -253,13 +256,15 @@ def main():
     ap.add_argument("--recall-floor", type=float, default=0.99)
     ap.add_argument("--cache", type=Path, default=CACHE)
     ap.add_argument("--use-cache", action="store_true", help="skip extraction, read --cache")
+    ap.add_argument("--drop", default="", help="comma-separated modalities to drop from fusion (logs,traces,metrics)")
     args = ap.parse_args()
     suites = tuple(s.strip() for s in args.suites.split(",") if s.strip())
+    drop = frozenset(s.strip() for s in args.drop.split(",") if s.strip())
     if args.use_cache and args.cache.exists():
         rows = [json.loads(x) for x in args.cache.read_text().splitlines() if x.strip()]
     else:
         rows = extract(suites, args.width, args.cache)
-    calibrate(rows, args.recall_floor)
+    calibrate(rows, args.recall_floor, drop)
 
 
 if __name__ == "__main__":
