@@ -95,14 +95,20 @@ def _log_features(case, inject):
 
 
 def _trace_features(case, inject):
+    from src.core.rca.linkage import service_graph_from_spans
+
     import pyarrow.parquet as pq
 
     try:
-        t = pq.read_table(_dl(case, "traces.parquet"), columns=["serviceName", "startTimeMillis", "duration"]).to_pylist()
+        t = pq.read_table(
+            _dl(case, "traces.parquet"),
+            columns=["serviceName", "startTimeMillis", "duration", "spanID", "parentSpanID"],
+        ).to_pylist()
     except Exception:  # noqa: BLE001
-        return {}, {}
+        return {}, {}, service_graph_from_spans(())
     bc, ic = Counter(), Counter()
     bd, idur = defaultdict(list), defaultdict(list)
+    incident_spans = []  # (span_id, parent_span_id, service) over the incident window
     for r in t:
         sec = _sec(r["startTimeMillis"])
         s = r["serviceName"]
@@ -118,11 +124,12 @@ def _trace_features(case, inject):
         elif inject <= sec <= inject + POST:
             ic[s] += 1
             idur[s].append(d)
+            incident_spans.append((r["spanID"], r["parentSpanID"], s))
     rate, dur = {}, {}
     for s in ic:
         rate[s] = (ic[s] / POST + 1e-9) / (bc.get(s, 0) / PRE + 1e-9)
         dur[s] = (_p95(idur.get(s, [])) + 1) / (_p95(bd.get(s, [])) + 1)
-    return rate, dur
+    return rate, dur, service_graph_from_spans(incident_spans)
 
 
 def _metric_features(case, inject):
@@ -160,6 +167,30 @@ def _metric_features(case, inject):
     return dict(anom)
 
 
+def _call_direction(err, graph):
+    """Directional propagation signal per service in ``[-1, 1]`` from the
+    caller→callee trace graph, weighted by log-error volume. ``+1`` = every
+    failing neighbour depends on the service (it is the propagation origin);
+    ``-1`` = it only calls failing downstream services (symptom). See the
+    #118 gen-2 ablation in docs/spike-multimodal-rca.md — kept as a spike, NOT
+    a shipped feature (measured a wash on RE3 LOSO)."""
+    if graph.empty or not err:
+        return {}
+    in_err, out_err = defaultdict(int), defaultdict(int)
+    for a, b in graph.edges:  # a calls b
+        ea, eb = err.get(a, 0), err.get(b, 0)
+        if ea:
+            in_err[b] += ea   # a is an erroring caller of b
+        if eb:
+            out_err[a] += eb  # b is an erroring callee of a
+    calldir = {}
+    for s in set(in_err) | set(out_err):
+        i, o = in_err.get(s, 0), out_err.get(s, 0)
+        if i + o:
+            calldir[s] = (i - o) / (i + o + 1e-9)
+    return calldir
+
+
 def _canon(s):
     return s.replace("-", "").replace("_", "").lower()
 
@@ -180,8 +211,9 @@ def extract(suites=("re3",), out: Path = CACHE):
             continue
         try:
             err, grp, stack = _log_features(case, inject)
-            rate, dur = _trace_features(case, inject)
+            rate, dur, graph = _trace_features(case, inject)
             met = _metric_features(case, inject)
+            calldir = _call_direction(err, graph)
         except Exception as e:  # noqa: BLE001
             print(f"  skip {case}: {type(e).__name__} {str(e)[:80]}")
             continue
@@ -199,6 +231,7 @@ def extract(suites=("re3",), out: Path = CACHE):
                 "label": int(_canon(s) == truth),
                 "log_err": err.get(s, 0), "log_grp": grp.get(s, 0), "log_stack": stack.get(s, 0),
                 "tr_rate": rate.get(s, 0.0), "tr_dur": dur.get(s, 0.0),
+                "tr_calldir": calldir.get(s, 0.0),
                 "met_anom": met.get(s, 0.0),
                 "has_logs": has_logs, "has_traces": has_traces, "has_metrics": has_metrics,
             })
@@ -210,17 +243,22 @@ def extract(suites=("re3",), out: Path = CACHE):
 
 LOG = ["log_err", "log_grp", "log_stack"]
 TRACE = ["tr_rate", "tr_dur"]
+CALLDIR = ["tr_calldir"]
 METRIC = ["met_anom"]
 PRESENCE = ["has_logs", "has_traces", "has_metrics"]
 
 # Ablations: which feature groups the model sees. Tests whether the lift is
 # real multi-modal signal vs a missingness shortcut (ChatGPT review point 2).
+# The last two isolate the call-direction feature's contribution (#118 gen-2):
+# it targets the top-1 gap the frozen OTel run exposed (ranker picks the busy
+# caller over the true culprit callee).
 VARIANTS = {
     "logs-only": LOG,
     "logs+traces": LOG + TRACE,
     "logs+metrics": LOG + METRIC,
     "all (no presence)": LOG + TRACE + METRIC,
     "all + presence": LOG + TRACE + METRIC + PRESENCE,
+    "all + presence + calldir": LOG + TRACE + METRIC + PRESENCE + CALLDIR,
 }
 
 
