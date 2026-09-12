@@ -31,10 +31,17 @@ import statistics
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.core.rca.abstention import (
+    WindowAnomaly,
+    log_rate_anomaly,
+    magnitude_anomaly,
+    window_anomaly,
+)
 from src.db.models import LogEntry, MetricSample, TraceSpan
 
 # Error levels that count toward root-cause attribution — matches the trivial
@@ -271,3 +278,85 @@ def compute_features(
     rate, dur = trace_features(span_rows, baseline_start, incident_start, incident_end)
     anom = metric_features(metric_rows, baseline_start, incident_start, incident_end)
     return assemble_features(err, grp, stack, rate, dur, anom)
+
+
+def log_rate_arm(
+    entries, baseline_start: datetime, incident_start: datetime, incident_end: datetime,
+    *, tau_log: float,
+) -> Optional[float]:
+    """Log arm of the abstention gate: ``max`` over services of the saturated
+    incident-vs-baseline **error-rate** anomaly. Returns ``None`` when the scope has
+    no log entries in the window at all (logs modality absent), so the gate treats
+    it as "no evidence from logs", not "logs say all-clear"."""
+    pre = _seconds(baseline_start, incident_start)
+    post = _seconds(incident_start, incident_end)
+    inc_err: Counter = Counter()
+    base_err: Counter = Counter()
+    seen = False
+    for e in entries:
+        ts, s = e.timestamp, e.service
+        if ts is None or not (baseline_start <= ts <= incident_end):
+            continue
+        seen = True
+        if (e.level or "").lower() not in _ERROR_LEVELS:
+            continue
+        if incident_start <= ts <= incident_end:
+            inc_err[s] += 1
+        elif baseline_start <= ts < incident_start:
+            base_err[s] += 1
+    if not seen:
+        return None
+    services = set(inc_err) | set(base_err)
+    if not services:
+        return 0.0  # logs present but no errors either window → no anomaly
+    return max(
+        log_rate_anomaly(inc_err.get(s, 0) / post, base_err.get(s, 0) / pre, tau_log)
+        for s in services
+    )
+
+
+def metric_arm(
+    samples, baseline_start: datetime, incident_start: datetime, incident_end: datetime,
+    *, tau_metric: float,
+) -> Optional[float]:
+    """Metric arm of the abstention gate: ``max`` over services of the saturated
+    per-service metric mean-change magnitude. ``None`` when no metrics are present."""
+    anom = metric_features(samples, baseline_start, incident_start, incident_end)
+    # metric_features already returns per-service max change; None if no metric rows
+    # contributed to a ratio. Distinguish "no metrics at all" from "no change".
+    if not samples:
+        return None
+    return max((magnitude_anomaly(c, tau_metric) for c in anom.values()), default=0.0)
+
+
+def compute_window_anomaly(
+    db: Session,
+    scope: str,
+    *,
+    incident_start: datetime,
+    incident_end: datetime,
+    baseline_start: datetime,
+    tau_log: float,
+    tau_metric: float,
+) -> WindowAnomaly:
+    """Abstention gate score (#79) for a ``(scope, window)`` — **logs + metrics
+    only** (traces are a localisation signal, not a detector; see
+    ``docs/eval-abstention.md``). Fuses the per-modality saturated anomalies by
+    ``max`` over available modalities; a missing modality is absent, not 0."""
+    log_rows = db.execute(
+        select(LogEntry).where(
+            LogEntry.scope == scope,
+            LogEntry.timestamp >= baseline_start,
+            LogEntry.timestamp <= incident_end,
+        )
+    ).scalars().all()
+    metric_rows = db.execute(
+        select(MetricSample).where(
+            MetricSample.scope == scope,
+            MetricSample.ts >= baseline_start,
+            MetricSample.ts <= incident_end,
+        )
+    ).scalars().all()
+    logs = log_rate_arm(log_rows, baseline_start, incident_start, incident_end, tau_log=tau_log)
+    metrics = metric_arm(metric_rows, baseline_start, incident_start, incident_end, tau_metric=tau_metric)
+    return window_anomaly(logs=logs, metrics=metrics)
