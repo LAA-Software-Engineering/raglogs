@@ -225,3 +225,68 @@ next generation needs call-direction features that survive leave-one-system-out,
 an abstention path for healthy windows, before a model-on-by-default is defensible.
 Not yet measured: longer capture windows (unlikely to move a top-1 that is a
 precision/feature gap rather than a signal-volume one) and a larger corpus.
+
+## Fresh-corpus whole-system frozen validation (2026-09-12)
+
+The one-shot external validation the whole Gen-2 effort was building toward: a
+**fresh** 21-case corpus (9 flag incidents + **12** healthy negatives, 180 s / 300 s
+windows — the earlier corpus is spent for model selection), scoring the **whole
+frozen system** — ranker *and* the shipped abstention gate (#159) — with nothing
+tuned after capture. Ranker scored on **all** incident windows with the gate off
+(`frozen-eval` enforces `ABSTENTION_ENABLED=false` in code); gate scored separately.
+`RCA_EXCLUDED_SERVICES=load-generator,flagd,frontend-proxy,image-provider`.
+
+**Component — ranker (all 9 incidents, gate off):**
+
+| metric | RCAEval LOSO | spent corpus (2026-09-10) | **fresh corpus** |
+|---|---|---|---|
+| root-cause top-1 | 60–77% | 0% | **33.3%** (3/9) |
+| root-cause top-3 | — | 22% | **55.6%** (5/9) |
+| confidence ECE | 0.07–0.20 | 0.61 | **0.331** |
+
+Per fault class: code 50% (n=2), dependency 50% (n=2), resource 20% (n=5). So the
+ranker **does partially generalise** on a fresh, cleanly-generated corpus — top-1
+0% → 33%, top-3 22% → 56%, ECE 0.61 → 0.33 vs the first (short-window, distractor-
+heavy) run. It degrades from the in-distribution 60–77% but does not collapse;
+resource faults (metric-driven) remain the weakest.
+
+**Component — abstention gate, and end-to-end — the gate does NOT transfer:**
+
+| gate | value |  | end-to-end | value |
+|---|---|---|---|---|
+| incident recall | 100% (9/9) |  | overall coverage | 100% |
+| healthy abstention | **0%** (0/12) |  | selective top-1 | 33.3% |
+|  |  |  | false-diagnosis (healthy) | **100%** (12/12) |
+
+The gate **never abstains** — it proceeds on all 12 healthy windows (false-diagnosis
+100%). Root cause, diagnosed against the live DB: the **metric arm saturates to 1.0
+on healthy OTel windows** while the log arm is correctly 0.0 —
+
+```
+otel_healthy_1   log_arm=0.0  metric_arm=1.0   score=1.000  (threshold 0.377)
+```
+
+OTel exports **raw OTLP metrics including cumulative/monotonic counters**, whose
+windowed mean grows over time, so `|mean_incident − mean_baseline| / mean_baseline`
+is large on *every* window, healthy or not. RCAEval's metrics were gauge-like, so
+the same transform separated cleanly there (78.9% held-out abstention). This is a
+**metric-representation mismatch**, not a threshold that needs nudging — exactly the
+kind of failure a one-shot external validation exists to expose, and which RCAEval
+nested-LOSO completely hid.
+
+**Verdict.**
+- **Ranker:** keep, opt-in — it generalises partially (top-1 33% / top-3 56% on
+  unseen OTel). Not yet default-on quality, but real signal, much improved once
+  infra distractors are excluded and the corpus is clean.
+- **Gate:** **do NOT ship default-on.** Before it can, the metric arm must handle
+  cumulative counters (rate/delta or metric-type awareness, not raw windowed mean)
+  and be re-validated externally; the log arm alone behaves correctly (0.0 on
+  healthy). The frozen `logs+metrics` result on RCAEval was real but did not
+  transfer because of the metric representation, not the threshold.
+- The three-question separation held up as a *diagnostic*: because the ranker was
+  scored independently of the gate, the gate's failure did not hide the ranker's
+  genuine improvement, and the arm split localised the gate failure to metrics.
+
+Caveats: single run; 180/300 s windows (varied/larger baselines infeasible via live
+capture); confounded cases not generated; `kafka` unwinnable (no `service.name`);
+9 incidents is small per-fault. Treated as one-shot — no tuning after capture.
