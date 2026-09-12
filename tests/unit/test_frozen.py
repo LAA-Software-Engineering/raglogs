@@ -129,7 +129,7 @@ class TestScoreFrozen:
         g = r["gate"]
         assert g["incident_recall"] == pytest.approx(0.5)      # p1 proceeded of 2
         assert g["healthy_abstention"] == pytest.approx(0.5)   # n1 abstained of 2
-        assert g["coverage"] == pytest.approx(0.5)             # p1,n2 proceeded of 4
+        assert g["overall_coverage"] == pytest.approx(0.5)     # p1,n2 proceeded of 4
         assert g["selective_top1"] == pytest.approx(1.0)       # only p1 covered, and it's a hit
         assert g["false_diagnosis_rate"] == pytest.approx(0.5)  # n2 proceeded on healthy
         by = {c["id"]: c for c in r["cases"]}
@@ -166,6 +166,17 @@ class TestReport:
         assert "frozen external validation" in text
         assert "root-cause top-1" in text
         assert "per fault class" in text
+
+    def test_render_prints_gate_provenance(self):
+        report = score_frozen([_fr(ranked_services=["cart"], abstained=False)])
+        gp = {"modalities": "logs+metrics", "tau_log": 0.25, "tau_metric": 4.0,
+              "threshold": 0.377, "enabled_in_ranker_pass": False}
+        text = render_frozen_report(
+            report, ranker_path="r.json", calibrator_path="c.json", gate_params=gp
+        )
+        assert "Abstention gate:" in text
+        assert "tau_log:" in text and "0.377" in text
+        assert "enabled in ranker pass:  false" in text
 
 
 class TestEce:

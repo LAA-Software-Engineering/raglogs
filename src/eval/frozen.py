@@ -151,8 +151,9 @@ def score_frozen(results: list[FrozenCaseResult]) -> dict:
         # component: gate alone
         "incident_recall": _rate([not r.abstained for r in gated_pos]),
         "healthy_abstention": _rate([bool(r.abstained) for r in gated_neg]),
-        # end-to-end: ranker gated by abstention
-        "coverage": _rate([not r.abstained for r in gated_pos + gated_neg]),
+        # end-to-end: ranker gated by abstention. overall_coverage spans incidents
+        # AND healthy negatives (incident-only coverage == incident_recall above).
+        "overall_coverage": _rate([not r.abstained for r in gated_pos + gated_neg]),
         "selective_top1": _rate([r.correct_top1 for r in covered_pos]),
         "false_diagnosis_rate": _rate([not r.abstained for r in gated_neg]),
     } if (gated_pos or gated_neg) else None
@@ -213,11 +214,22 @@ def _pct(v: Optional[float]) -> str:
     return "  n/a" if v is None else f"{v:6.1%}"
 
 
-def render_frozen_report(report: dict, *, ranker_path: str, calibrator_path: str) -> str:
+def render_frozen_report(
+    report: dict, *, ranker_path: str, calibrator_path: str, gate_params: Optional[dict] = None
+) -> str:
     ece_val = report["confidence_ece"]
     ece_str = "  n/a" if ece_val is None else f"{ece_val:6.3f}"
     lines = ["=== RCA frozen external validation (#79) ===", ""]
     lines += provenance_header(ranker_path=ranker_path, calibrator_path=calibrator_path)
+    if gate_params:
+        lines += [
+            "Abstention gate:",
+            f"  modalities:              {gate_params['modalities']}",
+            f"  tau_log:                 {gate_params['tau_log']}",
+            f"  tau_metric:              {gate_params['tau_metric']}",
+            f"  threshold:               {gate_params['threshold']}",
+            f"  enabled in ranker pass:  {str(gate_params['enabled_in_ranker_pass']).lower()}",
+        ]
     lines += [
         "",
         f"cases: {report['n_cases']}  (positive {report['n_positive']}, negative {report['n_negative']})",
@@ -238,7 +250,7 @@ def render_frozen_report(report: dict, *, ranker_path: str, calibrator_path: str
             f"  {'healthy abstention':<26}{_pct(gate['healthy_abstention'])}",
             "",
             "end-to-end (ranker gated by abstention):",
-            f"  {'coverage':<26}{_pct(gate['coverage'])}",
+            f"  {'overall coverage':<26}{_pct(gate['overall_coverage'])}",
             f"  {'selective top-1':<26}{_pct(gate['selective_top1'])}",
             f"  {'false-diagnosis (healthy)':<26}{_pct(gate['false_diagnosis_rate'])}",
         ]

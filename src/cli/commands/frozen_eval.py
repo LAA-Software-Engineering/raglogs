@@ -27,14 +27,18 @@ def frozen_eval_cmd(
 
     from src.config import get_settings, reload_settings
 
-    # Configure the frozen artifacts for the explain pipeline. Note: the ranker runs
-    # with the abstention gate OFF (default), so it is scored on every incident
-    # window; the gate decision is computed separately below (a good gate must not
-    # be able to hide bad ranker cases by abstaining on them).
+    # Configure the frozen artifacts for the explain pipeline. Force the abstention
+    # gate OFF for the ranker pass — as CODE, not convention: the ranker must be
+    # scored on every incident window (a good gate must not hide bad ranker cases by
+    # abstaining on them), and ABSTENTION_ENABLED is env-configurable, so relying on
+    # its default would let a stray `.env`/shell silently violate the experiment.
+    # The gate is evaluated separately below with its own frozen params.
+    os.environ["ABSTENTION_ENABLED"] = "false"
     os.environ["RCA_RANKER_MODEL_PATH"] = ranker
     os.environ["RCA_CALIBRATOR_MODEL_PATH"] = calibrator
     reload_settings()
     settings = get_settings()
+    assert settings.abstention_enabled is False  # invariant: ranker pass is gate-off
 
     from src.core.explain.summarizer import explain_window
     from src.core.ingestion.service import ingest_files
@@ -93,12 +97,28 @@ def frozen_eval_cmd(
         raise typer.Exit(1)
 
     report = score_frozen(results)
+    # Freeze + provenance the exact gate params actually used (they are
+    # env-overridable, so record the effective values, not just "frozen").
+    gate_params = None
+    if gate:
+        gate_params = {
+            "modalities": "logs+metrics",
+            "tau_log": settings.abstention_tau_log,
+            "tau_metric": settings.abstention_tau_metric,
+            "threshold": settings.abstention_threshold,
+            "enabled_in_ranker_pass": False,
+        }
     if fmt == "json":
         import json
 
         console.print_json(json.dumps({
-            "provenance": {"mode": "frozen external validation", "ranker": ranker, "calibrator": calibrator},
+            "provenance": {
+                "mode": "frozen external validation",
+                "ranker": ranker, "calibrator": calibrator, "gate": gate_params,
+            },
             **report,
         }, default=str))
         return
-    console.print(render_frozen_report(report, ranker_path=ranker, calibrator_path=calibrator))
+    console.print(render_frozen_report(
+        report, ranker_path=ranker, calibrator_path=calibrator, gate_params=gate_params
+    ))
