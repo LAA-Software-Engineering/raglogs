@@ -296,6 +296,25 @@ class TestConvertCaseTelemetry:
         assert by[("adservice", "cpu")] == pytest.approx(0.9)
         assert by[("cartservice", "mem")] == pytest.approx(42.0)
 
+    def test_metric_type_round_trips_and_typeless_stays_bare(self, tmp_path):
+        import json
+
+        from src.core.ingestion.telemetry import ParsedMetricSample
+        from src.eval.rcaeval import _metric_to_jsonl, load_metrics_jsonl
+
+        typed = ParsedMetricSample(service="cart", metric="reqs", value=5.0,
+                                   ts=datetime(2026, 1, 1, tzinfo=timezone.utc), metric_type="counter")
+        bare = ParsedMetricSample(service="cart", metric="cpu", value=0.5,
+                                  ts=datetime(2026, 1, 1, tzinfo=timezone.utc))
+        # type-less serialization omits the key entirely (RCAEval byte-stability)
+        assert "metric_type" not in _metric_to_jsonl(bare)
+        assert _metric_to_jsonl(typed)["metric_type"] == "counter"
+
+        p = tmp_path / "m.jsonl"
+        p.write_text(json.dumps(_metric_to_jsonl(typed)) + "\n" + json.dumps(_metric_to_jsonl(bare)) + "\n")
+        loaded = {s.metric: s.metric_type for s in load_metrics_jsonl(p)}
+        assert loaded == {"reqs": "counter", "cpu": None}  # type survives the round-trip
+
     def test_logs_only_case_writes_no_sidecars(self, tmp_path):
         from src.eval.rcaeval import convert_case
 

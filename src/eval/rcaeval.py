@@ -375,12 +375,19 @@ def _span_to_jsonl(s) -> dict:
 
 
 def _metric_to_jsonl(m) -> dict:
-    return {
+    d = {
         "service": m.service,
         "metric": m.metric,
         "value": m.value,
         "ts": m.ts.isoformat() if m.ts else None,
     }
+    # Round-trip the OTLP instrument type (#79) so the abstention gate can
+    # rate-normalize counters. Only emitted when present, keeping type-less
+    # sources (RCAEval's melted columns) byte-identical.
+    mtype = getattr(m, "metric_type", None)
+    if mtype is not None:
+        d["metric_type"] = mtype
+    return d
 
 
 def load_spans_jsonl(path: Path) -> list:
@@ -426,6 +433,7 @@ def load_metrics_jsonl(path: Path) -> list:
                 metric=d.get("metric", ""),
                 value=d.get("value"),
                 ts=datetime.fromisoformat(ts) if ts else None,
+                metric_type=d.get("metric_type"),
             ))
     return samples
 
