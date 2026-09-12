@@ -38,7 +38,10 @@ def frozen_eval_cmd(
     os.environ["RCA_CALIBRATOR_MODEL_PATH"] = calibrator
     reload_settings()
     settings = get_settings()
-    assert settings.abstention_enabled is False  # invariant: ranker pass is gate-off
+    # Invariant (must survive `python -O`, which strips assert): the ranker pass is
+    # gate-off so the ranker is scored on every incident window.
+    if settings.abstention_enabled:
+        raise RuntimeError("frozen-eval ranker pass requires ABSTENTION_ENABLED=false")
 
     from src.core.explain.summarizer import explain_window
     from src.core.ingestion.service import ingest_files
