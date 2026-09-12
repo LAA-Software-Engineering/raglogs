@@ -187,6 +187,12 @@ class MetricSample(Base):
     service: Mapped[str | None] = mapped_column(String(255), nullable=True)
     metric: Mapped[str] = mapped_column(String(255), nullable=False)
     value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # OTLP instrument semantics (#79): "gauge" | "counter" (monotonic sum) |
+    # "sum" (non-monotonic) | "histogram". Null for sources that don't carry type
+    # (e.g. RCAEval's melted gauge-like columns) — consumers treat null as gauge.
+    # Needed so the anomaly layer normalizes a cumulative counter as a rate rather
+    # than comparing raw cumulative means (which grow with time on healthy traffic).
+    metric_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     ts: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Escape hatch for metric dimensions (route/status/region/…); RCAEval melts
     # its wide {service}_{metric} columns to long form and leaves this null.

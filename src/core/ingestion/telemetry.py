@@ -49,6 +49,9 @@ class ParsedMetricSample:
     value: Optional[float] = None
     ts: Optional[datetime] = None
     attributes: Optional[dict[str, Any]] = None
+    # OTLP instrument type: "gauge" | "counter" (monotonic sum) | "sum" |
+    # "histogram". None when the source doesn't carry type (treated as gauge).
+    metric_type: Optional[str] = None
 
 
 def span_pk(scope: str, s: ParsedSpan) -> uuid.UUID:
@@ -115,6 +118,7 @@ def persist_metric_samples(
             "service": m.service,
             "metric": m.metric,
             "value": m.value,
+            "metric_type": m.metric_type,
             "ts": m.ts,
             "attributes": m.attributes,
             "scope": scope,
