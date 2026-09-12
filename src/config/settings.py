@@ -233,6 +233,11 @@ class Settings(BaseSettings):
     # abstention). Traces are intentionally excluded — the span-rate ratio is a
     # noisy fault-vs-no-fault detector (it stays in the ranker). See
     # docs/design-abstention.md.
+    # NOTE (before default-on): tau/threshold were frozen at symmetric ~300 s
+    # incident+baseline windows. The arms are rate/magnitude-normalized (partly
+    # scale-invariant), but the threshold's transfer to very different window sizes
+    # (e.g. a 24h default baseline vs a 2h incident) is not yet measured — validate
+    # at production window sizes before flipping this on by default.
     abstention_enabled: bool = False
     abstention_tau_log: float = 0.25
     abstention_tau_metric: float = 4.0

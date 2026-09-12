@@ -338,25 +338,41 @@ def compute_window_anomaly(
     baseline_start: datetime,
     tau_log: float,
     tau_metric: float,
+    service: Optional[str] = None,
+    environment: Optional[str] = None,
+    ingestion_job_id=None,
 ) -> WindowAnomaly:
     """Abstention gate score (#79) for a ``(scope, window)`` — **logs + metrics
     only** (traces are a localisation signal, not a detector; see
     ``docs/eval-abstention.md``). Fuses the per-modality saturated anomalies by
-    ``max`` over available modalities; a missing modality is absent, not 0."""
-    log_rows = db.execute(
-        select(LogEntry).where(
-            LogEntry.scope == scope,
-            LogEntry.timestamp >= baseline_start,
-            LogEntry.timestamp <= incident_end,
-        )
-    ).scalars().all()
-    metric_rows = db.execute(
-        select(MetricSample).where(
-            MetricSample.scope == scope,
-            MetricSample.ts >= baseline_start,
-            MetricSample.ts <= incident_end,
-        )
-    ).scalars().all()
+    ``max`` over available modalities; a missing modality is absent, not 0.
+
+    Filters match the view being explained (``service`` / ``environment`` /
+    ``ingestion_job_id``), so the gate judges the same data as the narrative — in
+    particular job-scoping (the CLI's normal mode) keeps the incident/baseline error
+    counts from mixing other ingests in the scope (no cross-job baseline pollution).
+    ``MetricSample`` has no ``environment`` column, so the metric arm is filtered by
+    ``service`` / ``ingestion_job_id`` only."""
+    log_where = [
+        LogEntry.scope == scope,
+        LogEntry.timestamp >= baseline_start,
+        LogEntry.timestamp <= incident_end,
+    ]
+    metric_where = [
+        MetricSample.scope == scope,
+        MetricSample.ts >= baseline_start,
+        MetricSample.ts <= incident_end,
+    ]
+    if service:
+        log_where.append(LogEntry.service == service)
+        metric_where.append(MetricSample.service == service)
+    if environment:
+        log_where.append(LogEntry.environment == environment)
+    if ingestion_job_id is not None:
+        log_where.append(LogEntry.ingestion_job_id == ingestion_job_id)
+        metric_where.append(MetricSample.ingestion_job_id == ingestion_job_id)
+    log_rows = db.execute(select(LogEntry).where(*log_where)).scalars().all()
+    metric_rows = db.execute(select(MetricSample).where(*metric_where)).scalars().all()
     logs = log_rate_arm(log_rows, baseline_start, incident_start, incident_end, tau_log=tau_log)
     metrics = metric_arm(metric_rows, baseline_start, incident_start, incident_end, tau_metric=tau_metric)
     return window_anomaly(logs=logs, metrics=metrics)

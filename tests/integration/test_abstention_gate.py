@@ -41,7 +41,7 @@ def db_session():
         yield db
 
 
-def _errors(db, n, start, span_s):
+def _errors(db, n, start, span_s, job_id=None):
     """Seed ``n`` error logs for 'cart' evenly across ``[start, start+span_s)``."""
     from src.db.models import LogEntry
 
@@ -50,10 +50,23 @@ def _errors(db, n, start, span_s):
         db.add(LogEntry(
             timestamp=start + timedelta(seconds=i * step), service="cart", level="error",
             raw_message="boom", normalized_message="boom", fingerprint="cart-boom", scope=SCOPE,
+            ingestion_job_id=job_id,
         ))
 
 
-def _run(db, enabled, monkeypatch):
+def _job(db):
+    from src.db.models import IngestionJob, Source
+
+    src = Source(name="abstention-test", type="file")
+    db.add(src)
+    db.flush()
+    job = IngestionJob(scope=SCOPE, status="succeeded", source_id=src.id)
+    db.add(job)
+    db.flush()
+    return job.id
+
+
+def _run(db, enabled, monkeypatch, ingestion_job_id=None):
     from src.config import reload_settings
     from src.core.explain.summarizer import explain_window
 
@@ -63,6 +76,7 @@ def _run(db, enabled, monkeypatch):
         return explain_window(
             db=db, window_start=INJECT, window_end=WINDOW_END,
             no_llm=True, baseline_window_str="300s", scope=SCOPE,
+            ingestion_job_id=ingestion_job_id,
         )
     finally:
         monkeypatch.delenv("ABSTENTION_ENABLED", raising=False)
@@ -97,3 +111,17 @@ def test_gate_explains_real_incident(db_session, monkeypatch):
     assert INSUFFICIENT not in on.summary_text
     assert on.primary_cluster is not None
     assert "cart" in on.services_affected
+
+
+def test_gate_is_job_scoped_no_cross_job_pollution(db_session, monkeypatch):
+    # Job A (the one explained) is healthy: flat error rate baseline vs incident.
+    # Job B in the same scope has an incident-window error burst that WOULD spike
+    # the gate if it judged the whole scope. Explaining job A must still abstain.
+    job_a, job_b = _job(db_session), _job(db_session)
+    _errors(db_session, 100, INJECT - timedelta(seconds=300), 300, job_id=job_a)  # flat
+    _errors(db_session, 200, INJECT, 600, job_id=job_a)                            # flat
+    _errors(db_session, 400, INJECT, 600, job_id=job_b)  # novel burst in another job
+    db_session.flush()
+
+    on = _run(db_session, True, monkeypatch, ingestion_job_id=job_a)
+    assert INSUFFICIENT in on.summary_text  # judged job A only, not polluted by B

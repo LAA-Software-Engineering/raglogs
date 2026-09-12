@@ -205,6 +205,10 @@ def _explain_window(
             baseline_start=window_start - parse_duration(baseline_window),
             tau_log=settings.abstention_tau_log,
             tau_metric=settings.abstention_tau_metric,
+            # judge the same view being explained (esp. job-scoping, the CLI norm)
+            service=service,
+            environment=environment,
+            ingestion_job_id=ingestion_job_id,
         )
         if should_abstain(anomaly, settings.abstention_threshold):
             log.info(
