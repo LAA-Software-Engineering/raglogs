@@ -33,7 +33,8 @@ import statistics
 from collections import defaultdict
 from datetime import datetime
 
-_EPS = 1e-9
+from src.core.rca.abstention import saturate  # single source of truth for the transform
+
 _CUMULATIVE = frozenset({"counter", "histogram"})
 
 
@@ -50,14 +51,6 @@ def _rate(points: list[tuple[datetime, float]], secs: float) -> float:
         return 0.0
     vals = [v for _, v in sorted(points)]
     return sum(max(0.0, b - a) for a, b in zip(vals, vals[1:])) / secs
-
-
-def _saturate(x: float, tau: float) -> float:
-    """Bounded, stabilizing map of a non-negative effect size to ``[0, 1)``."""
-    x = max(0.0, x)
-    if tau <= 0:
-        return 1.0 if x > 0 else 0.0
-    return 1.0 - math.exp(-x / tau)
 
 
 def _per_metric_anomaly(
@@ -79,7 +72,7 @@ def _per_metric_anomaly(
         q_base = statistics.mean([v for _, v in key_base])
         q_inc = statistics.mean([v for _, v in key_inc])
     effect = abs(math.log1p(max(0.0, q_inc)) - math.log1p(max(0.0, q_base)))
-    return _saturate(effect, tau)
+    return saturate(effect, tau)
 
 
 def metric_anomaly_by_type(
