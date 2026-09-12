@@ -122,17 +122,38 @@ def parse_otlp_metrics(objs: list[dict], window: Window = None) -> list[ParsedMe
             for sm in rm.get("scopeMetrics") or []:
                 for metric in sm.get("metrics") or []:
                     name = metric.get("name")
-                    # gauge / sum both carry a dataPoints list of numeric points.
-                    points = (metric.get("gauge") or metric.get("sum") or {}).get("dataPoints") or []
+                    mtype, points = _metric_type_and_points(metric)
                     for dp in points:
                         ts = _dt(dp.get("timeUnixNano"))
                         if not _in_window(ts, window):
                             continue
-                        value = _num(dp)
+                        # Histograms carry no single asDouble/asInt — use the
+                        # cumulative `count` (a monotonic quantity) as the value.
+                        value = float(dp["count"]) if mtype == "histogram" and dp.get("count") is not None else _num(dp)
                         if value is None:
                             continue
-                        samples.append(ParsedMetricSample(service=service, metric=name, value=value, ts=ts))
+                        samples.append(ParsedMetricSample(
+                            service=service, metric=name, value=value, ts=ts, metric_type=mtype
+                        ))
     return samples
+
+
+def _metric_type_and_points(metric: dict) -> tuple[Optional[str], list]:
+    """Classify an OTLP metric by instrument type and return its dataPoints.
+
+    ``sum`` with ``isMonotonic`` true is a **counter** (cumulative) — the anomaly
+    layer must rate-normalize it; a non-monotonic sum stays ``"sum"``; ``gauge`` is
+    a level; ``histogram`` is summarized by its cumulative ``count``."""
+    if "gauge" in metric:
+        return "gauge", metric["gauge"].get("dataPoints") or []
+    if "sum" in metric:
+        s = metric["sum"] or {}
+        return ("counter" if s.get("isMonotonic") else "sum"), s.get("dataPoints") or []
+    if "histogram" in metric:
+        return "histogram", (metric["histogram"] or {}).get("dataPoints") or []
+    if "exponentialHistogram" in metric:
+        return "histogram", (metric["exponentialHistogram"] or {}).get("dataPoints") or []
+    return None, []
 
 
 def load_otlp_file(path: Path) -> list[dict]:

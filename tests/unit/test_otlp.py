@@ -78,6 +78,24 @@ class TestMetrics:
         assert by[("cart", "cpu")] == pytest.approx(0.5)
         assert by[("cart", "reqs")] == pytest.approx(42.0)
 
+    def test_captures_instrument_type(self):
+        # gauge, monotonic sum (=counter), non-monotonic sum, histogram(count)
+        objs = [{"resourceMetrics": [{"resource": _resource("cart"), "scopeMetrics": [{"metrics": [
+            {"name": "cpu", "gauge": {"dataPoints": [{"timeUnixNano": T0_NANO, "asDouble": 0.5}]}},
+            {"name": "http_reqs", "sum": {"isMonotonic": True,
+                "dataPoints": [{"timeUnixNano": T0_NANO, "asInt": "1000"}]}},
+            {"name": "queue", "sum": {"isMonotonic": False,
+                "dataPoints": [{"timeUnixNano": T0_NANO, "asDouble": 7.0}]}},
+            {"name": "latency", "histogram": {"dataPoints": [
+                {"timeUnixNano": T0_NANO, "count": "530", "sum": 12.3}]}},
+        ]}]}]}]
+        by = {(s.metric): s for s in parse_otlp_metrics(objs, WINDOW)}
+        assert by["cpu"].metric_type == "gauge"
+        assert by["http_reqs"].metric_type == "counter" and by["http_reqs"].value == pytest.approx(1000.0)
+        assert by["queue"].metric_type == "sum"
+        # histogram summarized by its cumulative count
+        assert by["latency"].metric_type == "histogram" and by["latency"].value == pytest.approx(530.0)
+
 
 class TestLoadFile:
     def test_jsonl_and_array(self, tmp_path):
