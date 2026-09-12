@@ -15,6 +15,13 @@ gauge-like/untyped (level path), so per ``(service, metric)`` we only need the w
 **mean** — reconstructed as two synthetic samples fed to the real ``metric_arm`` (no
 logic duplication).
 
+**Caveat — this exercises the detector's LEVEL path only.** RCAEval has no typed
+counters, so the counter/histogram *rate* path is never hit here; ``tau_metric`` (and
+``k`` / ``T`` / ``threshold``) are fit on level-magnitude effects. A rate ``q``
+(increment/sec) and a level ``q`` (absolute value) differ in magnitude before
+``log1p → saturate(·, tau_metric)``, so the rate path is **calibrated-by-proxy and
+unvalidated** until the typed-OTel external re-validation (unblocked by #164).
+
     python scripts/calibrate_abstention.py --suites re3,re2 --recall-floor 0.99
 """
 from __future__ import annotations
@@ -139,7 +146,9 @@ def extract(suites, width, out: Path):
 # ── scoring (reuses the product arms; gate = logs + metrics) ──────────────────
 def _metric_samples(metrics: dict) -> list:
     """Two synthetic samples per (service, metric) — the cached window means — so the
-    real ``metric_arm`` (level path) reproduces the detector exactly."""
+    real ``metric_arm`` (level path) reproduces the detector exactly. ``metric_type``
+    is None → level path; RCAEval has no typed counters, so the rate path is not
+    exercised by this calibration (see the module docstring caveat)."""
     out = []
     for svc, cols in metrics.items():
         for col, (mi, mb) in cols.items():
