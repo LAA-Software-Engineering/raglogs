@@ -24,6 +24,7 @@ it. Only the *transform* changes — the frozen abstention threshold is untouche
 """
 from __future__ import annotations
 
+import statistics
 from collections import defaultdict
 from datetime import datetime
 
@@ -36,13 +37,16 @@ def _seconds(a: datetime, b: datetime) -> float:
     return max((b - a).total_seconds(), 1.0)
 
 
-def _rate(values: list[float], secs: float) -> float:
-    """Increment-per-second of a cumulative series over a window. ``max − min``
-    is the total increment for a monotonic counter within the window (robust to the
-    exact first/last sample landing); needs ≥2 points to define a rate."""
-    if len(values) < 2:
+def _rate(points: list[tuple[datetime, float]], secs: float) -> float:
+    """Increment-per-second of a cumulative series over a window. Sums the positive
+    deltas between time-sorted consecutive samples — a *drop* is a counter reset
+    (pod restart / redeploy), so it contributes 0 rather than a negative/spurious
+    increment (Prometheus-style reset handling). Needs ≥2 points to define a rate."""
+    if len(points) < 2:
         return 0.0
-    return (max(values) - min(values)) / secs
+    vals = [v for _, v in sorted(points)]
+    increment = sum(max(0.0, b - a) for a, b in zip(vals, vals[1:]))
+    return increment / secs
 
 
 def metric_anomaly_by_type(
@@ -53,8 +57,8 @@ def metric_anomaly_by_type(
     ``samples`` are duck-typed rows with ``service`` / ``metric`` / ``value`` / ``ts``
     / ``metric_type``. Returns ``{service: anomaly}`` (max over the service's metrics),
     a dimensionless relative quantity comparable across metric types."""
-    base: dict[tuple, list[float]] = defaultdict(list)
-    inc: dict[tuple, list[float]] = defaultdict(list)
+    base: dict[tuple, list[tuple[datetime, float]]] = defaultdict(list)
+    inc: dict[tuple, list[tuple[datetime, float]]] = defaultdict(list)
     mtypes: dict[tuple, str | None] = {}
     for m in samples:
         s, name, v, ts = m.service, m.metric, m.value, m.ts
@@ -63,9 +67,9 @@ def metric_anomaly_by_type(
         key = (s, name)
         mtypes[key] = getattr(m, "metric_type", None)
         if baseline_start <= ts < incident_start:
-            base[key].append(float(v))
+            base[key].append((ts, float(v)))
         elif incident_start <= ts <= incident_end:
-            inc[key].append(float(v))
+            inc[key].append((ts, float(v)))
 
     pre = _seconds(baseline_start, incident_start)
     post = _seconds(incident_start, incident_end)
@@ -74,13 +78,12 @@ def metric_anomaly_by_type(
         service = key[0]
         b, i = base[key], inc[key]
         if (mtypes.get(key) or "").lower() in _CUMULATIVE:
-            rb, ri = _rate(b, pre), _rate(i, post)
             if len(b) < 2 or len(i) < 2:
                 continue  # can't define a rate from a single sample in a window
+            rb, ri = _rate(b, pre), _rate(i, post)
             anomaly = abs(ri - rb) / (rb + _EPS)
         else:  # gauge / sum / unknown → level comparison (original behavior)
-            import statistics
-            bm = statistics.mean(b)
-            anomaly = abs(statistics.mean(i) - bm) / (abs(bm) + _EPS)
+            bm = statistics.mean([v for _, v in b])
+            anomaly = abs(statistics.mean([v for _, v in i]) - bm) / (abs(bm) + _EPS)
         out[service] = max(out[service], anomaly)
     return dict(out)

@@ -40,6 +40,18 @@ class TestCounter:
         a = metric_anomaly_by_type(base + inc, BASELINE_START, INJECT, INCIDENT_END)
         assert a["cart"] > 5.0  # rate jumped ~20x
 
+    def test_counter_reset_within_window_not_spurious(self):
+        # baseline climbs 1000->1750 (increment 750 over 300s, steady)
+        base = _series("cart", "reqs", "counter", BASELINE_START, 6, 50, v0=1000, dv=150)
+        # incident: climbs, RESETS to 0 (pod restart) mid-window, climbs again.
+        # positive deltas = 250 + 250 + 0(reset) + 250 = 750 (same rate) -> ~0 anomaly.
+        # max-min would read 4500-0=4500 and cry anomaly; segment-sum must not.
+        vals = [4000, 4250, 4500, 0, 250]
+        inc = [_m("cart", "reqs", v, INJECT + timedelta(seconds=i * 50), "counter")
+               for i, v in enumerate(vals)]
+        a = metric_anomaly_by_type(base + inc, BASELINE_START, INJECT, INCIDENT_END)
+        assert a["cart"] == pytest.approx(0.0, abs=1e-6)  # reset handled, not spurious
+
     def test_single_point_window_no_rate(self):
         # a counter needs >=2 points per window to define a rate
         s = [_m("cart", "reqs", 1000, BASELINE_START, "counter"),
