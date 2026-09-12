@@ -224,6 +224,25 @@ class Settings(BaseSettings):
     # frontend-proxy). Empty by default (deployment-specific; keeps core generic).
     rca_excluded_services: str = ""
 
+    # Abstention gate (#79): when enabled, raglogs returns "insufficient evidence"
+    # on a window whose logs+metrics show no incident-strength anomaly vs baseline,
+    # instead of manufacturing a narrative from healthy background traffic. OFF by
+    # default (no behaviour change). The transform scales (tau_*) and threshold are
+    # FROZEN from RCAEval nested-LOSO calibration (docs/eval-abstention.md); the
+    # threshold is the recall/abstention knob (lower = higher recall, less
+    # abstention). Traces are intentionally excluded — the span-rate ratio is a
+    # noisy fault-vs-no-fault detector (it stays in the ranker). See
+    # docs/design-abstention.md.
+    # NOTE (before default-on): tau/threshold were frozen at symmetric ~300 s
+    # incident+baseline windows. The arms are rate/magnitude-normalized (partly
+    # scale-invariant), but the threshold's transfer to very different window sizes
+    # (e.g. a 24h default baseline vs a 2h incident) is not yet measured — validate
+    # at production window sizes before flipping this on by default.
+    abstention_enabled: bool = False
+    abstention_tau_log: float = 0.25
+    abstention_tau_metric: float = 4.0
+    abstention_threshold: float = 0.377
+
 
 _settings: Settings | None = None
 

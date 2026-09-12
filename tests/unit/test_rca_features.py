@@ -130,3 +130,41 @@ class TestServiceFeatures:
         assert s.vector()[FEATURE_NAMES.index("met_anom")] == 4.0
         d = s.as_dict()
         assert d["service"] == "cart" and set(d) == {"service", *FEATURE_NAMES}
+
+
+class TestAbstentionArms:
+    # log_rate_arm / metric_arm take duck-typed rows (no DB); compute_window_anomaly
+    # is the DB layer, exercised in integration.
+    def test_log_arm_none_when_no_logs(self):
+        from src.core.rca.features import log_rate_arm
+        assert log_rate_arm([], BASELINE_START, INJECT, INCIDENT_END, tau_log=0.25) is None
+
+    def test_log_arm_zero_when_logs_but_no_errors(self):
+        from src.core.rca.features import log_rate_arm
+        rows = [_log("cart", "info", "ok", INJECT + timedelta(seconds=1))]
+        assert log_rate_arm(rows, BASELINE_START, INJECT, INCIDENT_END, tau_log=0.25) == 0.0
+
+    def test_log_arm_positive_on_novel_errors(self):
+        from src.core.rca.features import log_rate_arm
+        # errors in the incident window, none in baseline -> elevation -> (0,1)
+        rows = [_log("cart", "error", "boom", INJECT + timedelta(seconds=i)) for i in range(20)]
+        s = log_rate_arm(rows, BASELINE_START, INJECT, INCIDENT_END, tau_log=0.25)
+        assert 0.0 < s < 1.0
+
+    def test_log_arm_clamps_when_incident_quieter(self):
+        from src.core.rca.features import log_rate_arm
+        rows = [_log("cart", "error", "x", BASELINE_START + timedelta(seconds=i)) for i in range(20)]
+        # errors only in baseline, none in incident -> no elevation -> 0
+        assert log_rate_arm(rows, BASELINE_START, INJECT, INCIDENT_END, tau_log=0.25) == 0.0
+
+    def test_metric_arm_none_when_no_metrics(self):
+        from src.core.rca.features import metric_arm
+        assert metric_arm([], BASELINE_START, INJECT, INCIDENT_END, tau_metric=4.0) is None
+
+    def test_metric_arm_positive_on_change(self):
+        from src.core.rca.features import metric_arm
+        samples = [
+            _metric("cart", "cpu", 1.0, BASELINE_START + timedelta(seconds=1)),
+            _metric("cart", "cpu", 5.0, INJECT + timedelta(seconds=1)),
+        ]
+        assert metric_arm(samples, BASELINE_START, INJECT, INCIDENT_END, tau_metric=4.0) > 0.0

@@ -77,6 +77,18 @@ Held-out (nested LOSO, 720 windows = 360 incident + 360 healthy):
 - **Pre-injection windows are a healthy proxy**, not real production-quiet traffic;
   the frozen gate still needs validation on a fresh external corpus before default-on.
 - **`W = 300 s` fixed, single split.** Systems `ob/ss/tt` shared across suites.
+- **Window-size transfer is unmeasured.** `τ`/threshold were frozen at *symmetric*
+  ~300 s incident+baseline windows. In the pipeline the incident window is the
+  user's query window and the baseline defaults to `24h` — a different regime. The
+  arms are rate/magnitude-normalized so they are *partly* scale-invariant, but the
+  threshold's behaviour at arbitrary window sizes is not measured here. Before
+  default-on, validate at the production default window sizes (or scale the gate's
+  baseline toward the calibrated ~300 s regime). The gate is opt-in precisely so
+  this is a deliberate choice, not a silent default.
+- **The gate judges the explained view.** `compute_window_anomaly` filters by
+  `service` / `environment` / `ingestion_job_id` like the rest of `explain_window`,
+  so a job-scoped run (the CLI norm) does not mix other ingests' error counts into
+  the incident/baseline comparison (no cross-job baseline pollution).
 
 _Part of #79 / #118 / #74. Numbers 2026-09-11. Gate = `max(log, metric)`;
 `τ_log 0.25 / τ_metric 4.0 / threshold 0.377`; held-out recall 96.9% / abstention

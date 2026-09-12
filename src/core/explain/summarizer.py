@@ -186,6 +186,40 @@ def _explain_window(
         db, scope, window_start, window_end, baseline_window, settings
     )
 
+    # 3.6 Abstention gate (#79). Opt-in (default off → no behaviour change). When
+    # enabled, a window whose logs+metrics show no incident-strength anomaly vs the
+    # baseline returns "insufficient evidence" instead of a manufactured narrative
+    # from healthy background traffic. Traces are intentionally excluded (a noisy
+    # detector; see docs/eval-abstention.md). The threshold is the recall/abstention
+    # knob; frozen defaults come from RCAEval nested-LOSO calibration.
+    if settings.abstention_enabled and clusters and packet.primary_cluster is not None:
+        from src.core.rca.abstention import should_abstain
+        from src.core.rca.features import compute_window_anomaly
+        from src.utils.time import parse_duration
+
+        anomaly = compute_window_anomaly(
+            db,
+            scope,
+            incident_start=window_start,
+            incident_end=window_end,
+            baseline_start=window_start - parse_duration(baseline_window),
+            tau_log=settings.abstention_tau_log,
+            tau_metric=settings.abstention_tau_metric,
+            # judge the same view being explained (esp. job-scoping, the CLI norm)
+            service=service,
+            environment=environment,
+            ingestion_job_id=ingestion_job_id,
+        )
+        if should_abstain(anomaly, settings.abstention_threshold):
+            log.info(
+                "abstention_gate_abstained",
+                scope=scope,
+                window_anomaly=round(anomaly.score, 4),
+                available_modalities=list(anomaly.available),
+                threshold=settings.abstention_threshold,
+            )
+            clusters = []  # fall through to the insufficient-evidence path below
+
     # 4. Handle empty case. The insufficient-evidence narrative keeps a "low"
     # label even if a metric/trace-only ranker was confident — the calibrated
     # probability still rides on predicted_root_cause_confidence, but overriding
