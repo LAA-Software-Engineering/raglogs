@@ -39,7 +39,6 @@ from sqlalchemy.orm import Session
 from src.core.rca.abstention import (
     WindowAnomaly,
     log_rate_anomaly,
-    magnitude_anomaly,
     window_anomaly,
 )
 from src.core.rca.metric_semantics import metric_anomaly_by_type
@@ -318,16 +317,21 @@ def log_rate_arm(
 
 def metric_arm(
     samples, baseline_start: datetime, incident_start: datetime, incident_end: datetime,
-    *, tau_metric: float,
+    *, tau_metric: float, k: int = 3, corroboration_threshold: float = 0.5,
 ) -> Optional[float]:
-    """Metric arm of the abstention gate: ``max`` over services of the saturated,
-    **type-aware** per-service metric anomaly (counters → rate, gauges → level; see
-    ``metric_semantics``). ``None`` when no metrics are present. The frozen threshold
-    is unchanged — only the metric *interpretation* is fixed (#79 Gen-3)."""
+    """Metric arm of the abstention gate: ``max`` across services of the **type-aware,
+    hierarchical, corroborated** per-service metric anomaly (counters → rate, gauges →
+    level; a service scores only when ≥k metrics agree — see ``metric_semantics``).
+    ``None`` when no metrics are present; ``0.0`` when metrics are present but nothing
+    corroborates. Per-service scores are already saturated to [0,1] inside the
+    detector, so this is a plain max (#79 Gen-3.1)."""
     if not samples:
         return None
-    anom = metric_anomaly_by_type(samples, baseline_start, incident_start, incident_end)
-    return max((magnitude_anomaly(c, tau_metric) for c in anom.values()), default=0.0)
+    anom = metric_anomaly_by_type(
+        samples, baseline_start, incident_start, incident_end,
+        tau=tau_metric, k=k, corroboration_threshold=corroboration_threshold,
+    )
+    return max(anom.values(), default=0.0)
 
 
 def compute_window_anomaly(
@@ -339,6 +343,8 @@ def compute_window_anomaly(
     baseline_start: datetime,
     tau_log: float,
     tau_metric: float,
+    metric_k: int = 3,
+    metric_corroboration_threshold: float = 0.5,
     service: Optional[str] = None,
     environment: Optional[str] = None,
     ingestion_job_id=None,
@@ -375,5 +381,8 @@ def compute_window_anomaly(
     log_rows = db.execute(select(LogEntry).where(*log_where)).scalars().all()
     metric_rows = db.execute(select(MetricSample).where(*metric_where)).scalars().all()
     logs = log_rate_arm(log_rows, baseline_start, incident_start, incident_end, tau_log=tau_log)
-    metrics = metric_arm(metric_rows, baseline_start, incident_start, incident_end, tau_metric=tau_metric)
+    metrics = metric_arm(
+        metric_rows, baseline_start, incident_start, incident_end,
+        tau_metric=tau_metric, k=metric_k, corroboration_threshold=metric_corroboration_threshold,
+    )
     return window_anomaly(logs=logs, metrics=metrics)

@@ -205,6 +205,8 @@ def _explain_window(
             baseline_start=window_start - parse_duration(baseline_window),
             tau_log=settings.abstention_tau_log,
             tau_metric=settings.abstention_tau_metric,
+            metric_k=settings.abstention_metric_corroboration_k,
+            metric_corroboration_threshold=settings.abstention_metric_corroboration_threshold,
             # judge the same view being explained (esp. job-scoping, the CLI norm)
             service=service,
             environment=environment,

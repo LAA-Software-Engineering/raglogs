@@ -242,6 +242,12 @@ class Settings(BaseSettings):
     abstention_tau_log: float = 0.25
     abstention_tau_metric: float = 4.0
     abstention_threshold: float = 0.377
+    # Metric arm is hierarchical (#79 Gen-3.1): a service is anomalous only when at
+    # least `k` of its metrics reach `corroboration_threshold` (guards against the
+    # multiple-comparisons saturation of max over thousands of raw OTLP metrics),
+    # then scores the mean of its top-k. Frozen with tau_metric from RCAEval.
+    abstention_metric_corroboration_k: int = 3
+    abstention_metric_corroboration_threshold: float = 0.5
 
 
 _settings: Settings | None = None
