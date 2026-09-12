@@ -127,9 +127,7 @@ def parse_otlp_metrics(objs: list[dict], window: Window = None) -> list[ParsedMe
                         ts = _dt(dp.get("timeUnixNano"))
                         if not _in_window(ts, window):
                             continue
-                        # Histograms carry no single asDouble/asInt — use the
-                        # cumulative `count` (a monotonic quantity) as the value.
-                        value = float(dp["count"]) if mtype == "histogram" and dp.get("count") is not None else _num(dp)
+                        value = _num(dp)
                         if value is None:
                             continue
                         samples.append(ParsedMetricSample(
@@ -138,21 +136,30 @@ def parse_otlp_metrics(objs: list[dict], window: Window = None) -> list[ParsedMe
     return samples
 
 
+def _is_cumulative(node: dict) -> bool:
+    """OTLP ``aggregationTemporality``: cumulative (2) vs delta (1). Absent =
+    cumulative (the OTel SDK/demo default). A *delta* monotonic sum is already a
+    per-interval increment, so it must NOT be classified as a cumulative counter."""
+    t = node.get("aggregationTemporality")
+    return t is None or t in (2, "2", "AGGREGATION_TEMPORALITY_CUMULATIVE")
+
+
 def _metric_type_and_points(metric: dict) -> tuple[Optional[str], list]:
     """Classify an OTLP metric by instrument type and return its dataPoints.
 
-    ``sum`` with ``isMonotonic`` true is a **counter** (cumulative) — the anomaly
-    layer must rate-normalize it; a non-monotonic sum stays ``"sum"``; ``gauge`` is
-    a level; ``histogram`` is summarized by its cumulative ``count``."""
+    A **cumulative** monotonic ``sum`` is a ``"counter"`` — the anomaly layer must
+    rate-normalize it (comparing raw cumulative means grows with time). A
+    non-monotonic sum, or a *delta*-temporality monotonic sum (already per-interval),
+    is a level → ``"sum"``. ``gauge`` is a level. Histograms are **deferred to the
+    normalization PR** (ingesting their cumulative ``count`` un-normalized here would
+    just feed the saturation #161 flagged), so they yield no samples for now."""
     if "gauge" in metric:
         return "gauge", metric["gauge"].get("dataPoints") or []
     if "sum" in metric:
         s = metric["sum"] or {}
-        return ("counter" if s.get("isMonotonic") else "sum"), s.get("dataPoints") or []
-    if "histogram" in metric:
-        return "histogram", (metric["histogram"] or {}).get("dataPoints") or []
-    if "exponentialHistogram" in metric:
-        return "histogram", (metric["exponentialHistogram"] or {}).get("dataPoints") or []
+        if s.get("isMonotonic") and _is_cumulative(s):
+            return "counter", s.get("dataPoints") or []
+        return "sum", s.get("dataPoints") or []
     return None, []
 
 

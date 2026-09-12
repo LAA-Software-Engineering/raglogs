@@ -79,22 +79,32 @@ class TestMetrics:
         assert by[("cart", "reqs")] == pytest.approx(42.0)
 
     def test_captures_instrument_type(self):
-        # gauge, monotonic sum (=counter), non-monotonic sum, histogram(count)
         objs = [{"resourceMetrics": [{"resource": _resource("cart"), "scopeMetrics": [{"metrics": [
             {"name": "cpu", "gauge": {"dataPoints": [{"timeUnixNano": T0_NANO, "asDouble": 0.5}]}},
+            # cumulative monotonic sum -> counter (default temporality = cumulative)
             {"name": "http_reqs", "sum": {"isMonotonic": True,
                 "dataPoints": [{"timeUnixNano": T0_NANO, "asInt": "1000"}]}},
+            # delta monotonic sum is already per-interval -> a level, tagged "sum"
+            {"name": "http_reqs_delta", "sum": {"isMonotonic": True,
+                "aggregationTemporality": "AGGREGATION_TEMPORALITY_DELTA",
+                "dataPoints": [{"timeUnixNano": T0_NANO, "asInt": "5"}]}},
             {"name": "queue", "sum": {"isMonotonic": False,
                 "dataPoints": [{"timeUnixNano": T0_NANO, "asDouble": 7.0}]}},
-            {"name": "latency", "histogram": {"dataPoints": [
-                {"timeUnixNano": T0_NANO, "count": "530", "sum": 12.3}]}},
         ]}]}]}]
         by = {(s.metric): s for s in parse_otlp_metrics(objs, WINDOW)}
         assert by["cpu"].metric_type == "gauge"
         assert by["http_reqs"].metric_type == "counter" and by["http_reqs"].value == pytest.approx(1000.0)
+        assert by["http_reqs_delta"].metric_type == "sum"  # delta = per-interval level, not cumulative
         assert by["queue"].metric_type == "sum"
-        # histogram summarized by its cumulative count
-        assert by["latency"].metric_type == "histogram" and by["latency"].value == pytest.approx(530.0)
+
+    def test_histograms_deferred_to_normalization_pr(self):
+        # histograms are recognized but not yet ingested (would feed cumulative
+        # count into the un-normalized metric arm) — enabled with normalization later
+        objs = [{"resourceMetrics": [{"resource": _resource("cart"), "scopeMetrics": [{"metrics": [
+            {"name": "latency", "histogram": {"dataPoints": [
+                {"timeUnixNano": T0_NANO, "count": "530", "sum": 12.3}]}},
+        ]}]}]}]
+        assert parse_otlp_metrics(objs, WINDOW) == []
 
 
 class TestLoadFile:
