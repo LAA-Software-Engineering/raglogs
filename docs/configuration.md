@@ -113,3 +113,5 @@ Every setting is read from an environment variable (see `.env.example`). This ta
 | `ABSTENTION_TAU_LOG` | float | `0.25` |
 | `ABSTENTION_TAU_METRIC` | float | `4.0` |
 | `ABSTENTION_THRESHOLD` | float | `0.377` |
+| `ABSTENTION_METRIC_CORROBORATION_K` | int | `3` |
+| `ABSTENTION_METRIC_CORROBORATION_THRESHOLD` | float | `0.5` |

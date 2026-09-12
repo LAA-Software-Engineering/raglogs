@@ -161,10 +161,22 @@ class TestAbstentionArms:
         from src.core.rca.features import metric_arm
         assert metric_arm([], BASELINE_START, INJECT, INCIDENT_END, tau_metric=4.0) is None
 
-    def test_metric_arm_positive_on_change(self):
+    def test_metric_arm_positive_when_metrics_corroborate(self):
         from src.core.rca.features import metric_arm
-        samples = [
-            _metric("cart", "cpu", 1.0, BASELINE_START + timedelta(seconds=1)),
-            _metric("cart", "cpu", 5.0, INJECT + timedelta(seconds=1)),
-        ]
-        assert metric_arm(samples, BASELINE_START, INJECT, INCIDENT_END, tau_metric=4.0) > 0.0
+        # 3 gauges all jump 1 -> 20 -> corroborated (k=3) -> arm > 0
+        samples = []
+        for j in range(3):
+            samples += [_metric("cart", f"g{j}", 1.0, BASELINE_START + timedelta(seconds=1)),
+                        _metric("cart", f"g{j}", 20.0, INJECT + timedelta(seconds=1))]
+        arm = metric_arm(samples, BASELINE_START, INJECT, INCIDENT_END,
+                         tau_metric=1.0, k=3, corroboration_threshold=0.3)
+        assert arm is not None and arm > 0.3
+
+    def test_metric_arm_single_metric_no_corroboration(self):
+        from src.core.rca.features import metric_arm
+        # one metric changing, others absent -> < k corroborating -> 0.0 (not None)
+        samples = [_metric("cart", "cpu", 1.0, BASELINE_START + timedelta(seconds=1)),
+                   _metric("cart", "cpu", 99.0, INJECT + timedelta(seconds=1))]
+        arm = metric_arm(samples, BASELINE_START, INJECT, INCIDENT_END,
+                         tau_metric=1.0, k=3, corroboration_threshold=0.3)
+        assert arm == 0.0  # metrics present but a lone twitch doesn't flag

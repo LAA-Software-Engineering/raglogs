@@ -240,8 +240,20 @@ class Settings(BaseSettings):
     # at production window sizes before flipping this on by default.
     abstention_enabled: bool = False
     abstention_tau_log: float = 0.25
+    # WARNING (#79 Gen-3.1): the metric-arm *formula* changed to a hierarchical,
+    # log-space, corroborated detector (metric_semantics), so the values below —
+    # tau_metric, threshold (fit against the OLD relative-change formula), and the
+    # new k / corroboration_threshold — are UNCALIBRATED PLACEHOLDERS. Do NOT enable
+    # the gate (abstention_enabled) until the PR-3 nested-LOSO recalibration on
+    # RCAEval sets and freezes them (docs/eval-abstention.md). tau_log is unchanged.
     abstention_tau_metric: float = 4.0
     abstention_threshold: float = 0.377
+    # Metric arm is hierarchical: a service is anomalous only when at least `k` of
+    # its metrics reach `corroboration_threshold` (guards against the multiple-
+    # comparisons saturation of max over thousands of raw OTLP metrics), then scores
+    # the mean of its top-k. Placeholders pending recalibration (see warning above).
+    abstention_metric_corroboration_k: int = 3
+    abstention_metric_corroboration_threshold: float = 0.5
 
 
 _settings: Settings | None = None
