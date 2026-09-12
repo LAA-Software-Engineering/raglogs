@@ -111,6 +111,30 @@ class TestScoreFrozen:
         assert cases[0]["predicted_services"] == ["cart", "web", "db"]  # top-3
         assert cases[1]["is_negative"] is True and cases[1]["produced"] is False
 
+    def test_gate_absent_when_not_evaluated(self):
+        # no abstained field set -> gate view omitted, ranker metrics unaffected
+        assert score_frozen([_fr(ranked_services=["cart"])])["gate"] is None
+
+    def test_gate_and_end_to_end_views(self):
+        results = [
+            _fr(case_id="p1", ranked_services=["cart"], abstained=False),  # hit, proceed
+            _fr(case_id="p2", truth_service="pay", ranked_services=["x"], abstained=True),  # miss, wrongly abstained
+            _fr(case_id="n1", is_negative=True, truth_service=None, abstained=True),   # correct abstain
+            _fr(case_id="n2", is_negative=True, truth_service=None, abstained=False),  # false alarm
+        ]
+        r = score_frozen(results)
+        # RANKER is scored over ALL positives, independent of the gate: p2 (abstained)
+        # still counts, so top-1 = 1/2 — a good gate can't hide the bad ranker case.
+        assert r["top1"] == pytest.approx(0.5)
+        g = r["gate"]
+        assert g["incident_recall"] == pytest.approx(0.5)      # p1 proceeded of 2
+        assert g["healthy_abstention"] == pytest.approx(0.5)   # n1 abstained of 2
+        assert g["coverage"] == pytest.approx(0.5)             # p1,n2 proceeded of 4
+        assert g["selective_top1"] == pytest.approx(1.0)       # only p1 covered, and it's a hit
+        assert g["false_diagnosis_rate"] == pytest.approx(0.5)  # n2 proceeded on healthy
+        by = {c["id"]: c for c in r["cases"]}
+        assert by["p2"]["abstained"] is True and by["p1"]["abstained"] is False
+
     def test_confounded_and_modality_breakdown(self):
         results = [
             _fr(is_confounded=True, trigger_correct=True, modalities="logs+metrics"),

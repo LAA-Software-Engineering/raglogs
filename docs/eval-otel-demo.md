@@ -102,18 +102,45 @@ seeing the corpus turns external validation into training on a third corpus, and
 the synthetic unit fixtures exist only to test the plumbing/metric math, never to
 tune anything.
 
-Measure — top-1 is no longer the only thing that matters:
+### Whole Gen-2 system: ranker + abstention gate, two views
 
-- **root-cause top-1 / top-3**;
-- **abstention** on healthy negatives (did it correctly return insufficient
-  evidence?);
-- **calibrated-confidence reliability** (ECE) — RE3 already warned that a constant
-  base rate beat the learned map, i.e. the score carries little correctness
-  information out-of-system, so this is the number to watch before users read
-  "78% confidence" literally;
-- **trigger correctness** on deploy-class cases;
-- **behaviour under confounding** (right trigger vs the distractor deploy);
-- **per-fault-class** performance.
+`frozen-eval` evaluates the **whole frozen system** (`--gate`, on by default): the
+ranker *and* the abstention gate (#79), whose frozen `τ`/threshold are also
+development-only and frozen before this run. It reports two views:
+
+- **Component-level** (each part alone):
+  - **gate** — healthy abstention (abstain on negatives) + incident recall (proceed
+    on real incidents);
+  - **ranker** — top-1 / top-3 + ECE, over **all** incident windows. The ranker is
+    scored with the gate **off**, so a good gate can't hide bad ranker cases by
+    abstaining on them.
+- **End-to-end** (ranker gated by abstention):
+  - **coverage** = fraction not abstained;
+  - **selective top-1** = RCA accuracy given "proceed";
+  - **false-diagnosis rate** on healthy windows (proceeded on a negative).
+
+Also measured: **calibrated-confidence reliability** (ECE) — RE3 warned a constant
+base rate beat the learned map, so watch this before users read "78% confidence"
+literally — plus **trigger correctness** on deploy-class cases, **behaviour under
+confounding**, and **per-fault-class / per-service** breakdowns.
+
+### Corpus requirements for a real portability test
+
+The old `data/eval-cases/otel` corpus is **spent for model selection** (the model
+has now been shaped against it). A fresh external run needs a *new* corpus that
+actually stresses portability, not a 2-negative smoke set:
+
+- fresh flag-fault incidents (per built-in failure flag);
+- **many healthy negatives**, not two — the gate's false-diagnosis rate is only
+  meaningful with a real negative sample;
+- **varied incident/window durations and baseline lengths** — the gate's `τ`/
+  threshold were frozen at ~300 s symmetric windows; production uses a 24 h default
+  baseline, and that transfer is unmeasured (see `docs/eval-abstention.md`);
+- a few **confounded** cases if feasible (flag flip + unrelated deploy);
+- **per-fault / per-service** labels for the breakdowns above.
+
+Treat the resulting numbers as **one-shot external validation**, not another tuning
+loop: freeze everything, generate the corpus after, report once.
 
 A large drop (say RE3 60% / RE2 77% → OTel 22%) is not a failure of the work — it
 is the most important result available: it says raglogs has a good

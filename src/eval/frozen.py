@@ -41,6 +41,10 @@ class FrozenCaseResult:
     produced: bool
     trigger_correct: Optional[bool]
     modalities: str  # e.g. "logs+metrics"
+    # Abstention gate decision (#79), computed independently of the ranker so the
+    # ranker is still scored on every incident window (a good gate must not be able
+    # to hide bad ranker cases by abstaining on them). None = gate not evaluated.
+    abstained: Optional[bool] = None
 
     @property
     def correct_top1(self) -> bool:
@@ -60,8 +64,12 @@ def _modalities(case: EvalCase) -> str:
     return "+".join(mods)
 
 
-def frozen_case_result(case: EvalCase, result: ExplainResult) -> FrozenCaseResult:
-    """Map one case + its ExplainResult into scoring facts (pure)."""
+def frozen_case_result(
+    case: EvalCase, result: ExplainResult, abstained: Optional[bool] = None
+) -> FrozenCaseResult:
+    """Map one case + its ExplainResult into scoring facts (pure). ``abstained`` is
+    the abstention gate's decision, computed separately from ``result`` (which is
+    the ranker run with the gate OFF, so the ranker is scored on every incident)."""
     ranked = [c["service"] for c in (result.root_cause_candidates or []) if c.get("service")]
     if not ranked and result.primary_cluster:
         ranked = list(result.primary_cluster.get("services") or [])
@@ -88,6 +96,7 @@ def frozen_case_result(case: EvalCase, result: ExplainResult) -> FrozenCaseResul
         produced=produced,
         trigger_correct=trigger_correct,
         modalities=_modalities(case),
+        abstained=abstained,
     )
 
 
@@ -132,6 +141,22 @@ def score_frozen(results: list[FrozenCaseResult]) -> dict:
 
     deploy = [r for r in positives if r.fault_class == "deploy" and r.trigger_correct is not None]
 
+    # Whole-system views (#79): the ranker metrics above are over ALL positives,
+    # independent of the gate (a good gate must not hide bad ranker cases). The gate
+    # is scored separately, then composed end-to-end over the cases it lets through.
+    gated_pos = [r for r in positives if r.abstained is not None]
+    gated_neg = [r for r in negatives if r.abstained is not None]
+    covered_pos = [r for r in gated_pos if not r.abstained]  # incidents we proceed on
+    gate = {
+        # component: gate alone
+        "incident_recall": _rate([not r.abstained for r in gated_pos]),
+        "healthy_abstention": _rate([bool(r.abstained) for r in gated_neg]),
+        # end-to-end: ranker gated by abstention
+        "coverage": _rate([not r.abstained for r in gated_pos + gated_neg]),
+        "selective_top1": _rate([r.correct_top1 for r in covered_pos]),
+        "false_diagnosis_rate": _rate([not r.abstained for r in gated_neg]),
+    } if (gated_pos or gated_neg) else None
+
     return {
         "n_cases": len(results),
         "n_positive": len(positives),
@@ -144,6 +169,7 @@ def score_frozen(results: list[FrozenCaseResult]) -> dict:
         "confounded_trigger_correct": _rate(
             [bool(r.trigger_correct) for r in confounded if r.trigger_correct is not None]
         ),
+        "gate": gate,
         "per_fault_class": by_fault,
         "per_modality": by_modality,
         # Per-case detail so a result is diagnosable without re-running (which
@@ -159,6 +185,7 @@ def score_frozen(results: list[FrozenCaseResult]) -> dict:
                 "correct_top3": r.correct_top3,
                 "confidence": r.confidence,
                 "produced": r.produced,
+                "abstained": r.abstained,
             }
             for r in results
         ],
@@ -195,12 +222,29 @@ def render_frozen_report(report: dict, *, ranker_path: str, calibrator_path: str
         "",
         f"cases: {report['n_cases']}  (positive {report['n_positive']}, negative {report['n_negative']})",
         "",
-        f"{'root-cause top-1':<28}{_pct(report['top1'])}",
-        f"{'root-cause top-3':<28}{_pct(report['top3'])}",
-        f"{'abstention on negatives':<28}{_pct(report['negative_abstention'])}",
-        f"{'confidence ECE':<28}{ece_str}",
-        f"{'deploy-trigger correct':<28}{_pct(report['deploy_trigger_correct'])}",
-        f"{'confounded-trigger correct':<28}{_pct(report['confounded_trigger_correct'])}",
+        "component — ranker (ALL incident windows, gate off):",
+        f"  {'root-cause top-1':<26}{_pct(report['top1'])}",
+        f"  {'root-cause top-3':<26}{_pct(report['top3'])}",
+        f"  {'confidence ECE':<26}{ece_str}",
+        f"  {'deploy-trigger correct':<26}{_pct(report['deploy_trigger_correct'])}",
+        f"  {'confounded-trigger correct':<26}{_pct(report['confounded_trigger_correct'])}",
+    ]
+    gate = report.get("gate")
+    if gate:
+        lines += [
+            "",
+            "component — abstention gate:",
+            f"  {'incident recall':<26}{_pct(gate['incident_recall'])}",
+            f"  {'healthy abstention':<26}{_pct(gate['healthy_abstention'])}",
+            "",
+            "end-to-end (ranker gated by abstention):",
+            f"  {'coverage':<26}{_pct(gate['coverage'])}",
+            f"  {'selective top-1':<26}{_pct(gate['selective_top1'])}",
+            f"  {'false-diagnosis (healthy)':<26}{_pct(gate['false_diagnosis_rate'])}",
+        ]
+    else:
+        lines.append(f"{'abstention on negatives':<28}{_pct(report['negative_abstention'])}")
+    lines += [
         "",
         "per fault class:",
     ]
