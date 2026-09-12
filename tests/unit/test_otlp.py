@@ -97,12 +97,19 @@ class TestMetrics:
         assert by["http_reqs_delta"].metric_type == "sum"  # delta = per-interval level, not cumulative
         assert by["queue"].metric_type == "sum"
 
-    def test_histograms_deferred_to_normalization_pr(self):
-        # histograms are recognized but not yet ingested (would feed cumulative
-        # count into the un-normalized metric arm) — enabled with normalization later
+    def test_histogram_ingested_as_count(self):
+        # cumulative histogram summarized by its count (rate-normalized downstream)
         objs = [{"resourceMetrics": [{"resource": _resource("cart"), "scopeMetrics": [{"metrics": [
             {"name": "latency", "histogram": {"dataPoints": [
                 {"timeUnixNano": T0_NANO, "count": "530", "sum": 12.3}]}},
+        ]}]}]}]
+        s = parse_otlp_metrics(objs, WINDOW)[0]
+        assert s.metric_type == "histogram" and s.value == pytest.approx(530.0)
+
+    def test_delta_histogram_skipped(self):
+        objs = [{"resourceMetrics": [{"resource": _resource("cart"), "scopeMetrics": [{"metrics": [
+            {"name": "latency", "histogram": {"aggregationTemporality": "AGGREGATION_TEMPORALITY_DELTA",
+                "dataPoints": [{"timeUnixNano": T0_NANO, "count": "5"}]}},
         ]}]}]}]
         assert parse_otlp_metrics(objs, WINDOW) == []
 

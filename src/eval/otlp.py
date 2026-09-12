@@ -127,7 +127,9 @@ def parse_otlp_metrics(objs: list[dict], window: Window = None) -> list[ParsedMe
                         ts = _dt(dp.get("timeUnixNano"))
                         if not _in_window(ts, window):
                             continue
-                        value = _num(dp)
+                        # A histogram carries no single asDouble/asInt — summarize it
+                        # by its cumulative `count` (the metric layer rate-normalizes it).
+                        value = float(dp["count"]) if mtype == "histogram" and dp.get("count") is not None else _num(dp)
                         if value is None:
                             continue
                         samples.append(ParsedMetricSample(
@@ -150,9 +152,9 @@ def _metric_type_and_points(metric: dict) -> tuple[Optional[str], list]:
     A **cumulative** monotonic ``sum`` is a ``"counter"`` — the anomaly layer must
     rate-normalize it (comparing raw cumulative means grows with time). A
     non-monotonic sum, or a *delta*-temporality monotonic sum (already per-interval),
-    is a level → ``"sum"``. ``gauge`` is a level. Histograms are **deferred to the
-    normalization PR** (ingesting their cumulative ``count`` un-normalized here would
-    just feed the saturation #161 flagged), so they yield no samples for now."""
+    is a level → ``"sum"``. ``gauge`` is a level. A cumulative ``histogram`` is
+    summarized by its ``count`` and rate-normalized like a counter; a delta histogram
+    is per-interval and skipped for now (rare in practice)."""
     if "gauge" in metric:
         return "gauge", metric["gauge"].get("dataPoints") or []
     if "sum" in metric:
@@ -160,6 +162,12 @@ def _metric_type_and_points(metric: dict) -> tuple[Optional[str], list]:
         if s.get("isMonotonic") and _is_cumulative(s):
             return "counter", s.get("dataPoints") or []
         return "sum", s.get("dataPoints") or []
+    for h in ("histogram", "exponentialHistogram"):
+        if h in metric:
+            node = metric[h] or {}
+            if _is_cumulative(node):
+                return "histogram", node.get("dataPoints") or []
+            return None, []  # delta histogram: per-interval, not handled yet
     return None, []
 
 

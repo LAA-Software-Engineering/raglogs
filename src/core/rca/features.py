@@ -42,6 +42,7 @@ from src.core.rca.abstention import (
     magnitude_anomaly,
     window_anomaly,
 )
+from src.core.rca.metric_semantics import metric_anomaly_by_type
 from src.db.models import LogEntry, MetricSample, TraceSpan
 
 # Error levels that count toward root-cause attribution — matches the trivial
@@ -319,13 +320,13 @@ def metric_arm(
     samples, baseline_start: datetime, incident_start: datetime, incident_end: datetime,
     *, tau_metric: float,
 ) -> Optional[float]:
-    """Metric arm of the abstention gate: ``max`` over services of the saturated
-    per-service metric mean-change magnitude. ``None`` when no metrics are present."""
-    anom = metric_features(samples, baseline_start, incident_start, incident_end)
-    # metric_features already returns per-service max change; None if no metric rows
-    # contributed to a ratio. Distinguish "no metrics at all" from "no change".
+    """Metric arm of the abstention gate: ``max`` over services of the saturated,
+    **type-aware** per-service metric anomaly (counters → rate, gauges → level; see
+    ``metric_semantics``). ``None`` when no metrics are present. The frozen threshold
+    is unchanged — only the metric *interpretation* is fixed (#79 Gen-3)."""
     if not samples:
         return None
+    anom = metric_anomaly_by_type(samples, baseline_start, incident_start, incident_end)
     return max((magnitude_anomaly(c, tau_metric) for c in anom.values()), default=0.0)
 
 
