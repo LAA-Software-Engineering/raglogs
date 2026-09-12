@@ -122,8 +122,7 @@ def parse_otlp_metrics(objs: list[dict], window: Window = None) -> list[ParsedMe
             for sm in rm.get("scopeMetrics") or []:
                 for metric in sm.get("metrics") or []:
                     name = metric.get("name")
-                    # gauge / sum both carry a dataPoints list of numeric points.
-                    points = (metric.get("gauge") or metric.get("sum") or {}).get("dataPoints") or []
+                    mtype, points = _metric_type_and_points(metric)
                     for dp in points:
                         ts = _dt(dp.get("timeUnixNano"))
                         if not _in_window(ts, window):
@@ -131,8 +130,37 @@ def parse_otlp_metrics(objs: list[dict], window: Window = None) -> list[ParsedMe
                         value = _num(dp)
                         if value is None:
                             continue
-                        samples.append(ParsedMetricSample(service=service, metric=name, value=value, ts=ts))
+                        samples.append(ParsedMetricSample(
+                            service=service, metric=name, value=value, ts=ts, metric_type=mtype
+                        ))
     return samples
+
+
+def _is_cumulative(node: dict) -> bool:
+    """OTLP ``aggregationTemporality``: cumulative (2) vs delta (1). Absent =
+    cumulative (the OTel SDK/demo default). A *delta* monotonic sum is already a
+    per-interval increment, so it must NOT be classified as a cumulative counter."""
+    t = node.get("aggregationTemporality")
+    return t is None or t in (2, "2", "AGGREGATION_TEMPORALITY_CUMULATIVE")
+
+
+def _metric_type_and_points(metric: dict) -> tuple[Optional[str], list]:
+    """Classify an OTLP metric by instrument type and return its dataPoints.
+
+    A **cumulative** monotonic ``sum`` is a ``"counter"`` — the anomaly layer must
+    rate-normalize it (comparing raw cumulative means grows with time). A
+    non-monotonic sum, or a *delta*-temporality monotonic sum (already per-interval),
+    is a level → ``"sum"``. ``gauge`` is a level. Histograms are **deferred to the
+    normalization PR** (ingesting their cumulative ``count`` un-normalized here would
+    just feed the saturation #161 flagged), so they yield no samples for now."""
+    if "gauge" in metric:
+        return "gauge", metric["gauge"].get("dataPoints") or []
+    if "sum" in metric:
+        s = metric["sum"] or {}
+        if s.get("isMonotonic") and _is_cumulative(s):
+            return "counter", s.get("dataPoints") or []
+        return "sum", s.get("dataPoints") or []
+    return None, []
 
 
 def load_otlp_file(path: Path) -> list[dict]:
