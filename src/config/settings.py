@@ -239,21 +239,19 @@ class Settings(BaseSettings):
     # (e.g. a 24h default baseline vs a 2h incident) is not yet measured — validate
     # at production window sizes before flipping this on by default.
     abstention_enabled: bool = False
+    # Frozen Gen-3.1 gate params, selected on RCAEval (RE3+RE2) nested-LOSO for the
+    # hierarchical detector (docs/eval-abstention.md): held-out recall 93.9% /
+    # healthy abstention 58.6%. tau_* are the log-space saturation scales; the metric
+    # arm scores a service only when >= k of its metrics reach corroboration_threshold
+    # (then mean of its top-k), which is what stops max over thousands of raw OTLP
+    # metrics from always saturating. Gate is opt-in; these are calibrated on RCAEval
+    # but NOT yet externally re-validated on a fresh typed OTel corpus — do that
+    # before considering default-on.
     abstention_tau_log: float = 0.25
-    # WARNING (#79 Gen-3.1): the metric-arm *formula* changed to a hierarchical,
-    # log-space, corroborated detector (metric_semantics), so the values below —
-    # tau_metric, threshold (fit against the OLD relative-change formula), and the
-    # new k / corroboration_threshold — are UNCALIBRATED PLACEHOLDERS. Do NOT enable
-    # the gate (abstention_enabled) until the PR-3 nested-LOSO recalibration on
-    # RCAEval sets and freezes them (docs/eval-abstention.md). tau_log is unchanged.
-    abstention_tau_metric: float = 4.0
-    abstention_threshold: float = 0.377
-    # Metric arm is hierarchical: a service is anomalous only when at least `k` of
-    # its metrics reach `corroboration_threshold` (guards against the multiple-
-    # comparisons saturation of max over thousands of raw OTLP metrics), then scores
-    # the mean of its top-k. Placeholders pending recalibration (see warning above).
-    abstention_metric_corroboration_k: int = 3
-    abstention_metric_corroboration_threshold: float = 0.5
+    abstention_tau_metric: float = 0.25
+    abstention_threshold: float = 0.407
+    abstention_metric_corroboration_k: int = 2
+    abstention_metric_corroboration_threshold: float = 0.3
 
 
 _settings: Settings | None = None

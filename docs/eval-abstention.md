@@ -93,3 +93,40 @@ Held-out (nested LOSO, 720 windows = 360 incident + 360 healthy):
 _Part of #79 / #118 / #74. Numbers 2026-09-11. Gate = `max(log, metric)`;
 `τ_log 0.25 / τ_metric 4.0 / threshold 0.377`; held-out recall 96.9% / abstention
 78.9% over RE3+RE2._
+
+## Gen-3.1 recalibration — hierarchical metric detector (2026-09-12)
+
+The external validation (`docs/eval-otel-demo.md`) then showed the original metric
+arm (relative mean-change, `max` over all metrics) **saturated to 1.0 on healthy
+OTel**: raw OTLP cumulative counters compared by windowed mean grow with time, and
+`max` over ~27k metrics always finds a twitch. The metric arm was redesigned
+(`metric_semantics`, #163/#165) into a **hierarchical detector**: per metric a stable
+log-space anomaly `saturate(|log1p(q_inc) − log1p(q_base)|, τ)` (`q` = rate for
+counters/histograms, level for gauges; no divide-by-tiny-baseline); per service a
+**corroborated top-k** (score only when ≥`k` metrics clear a threshold `T`, then mean
+of the top-k) so a lone metric of thousands can't flag a service; then `max` across
+services.
+
+Recalibrated on RCAEval RE3+RE2 (nested LOSO, recall floor 99%), searching
+`τ_log × τ_metric × k × T`. **Frozen Gen-3.1 defaults:**
+
+```
+tau_log = 0.25   tau_metric = 0.25   k = 2   corroboration_threshold = 0.3   threshold = 0.407
+```
+
+Held-out (720 windows = 360 incident + 360 healthy):
+
+| | recall | healthy abstention |
+|---|---|---|
+| **overall** | **93.9%** (338/360) | **58.6%** (211/360) |
+| `L+M` | 276/281 (98%) | 113/254 (44.5%) |
+| `M` (metrics only) | 62/79 (78%) | 98/106 (92%) |
+
+The recall floor (99% on train) again transfers to ~94% held-out — the nested LOSO
+being honest. **Still opt-in / default-off:** these are RCAEval-calibrated but not
+yet **externally** re-validated on a fresh **typed** OTel corpus. That is the next
+step (now that #164 round-trips `metric_type`): confirm the metric arm no longer
+saturates on healthy OTel — the failure this whole cycle targets — before any
+default-on. Reproduce with `scripts/calibrate_abstention.py --suites re3,re2`.
+
+_Numbers 2026-09-12. Gate = `max(log, hierarchical-metric)`, logs+metrics only._
