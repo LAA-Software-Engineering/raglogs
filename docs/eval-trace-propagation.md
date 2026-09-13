@@ -105,3 +105,44 @@ post-frozen arc — after the `tr_calldir` wash (#155) and the shelved abstentio
 corpus. Ships **opt-in** (`RCA_PROPAGATION_RERANK`, default off) until that external
 number is in. If it fails to transfer, it is killed and recorded as a negative result
 like the others — but on RCAEval it earns its place.
+
+## Evidence source: logs → traces (error-status), and what OTel revealed
+
+The v1 above derived onset + symptom magnitude from **error logs**. The spent OTel
+corpus (`data/eval-cases/otel`, now dev/diagnostic evidence, no longer external
+validation) showed that made the reranker a **complete no-op on OTel**: the OTel Demo
+emits ~12 error-level log lines in the whole corpus, so with no log onset there was
+nothing to fire on — the same "logs are silent on OTel" wall the abstention work hit.
+
+The fix extends the *evidence source*, not the reranker logic
+(:func:`trace_symptoms` + :func:`combine_log_trace_evidence`): per service, use log
+onset + log-error magnitude where logs fire, else fall back to **trace ERROR-status**
+spans (the trace analog of an error log — first error span's time + error-span count).
+
+Latency-excursion was evaluated as an additional trace trigger and **dropped**: on
+RCAEval LOSO it materially regressed resource faults (RE2 system-out 76.6%→75.5%,
+`mem` −8.9pp) because a resource fault balloons latency across every downstream
+service, so "earliest excursion" is noise. Error-status is clean, and RCAEval traces
+carry essentially none (all `statusCode` 0/UNSET), so:
+
+- **RCAEval LOSO is preserved *by construction*** — trace evidence is empty there (no
+  error-status spans), so `combine_log_trace_evidence` yields onset + anomaly identical
+  to v1's log-only path and the reranker's inputs are unchanged. The **+8.9pp RE3
+  system-out** lift is reproduced. Measured top-1 matches v1 within run-to-run GBM
+  row-ordering variance (±1 case in the *base* ranker, which is retrained per fold): this
+  run's RE2 was **+0.4pp on all three axes** (system-out 207/269) vs v1's +0.7/+0.4/+0.4
+  (208/269 system-out) — a one-case wobble in the base ranker, not a reranker effect. No
+  new regression. Gate: **passed.**
+- **Spent OTel: the reranker now activates** — error-status spans exist for the payment
+  cases, and `otel_paymentUnreachable` reorders, pulling `checkout` (payment's caller)
+  into the top-3 over the unrelated `shipping`: directionally sane.
+
+But **top-1 did not move on OTel**, for a reason *outside* the reranker: in the
+propagation cases the true culprit is **not in the candidate set at all** —
+`payment` errors only in trace status, and `build_candidates` sources candidates from
+log-error / trace-rate / metric features, not span status, so `payment` is never
+generated. The reranker can only reorder candidates that exist. **This is a
+candidate-generation gap, not a ranking one, and it is the next lever** (add
+trace-error-status as a candidate source + ranker feature). The reranker extension
+is safe and correct as far as it goes — RCAEval untouched, OTel now activates instead
+of no-op — and it makes the next bottleneck legible.

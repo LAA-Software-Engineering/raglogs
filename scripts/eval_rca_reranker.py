@@ -52,7 +52,10 @@ def _extract(suites: tuple[str, ...], out: Path) -> None:
     from src.core.normalization.fingerprint import fingerprint_message  # noqa: F401  (warms import)
     from src.eval.rcaeval import _infer_level, parse_inject_time
 
-    def _onsets(case: str, inject: float) -> dict[str, float]:
+    from src.core.rca.features import trace_symptoms
+    from src.core.rca.propagation import combine_log_trace_evidence
+
+    def _log_onsets(case: str, inject: float) -> dict[str, float]:
         """Earliest error-log second per service over the incident window."""
         import pyarrow.parquet as pq
 
@@ -68,6 +71,25 @@ def _extract(suites: tuple[str, ...], out: Path) -> None:
                 onset[s] = sec
         return onset
 
+    def _trace_sym(case: str, inject: float) -> dict[str, tuple[float, float]]:
+        """Per-service trace symptom (onset, magnitude) via the committed
+        `trace_symptoms`, so the eval and the pipeline share one definition."""
+        import pyarrow.parquet as pq
+
+        try:
+            t = pq.read_table(
+                _dl(case, "traces.parquet"),
+                columns=["serviceName", "startTimeMillis", "statusCode"],
+            ).to_pylist()
+        except Exception:  # noqa: BLE001
+            return {}
+        rows = [
+            (r["serviceName"], _sec(r["startTimeMillis"]), r["statusCode"])
+            for r in t
+            if r["serviceName"] and _sec(r["startTimeMillis"]) is not None
+        ]
+        return trace_symptoms(rows, inject, inject + POST)
+
     files = HfApi().list_repo_files("phamquiluan/RCAEval", repo_type="dataset")
     cases = sorted({f.split("/")[0] for f in files if f.startswith(suites) and "/" in f})
     rows: list[dict] = []
@@ -79,13 +101,18 @@ def _extract(suites: tuple[str, ...], out: Path) -> None:
             err, grp, stack = _log_features(case, inject)
             rate, dur, graph = _trace_features(case, inject)
             met = _metric_features(case, inject)
-            onset = _onsets(case, inject)
+            log_onset = _log_onsets(case, inject)
+            trace_sym = _trace_sym(case, inject)
         except Exception as e:  # noqa: BLE001
             print(f"  skip {case}: {type(e).__name__} {str(e)[:80]}")
             continue
         graphs[case] = [[a, b] for a, b in sorted(graph.edges)]
         truth = _canon(meta.service)
         has_logs, has_traces, has_metrics = int(bool(err)), int(bool(rate)), int(bool(met))
+        # Reranker evidence: log-first with trace fallback (matches the pipeline).
+        onset_map, anom_map = combine_log_trace_evidence(
+            log_onset, {s: float(err.get(s, 0)) for s in err}, trace_sym
+        )
         for s in set(err) | set(rate) | set(met):
             rows.append({
                 "case": case, "system": meta.system, "fault": meta.fault, "svc": meta.service,
@@ -93,7 +120,7 @@ def _extract(suites: tuple[str, ...], out: Path) -> None:
                 "log_err": err.get(s, 0), "log_grp": grp.get(s, 0), "log_stack": stack.get(s, 0),
                 "tr_rate": rate.get(s, 0.0), "tr_dur": dur.get(s, 0.0), "met_anom": met.get(s, 0.0),
                 "has_logs": has_logs, "has_traces": has_traces, "has_metrics": has_metrics,
-                "onset": onset.get(s),
+                "onset": onset_map.get(s), "anomaly": anom_map.get(s, 0.0),
             })
         print(f"  {case}: {len(set(err) | set(rate) | set(met))} svcs, {len(graph.edges)} edges")
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -141,7 +168,7 @@ def _loso(rows: list[dict], graphs: dict, axis: str, **rr) -> dict:
             scored = [(r["service"], ranker.score_vector([float(r[f]) for f in FEATURE_NAMES])) for r in cand]
             truth = {r["service"]: r["label"] for r in cand}
             onset = {r["service"]: r["onset"] for r in cand if r.get("onset") is not None}
-            anomaly = {r["service"]: float(r["log_err"]) for r in cand}
+            anomaly = {r["service"]: float(r.get("anomaly", r["log_err"])) for r in cand}
             base_top = max(scored, key=lambda t: (t[1], t[0]))[0]
             rr_top = propagation_scores(scored, _graph_for(case, graphs), onset, anomaly, **rr)[0][0]
             fault = cand[0]["fault"]
