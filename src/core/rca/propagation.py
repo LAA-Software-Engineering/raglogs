@@ -44,6 +44,7 @@ import math
 from collections import defaultdict, deque
 from collections.abc import Mapping
 
+from src.core.rca.features import _is_error_status
 from src.core.rca.linkage import ServiceGraph
 
 # Frozen hyperparameters — a-priori constants (round numbers; direction_weight=0
@@ -57,6 +58,10 @@ DEFAULT_PROXIMITY_DECAY = 0.5
 DEFAULT_MIN_ONSET_GAP = 1.0  # seconds; onset differences below this are "simultaneous"
 DEFAULT_DIRECTION_WEIGHT = 0.0  # edge-direction fallback; 0 until the eval earns it
 DEFAULT_MAX_HOPS = 2
+# Additive weight of the symptom-anchor dependency signal (#118 real-OTel pivot). Applied
+# on top of the multiplicative onset term so it can lift a *silent* dependency the base
+# ranker scored ~0 (the multiplicative term alone cannot — see docs/eval-trace-localization.md).
+DEFAULT_DEPENDENCY_GAMMA = 1.0
 
 
 def _undirected_hops(graph: ServiceGraph, src: str, max_hops: int) -> dict[str, int]:
@@ -88,32 +93,85 @@ def _calls(graph: ServiceGraph, a: str, b: str) -> bool:
     return (a, b) in graph.edges
 
 
+def failed_edge_dependencies(spans) -> dict[str, float]:
+    """Attribute each ERROR-status span to the **specific dependency it was calling** —
+    the #118 real-OTel pivot. On real traces the failing service usually does *not* mark
+    its own span ERROR; its caller, whose RPC failed, does (see
+    docs/eval-trace-localization.md). An ERROR span is therefore a *symptom anchor* that
+    implicates a dependency, not the cause itself.
+
+    ``spans`` is an iterable of ``(span_id, parent_span_id, service, status_code)``. For
+    each ERROR span, the implicated dependency is the service of its **child** span(s) (the
+    callee the RPC was to); a dependency implicated by many error spans — the shared
+    culprit several symptomatic callers reach into — accumulates the most. An ERROR span
+    with no child of a *different* service is an erroring **leaf**, so it implicates its own
+    service (the service failed internally, e.g. paymentFailure). Returns ``service ->
+    score`` (unnormalised); empty when there are no error spans.
+
+    Known gap (surfaced for one-shot validation, not solved here): a truly *unreachable*
+    callee produces no span at all, so it can't be implicated via a child edge — that
+    signature needs a callee span-rate-drop signal this function does not use.
+    """
+    children_by_parent: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    error_spans: list[tuple[str, str]] = []  # (span_id, service)
+    for span_id, parent_span_id, service, status_code in spans:
+        if not service or span_id is None:
+            continue
+        if parent_span_id is not None:
+            children_by_parent[parent_span_id].append((span_id, service))
+        if _is_error_status(status_code):
+            error_spans.append((span_id, service))
+
+    score: dict[str, float] = defaultdict(float)
+    for span_id, service in error_spans:
+        callees = {svc for _cid, svc in children_by_parent.get(span_id, []) if svc != service}
+        if callees:
+            for callee in callees:
+                score[callee] += 1.0  # the RPC to this dependency failed
+        else:
+            score[service] += 1.0  # erroring leaf: the service itself failed internally
+    return dict(score)
+
+
 def propagation_scores(
     scored: list[tuple[str, float]],
     graph: ServiceGraph,
     onset: Mapping[str, float],
     anomaly: Mapping[str, float],
     *,
+    dependency_boost: Mapping[str, float] | None = None,
+    dependency_gamma: float = DEFAULT_DEPENDENCY_GAMMA,
     blend: float = DEFAULT_BLEND,
     proximity_decay: float = DEFAULT_PROXIMITY_DECAY,
     min_onset_gap: float = DEFAULT_MIN_ONSET_GAP,
     direction_weight: float = DEFAULT_DIRECTION_WEIGHT,
     max_hops: int = DEFAULT_MAX_HOPS,
 ) -> list[tuple[str, float]]:
-    """Reorder ``(service, base_score)`` by a trace-graph propagation adjustment.
+    """Reorder ``(service, base_score)`` by two trace-graph signals.
 
-    ``onset`` maps a service to when its anomaly began (any monotonic clock — only
-    differences matter; a missing service has no timing). ``anomaly`` maps a service
-    to a non-negative magnitude; a service with ``0``/absent magnitude is not treated
-    as a symptom or a cause. Returns ``(service, adjusted_score)`` highest first, ties
-    broken by service name. Order is unchanged when the graph is empty or fewer than
-    two services carry anomaly signal.
+    **Multiplicative onset term** (log-driven, RCAEval): among services carrying
+    ``anomaly`` magnitude, one whose ``onset`` precedes a connected neighbour's is boosted
+    as the upstream cause; a later one is penalised. ``new = base·(1+blend·tanh(adj))``.
+
+    **Additive dependency term** (trace-driven, the real-OTel pivot): ``dependency_boost``
+    scores each service by how many ERROR-status spans implicate it as the dependency they
+    were calling (:func:`failed_edge_dependencies`). It is added *after* the multiplicative term and
+    normalised to its own max, so a **silent** common dependency the base ranker scored ~0
+    is lifted — the multiplicative term alone cannot raise a ~0 score. Applies to every
+    candidate, not just the anomalous ones, because the cause is typically the silent node.
+
+    Returns ``(service, adjusted_score)`` highest first, ties broken by service name.
+    Unchanged order when the graph is empty, fewer than two anomalous services carry the
+    onset signal, *and* there is no dependency boost.
     """
     if graph.empty or len(scored) < 2:
         return sorted(scored, key=lambda t: (-t[1], t[0]))
 
+    dep = dict(dependency_boost or {})
+    dep_max = max(dep.values(), default=0.0) or 1.0
     anomalous = {s for s, _ in scored if anomaly.get(s, 0.0) > 0.0}
-    if len(anomalous) < 2:
+    onset_active = len(anomalous) >= 2
+    if not onset_active and not dep:
         return sorted(scored, key=lambda t: (-t[1], t[0]))
 
     max_mag = max((anomaly.get(s, 0.0) for s in anomalous), default=0.0) or 1.0
@@ -121,32 +179,34 @@ def propagation_scores(
 
     adjusted: list[tuple[str, float]] = []
     for s, base in scored:
-        if s not in anomalous:
-            adjusted.append((s, base))
-            continue
-        hops = hops_cache.get(s)
-        if hops is None:
-            hops = _undirected_hops(graph, s, max_hops)
-            hops_cache[s] = hops
-        adj = 0.0
-        for n, d in hops.items():
-            if n not in anomalous:
-                continue
-            # proximity (graph distance) x symptom magnitude of the neighbour
-            w = (proximity_decay ** (d - 1)) * (anomaly.get(n, 0.0) / max_mag)
-            os_, on_ = onset.get(s), onset.get(n)
-            if os_ is not None and on_ is not None and abs(on_ - os_) > min_onset_gap:
-                # temporal precedence: earlier onset => upstream cause
-                adj += w if os_ < on_ else -w
-            elif direction_weight:
-                # timing uninformative: fall back to edge direction. s's callee
-                # (s -> n, n is a dependency of s) is the more-likely cause, so
-                # being the callee boosts s and being the caller penalises it.
-                if _calls(graph, n, s):
-                    adj += direction_weight * w
-                elif _calls(graph, s, n):
-                    adj -= direction_weight * w
-        adjusted.append((s, base * (1.0 + blend * math.tanh(adj))))
+        score = base
+        if onset_active and s in anomalous:
+            hops = hops_cache.get(s)
+            if hops is None:
+                hops = _undirected_hops(graph, s, max_hops)
+                hops_cache[s] = hops
+            adj = 0.0
+            for n, d in hops.items():
+                if n not in anomalous:
+                    continue
+                # proximity (graph distance) x symptom magnitude of the neighbour
+                w = (proximity_decay ** (d - 1)) * (anomaly.get(n, 0.0) / max_mag)
+                os_, on_ = onset.get(s), onset.get(n)
+                if os_ is not None and on_ is not None and abs(on_ - os_) > min_onset_gap:
+                    # temporal precedence: earlier onset => upstream cause
+                    adj += w if os_ < on_ else -w
+                elif direction_weight:
+                    # timing uninformative: fall back to edge direction. s's callee
+                    # (s -> n, n is a dependency of s) is the more-likely cause, so
+                    # being the callee boosts s and being the caller penalises it.
+                    if _calls(graph, n, s):
+                        adj += direction_weight * w
+                    elif _calls(graph, s, n):
+                        adj -= direction_weight * w
+            score = base * (1.0 + blend * math.tanh(adj))
+        if dep:
+            score += dependency_gamma * (dep.get(s, 0.0) / dep_max)
+        adjusted.append((s, score))
 
     adjusted.sort(key=lambda t: (-t[1], t[0]))
     return adjusted

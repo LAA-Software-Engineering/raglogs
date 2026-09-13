@@ -133,8 +133,20 @@ def main() -> int:
     else:
         flip = _flagd_flip(args.flagd_url)
 
-    # one case per built-in failure flag
-    for sc in FLAG_SCENARIOS:
+    # one case per built-in failure flag. Flag sets drift across demo versions, so when
+    # flipping via the flagd file, skip any scenario whose flag the running demo lacks
+    # (rather than 400/KeyError on it) — keeps the driver robust to version changes.
+    scenarios = FLAG_SCENARIOS
+    if args.flagd_file is not None:
+        import json as _json
+
+        available = set((_json.loads(args.flagd_file.read_text()).get("flags") or {}).keys())
+        scenarios = tuple(s for s in FLAG_SCENARIOS if s.flag in available)
+        skipped = [s.flag for s in FLAG_SCENARIOS if s.flag not in available]
+        if skipped:
+            print(f"skipping flags absent from {args.flagd_file.name}: {skipped}", flush=True)
+
+    for sc in scenarios:
         case_id = f"otel_{sc.flag}"
         print(f"[{len(written)+1}] flag {sc.flag} ({sc.service})", flush=True)
         out = generate_incident(

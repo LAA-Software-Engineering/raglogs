@@ -97,3 +97,43 @@ Real progress is measured on **captured** OTel/Chaos traces, under a sealed spli
 
 `eval_trace_localization.py` respects `split.yaml` automatically — DEV by default, TEST only
 under `--sealed-test`.
+
+## Real-OTel finding → the symptom-anchor pivot
+
+A first real capture (OTel Demo, flag faults, ERROR-status traces) **falsified the specific
+hypothesis "ERROR-status span ⇒ likely root cause."** Where the error status landed vs the
+injected cause, across the captured cases:
+
+| case | cause | ERROR-status spans on |
+|---|---|---|
+| paymentFailure | payment | payment **and** checkout, frontend (callers) |
+| cartFailure | cart | cart **and** checkout |
+| paymentUnreachable | payment | frontend, checkout — **payment: none** |
+| recommendationCacheFailure | recommendation | frontend, frontend-proxy — **recommendation: none** |
+| productCatalogFailure | product-catalog | **none anywhere** |
+
+On real traces the failing service usually does **not** mark its own span ERROR — its
+*callers*, whose RPC failed or timed out, do. So an ERROR-status span is a **symptom anchor,
+not cause evidence**; ranking error-status services directly would promote the caller/symptom.
+
+**The pivot** (`propagation.failed_edge_dependencies`): an ERROR span implicates the specific
+**dependency it was calling** — the service of its child span (the callee), or its own service
+when it is an erroring leaf (paymentFailure). A dependency implicated by many error spans is
+the shared culprit. That score feeds the reranker's **additive** dependency term
+(`propagation_scores(..., dependency_boost=...)`), which — unlike the multiplicative onset
+term — can lift a *silent* dependency the base ranker scored ~0 (the `symptom_only`
+multiplicative-ceiling finding above). Known gap, left for the one-shot to expose rather than
+patched around: a truly *unreachable* callee emits no span at all, so it can't be implicated by
+a child edge (paymentUnreachable) — that needs a callee span-rate-drop signal this doesn't use.
+
+**Discipline (strict):** the first real cases are **spent hypothesis-formation evidence** — the
+mechanism is formulated from them, never tuned against or scored on them. Validation is:
+**RCAEval LOSO no-regression** (the log-onset path is unchanged — +8.9pp RE3 system-out
+preserved exactly; the dependency term is inert there, RCAEval carrying no error-status) →
+**synthetic topology unit tests** for the mechanism (`tests/unit/test_rca_propagation.py`:
+`TestFailedEdgeDependencies`, `TestDependencyBoostLiftsSilentCause`) → **freeze** → **one-shot
+on NEW captured cases**. If it fails the one-shot, the trace-localization arc is killed with
+confidence, like the shelved abstention gate. (The synthetic `symptom_only` fault type predates
+this finding — it marks the *cause* with error-status; realigning it to the real
+caller-errors/callee-silent pattern is a follow-up, kept separate so the mechanism unit tests
+stay the source of truth in the meantime.)
