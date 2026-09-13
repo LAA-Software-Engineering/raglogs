@@ -166,6 +166,13 @@ def combine_log_trace_evidence(
     preserved. A service with no log errors falls back to its trace symptom onset +
     magnitude, so on a log-silent corpus (OTel) the reranker still has signal. Returns
     ``(onset, anomaly)`` over the union of services carrying either kind of evidence.
+
+    Note: ``anomaly`` mixes a log-error *count* (log-evidenced services) and a trace
+    error-span *count* (trace-evidenced services), and the reranker normalises it by the
+    per-case max. On the current corpora each case is single-source (RCAEval log-only,
+    OTel trace-only) so the two never mix within a case; on a genuinely mixed corpus the
+    cross-source symptom-magnitude weighting would be only approximate and may want a
+    per-source normalisation.
     """
     onset: dict[str, float] = {}
     anomaly: dict[str, float] = {}

@@ -125,9 +125,14 @@ RCAEval LOSO it materially regressed resource faults (RE2 system-out 76.6%→75.
 service, so "earliest excursion" is noise. Error-status is clean, and RCAEval traces
 carry essentially none (all `statusCode` 0/UNSET), so:
 
-- **RCAEval LOSO is preserved *exactly*** — trace evidence is empty there, the reranker
-  falls back to log-only, and every number matches v1 (RE3 system-out +8.9pp, RE2
-  +0.4pp, no new regression). Gate: **passed.**
+- **RCAEval LOSO is preserved *by construction*** — trace evidence is empty there (no
+  error-status spans), so `combine_log_trace_evidence` yields onset + anomaly identical
+  to v1's log-only path and the reranker's inputs are unchanged. The **+8.9pp RE3
+  system-out** lift is reproduced. Measured top-1 matches v1 within run-to-run GBM
+  row-ordering variance (±1 case in the *base* ranker, which is retrained per fold): this
+  run's RE2 was **+0.4pp on all three axes** (system-out 207/269) vs v1's +0.7/+0.4/+0.4
+  (208/269 system-out) — a one-case wobble in the base ranker, not a reranker effect. No
+  new regression. Gate: **passed.**
 - **Spent OTel: the reranker now activates** — error-status spans exist for the payment
   cases, and `otel_paymentUnreachable` reorders, pulling `checkout` (payment's caller)
   into the top-3 over the unrelated `shipping`: directionally sane.
