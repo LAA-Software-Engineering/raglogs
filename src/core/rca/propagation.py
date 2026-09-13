@@ -46,9 +46,12 @@ from collections.abc import Mapping
 
 from src.core.rca.linkage import ServiceGraph
 
-# Frozen hyperparameters (calibrated on RCAEval RE2+RE3 LOSO; see
-# scripts/eval_rca_reranker.py and docs/eval-trace-propagation.md). Kept here as
-# the single source of truth so the runtime and the eval harness agree.
+# Frozen hyperparameters — a-priori constants (round numbers; direction_weight=0
+# "until the eval earns it"), NOT fit to the eval. The RCAEval RE2+RE3 LOSO run
+# *measured* the +8.9pp lift at exactly these defaults with no grid-search (see
+# scripts/eval_rca_reranker.py and docs/eval-trace-propagation.md) — it validated
+# them, it did not calibrate them. Kept here as the single source of truth so the
+# runtime and the eval harness agree.
 DEFAULT_BLEND = 0.25
 DEFAULT_PROXIMITY_DECAY = 0.5
 DEFAULT_MIN_ONSET_GAP = 1.0  # seconds; onset differences below this are "simultaneous"

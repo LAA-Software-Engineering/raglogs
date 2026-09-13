@@ -96,6 +96,7 @@ def _extract(suites: tuple[str, ...], out: Path) -> None:
                 "onset": onset.get(s),
             })
         print(f"  {case}: {len(set(err) | set(rate) | set(met))} svcs, {len(graph.edges)} edges")
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
     Path(str(out) + ".graph.json").write_text(json.dumps(graphs))
     print(f"\nwrote {len(rows)} rows / {len(graphs)} cases -> {out}")
@@ -183,7 +184,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--extract", action="store_true")
     ap.add_argument("--suites", default="re3", help="comma-separated RCAEval suites, e.g. re2,re3")
-    ap.add_argument("--cache", type=Path, default=Path("/tmp/claude-1000/-home-leonardo-GitHub-raglogs/21cfcd59-4c37-42e9-abfd-55fe8b41ef92/scratchpad/rr_features.jsonl"))
+    ap.add_argument("--cache", type=Path,
+                    default=Path(__file__).resolve().parents[1] / "data" / "rr_features.jsonl")
     ap.add_argument("--blend", type=float, default=None)
     ap.add_argument("--direction-weight", type=float, default=None)
     args = ap.parse_args()
