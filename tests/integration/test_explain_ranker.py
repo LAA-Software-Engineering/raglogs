@@ -153,6 +153,61 @@ def test_empty_case_keeps_low_label_despite_confident_ranker(db_session, tmp_pat
         reload_settings()
 
 
+def test_rerank_changed_top1_withholds_calibrated_confidence(db_session, tmp_path, monkeypatch):
+    # When the propagation reranker promotes a *different* service than the ranker's top-1,
+    # the calibrated probability (fit on the ranker's top score) no longer describes the
+    # decision, so it must be withheld (#172 review). Here the ranker keys on frontend's
+    # metric anomaly, but trace ERROR-status spans on frontend implicate its silent callee
+    # 'payment' -> the failed-edge dependency term reranks payment to #1.
+    from src.config import reload_settings
+    from src.core.explain.summarizer import explain_window
+    from src.core.ingestion.telemetry import (
+        ParsedMetricSample,
+        ParsedSpan,
+        persist_metric_samples,
+        persist_spans,
+    )
+    from src.db.models import LogEntry
+
+    for i in range(20):
+        db_session.add(LogEntry(
+            timestamp=INJECT + timedelta(seconds=i), service="frontend", level="error",
+            raw_message="500 from upstream", normalized_message="500 from upstream",
+            fingerprint="fe", scope=SCOPE,
+        ))
+    persist_metric_samples(db_session, [
+        ParsedMetricSample(service="frontend", metric="cpu", value=1.0, ts=BASELINE_START + timedelta(seconds=5)),
+        ParsedMetricSample(service="frontend", metric="cpu", value=50.0, ts=INJECT + timedelta(seconds=5)),
+    ], scope=SCOPE)
+    spans = []
+    for i in range(10):
+        t = INJECT + timedelta(seconds=i)
+        spans.append(ParsedSpan(trace_id=f"t{i}", span_id=f"fe{i}", parent_span_id=None,
+                                service="frontend", operation="h", start_time=t, duration_ms=5.0, status_code="2"))
+        spans.append(ParsedSpan(trace_id=f"t{i}", span_id=f"pay{i}", parent_span_id=f"fe{i}",
+                                service="payment", operation="h", start_time=t, duration_ms=5.0, status_code="0"))
+    persist_spans(db_session, spans, scope=SCOPE)
+    db_session.flush()
+
+    monkeypatch.setenv("RCA_RANKER_MODEL_PATH", _train_model(tmp_path))
+    monkeypatch.setenv("RCA_CALIBRATOR_MODEL_PATH", _write_calibrator(tmp_path))
+    monkeypatch.setenv("RCA_PROPAGATION_RERANK", "true")
+    reload_settings()
+    try:
+        result = explain_window(
+            db=db_session, window_start=INJECT, window_end=WINDOW_END,
+            no_llm=True, baseline_window_str="300s", scope=SCOPE,
+        )
+        assert result.predicted_root_cause == "payment"  # silent callee promoted over frontend
+        assert result.predicted_root_cause_confidence is None  # withheld: top-1 changed
+        assert result.confidence_calibrated is False
+    finally:
+        monkeypatch.delenv("RCA_RANKER_MODEL_PATH", raising=False)
+        monkeypatch.delenv("RCA_CALIBRATOR_MODEL_PATH", raising=False)
+        monkeypatch.delenv("RCA_PROPAGATION_RERANK", raising=False)
+        reload_settings()
+
+
 def test_no_model_leaves_log_path_unchanged(db_session):
     from src.config import reload_settings
     from src.core.explain.summarizer import explain_window

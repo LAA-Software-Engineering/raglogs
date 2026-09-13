@@ -337,16 +337,26 @@ def _rank_candidates(
     candidates = build_candidates(table, scorer=ranker.score, exclude=excluded)
     if not candidates:
         return None, [], None
+    ranker_top = candidates[0].service
     # Trace-graph propagation rerank (#118 / #79 carve-out, opt-in). Refines the
     # order so a true upstream culprit can overtake the loud caller that only
     # carries the downstream symptom. No-op without traces / onset data.
     if settings.rca_propagation_rerank:
         candidates = _propagation_rerank(db, scope, candidates, window_start, window_end)
-    # Calibrated P(top-1 correct) — only when a calibrator model is configured.
+    # Calibrated P(top-1 correct) — only when a calibrator model is configured. The
+    # calibrator was fit on the *ranker's* top-1 score, so it is only valid when the
+    # reranker left top-1 unchanged. When the reranker promotes a different service
+    # (whose original ranker score no longer reflects the decision rule), the calibrated
+    # probability would be semantically false — withhold it (falls back to the ordinal
+    # label) until the combined ranker+reranker policy is calibrated on real trace data.
     from src.core.rca.calibration import calibrated_confidence, load_calibrator
 
     calibrator = load_calibrator(settings.rca_calibrator_model_path)
-    confidence = calibrated_confidence(calibrator, candidates) if calibrator is not None else None
+    rerank_changed_top1 = candidates[0].service != ranker_top
+    if calibrator is not None and not rerank_changed_top1:
+        confidence = calibrated_confidence(calibrator, candidates)
+    else:
+        confidence = None
     return candidates[0].service, [c.to_dict() for c in candidates[:top_k]], confidence
 
 
@@ -357,43 +367,53 @@ def _propagation_rerank(
     window_start: datetime,
     window_end: datetime,
 ) -> list:
-    """Reorder candidates with the trace-graph propagation reranker (#118). Builds
-    the caller->callee graph, then each service's symptom onset + strength from
-    **trace ERROR-status** evidence with a fallback to error logs — so the reranker
-    still fires where logs are silent (the OTel external finding). A no-op (original
-    order) when there are no traces."""
+    """Reorder candidates with two trace-graph signals (#118). Builds the caller->callee
+    graph, then:
+
+    - the log-onset term (RCAEval): early-degrading log-erroring service = upstream cause;
+    - the symptom-anchor dependency term (real-OTel pivot): trace ERROR-status services are
+      *symptoms*, not causes — on real traces the failing service rarely marks its own span
+      ERROR, its callers do — so we walk from those anchors to their common **dependency**
+      and boost it (docs/eval-trace-localization.md).
+
+    A no-op (original order) when there are no traces."""
     from src.core.rca.linkage import build_service_graph
-    from src.core.rca.propagation import combine_log_trace_evidence, rerank_candidates
+    from src.core.rca.propagation import (
+        combine_log_trace_evidence,
+        failed_edge_dependencies,
+        rerank_candidates,
+    )
 
     graph = build_service_graph(db, scope, window_start, window_end)
     if graph.empty:
         return candidates
-    trace_sym = _trace_symptoms(db, scope, window_start, window_end)
     log_onset = _error_onsets(db, scope, window_start, window_end)
     log_err = {c.service: float(getattr(c.features, "log_err", 0.0)) for c in candidates}
-    onset, anomaly = combine_log_trace_evidence(log_onset, log_err, trace_sym)
-    return rerank_candidates(candidates, graph, onset, anomaly=anomaly)
+    # Log evidence drives the onset term (RCAEval); trace ERROR-status is a symptom anchor,
+    # not a cause, so it feeds the failed-edge dependency term instead.
+    onset, anomaly = combine_log_trace_evidence(log_onset, log_err, {})
+    dependency = failed_edge_dependencies(_error_span_edges(db, scope, window_start, window_end))
+    return rerank_candidates(
+        candidates, graph, onset, anomaly=anomaly, dependency_boost=dependency
+    )
 
 
-def _trace_symptoms(
-    db: Session, scope: str, window_start: datetime, window_end: datetime
-) -> dict[str, tuple[float, float]]:
-    """Per-service trace ERROR-status symptom (onset, magnitude) over the incident
-    window, via :func:`src.core.rca.features.trace_symptoms`."""
+def _error_span_edges(db: Session, scope: str, window_start: datetime, window_end: datetime):
+    """``(span_id, parent_span_id, service, status_code)`` for spans in the window — the
+    input to :func:`failed_edge_dependencies` (error spans + their children)."""
     from sqlalchemy import select
 
-    from src.core.rca.features import trace_symptoms
     from src.db.models import TraceSpan
 
     rows = db.execute(
-        select(TraceSpan.service, TraceSpan.start_time, TraceSpan.status_code).where(
+        select(TraceSpan.span_id, TraceSpan.parent_span_id, TraceSpan.service, TraceSpan.status_code)
+        .where(
             TraceSpan.scope == scope,
             TraceSpan.start_time >= window_start,
             TraceSpan.start_time <= window_end,
         )
     ).all()
-    spans = [(svc, ts.timestamp(), sc) for svc, ts, sc in rows if svc and ts is not None]
-    return trace_symptoms(spans, window_start.timestamp(), window_end.timestamp())
+    return [(sid, pid, svc, sc) for sid, pid, svc, sc in rows]
 
 
 def _error_onsets(

@@ -1,8 +1,11 @@
 """Unit tests for the trace-graph propagation reranker (#118 / #79). No DB."""
+import pytest
+
 from src.core.rca.features import trace_symptoms
 from src.core.rca.linkage import ServiceGraph
 from src.core.rca.propagation import (
     combine_log_trace_evidence,
+    failed_edge_dependencies,
     propagation_scores,
     rerank_candidates,
 )
@@ -145,6 +148,79 @@ class TestCombineEvidence:
             log_onset={"a": 1.0}, log_err={"a": 2.0}, trace_sym={"b": (5.0, 4.0)}
         )
         assert set(anomaly) == {"a", "b"} and anomaly["b"] == 4.0 and onset["b"] == 5.0
+
+
+class TestFailedEdgeDependencies:
+    # Real-OTel pivot: an ERROR span implicates the specific dependency it was CALLING
+    # (its child span's service), distinguishing the failing callee from sibling callees.
+    # spans: (span_id, parent_span_id, service, status_code)
+    def test_error_span_implicates_its_callee_not_siblings(self):
+        spans = [
+            ("s_fe", None, "frontend", "0"),
+            ("s_co", "s_fe", "checkout", "2"),      # checkout span ERROR (caller)
+            ("s_pay", "s_co", "payment", "0"),      # its child = payment (the failing callee)
+            ("s_cart", "s_fe", "cart", "0"),        # sibling callee, healthy
+        ]
+        dep = failed_edge_dependencies(spans)
+        assert dep.get("payment", 0) > 0 and "cart" not in dep
+        assert "checkout" not in dep  # the anchor itself isn't credited when it has a callee
+
+    def test_erroring_leaf_implicates_itself(self):
+        # paymentFailure: payment marks its OWN span ERROR and has no child -> it's the cause
+        spans = [("s_co", None, "checkout", "0"), ("s_pay", "s_co", "payment", "2")]
+        dep = failed_edge_dependencies(spans)
+        assert dep == {"payment": 1.0}
+
+    def test_shared_culprit_accumulates(self):
+        # two independent error spans each with a single payment callee -> payment = 2.0
+        spans = [
+            ("a1", None, "checkout", "2"), ("a2", "a1", "payment", "0"),
+            ("b1", None, "recommendation", "2"), ("b2", "b1", "payment", "0"),
+        ]
+        assert failed_edge_dependencies(spans)["payment"] == 2.0
+
+    def test_ambiguous_fanout_splits_weight_true_culprit_still_wins(self):
+        # a single coarse ERROR span fanning out to 3 callees is ambiguous -> 1/3 each,
+        # NOT full credit to all three (the reviewer's real-span case). A second, clean
+        # single-callee error span implicating payment lets the true culprit accumulate.
+        spans = [
+            ("c1", None, "checkout", "2"),          # coarse ERROR span, 3 downstream callees
+            ("c1p", "c1", "payment", "0"),
+            ("c1c", "c1", "cart", "0"),
+            ("c1s", "c1", "shipping", "0"),
+            ("f1", None, "frontend", "2"),          # clean ERROR span -> payment only
+            ("f1p", "f1", "payment", "0"),
+        ]
+        dep = failed_edge_dependencies(spans)
+        assert dep["cart"] == pytest.approx(1 / 3) and dep["shipping"] == pytest.approx(1 / 3)
+        assert dep["payment"] == pytest.approx(1 / 3 + 1.0)
+        assert dep["payment"] > dep["cart"]  # incidental siblings don't outweigh the culprit
+
+    def test_no_error_spans_empty(self):
+        assert failed_edge_dependencies([("s", None, "frontend", "0")]) == {}
+
+
+class TestDependencyBoostLiftsSilentCause:
+    def test_silent_callee_promoted_over_loud_symptom(self):
+        # the real pattern: payment (cause) is SILENT (base ~0); checkout (symptom) errors and
+        # has a higher base score. The additive dependency boost must lift payment to #1.
+        g = _graph([("frontend", "checkout"), ("checkout", "payment")])
+        scored = [("checkout", 0.090), ("frontend", 0.050), ("payment", 0.001)]
+        dep = {"payment": 3.0}
+        out = propagation_scores(scored, g, onset={}, anomaly={}, dependency_boost=dep)
+        assert out[0][0] == "payment"
+
+    def test_no_boost_without_dependency(self):
+        g = _graph([("frontend", "checkout"), ("checkout", "payment")])
+        scored = [("checkout", 0.090), ("payment", 0.001)]
+        out = propagation_scores(scored, g, onset={}, anomaly={})
+        assert [s for s, _ in out] == ["checkout", "payment"]
+
+    def test_gamma_zero_disables_boost(self):
+        g = _graph([("checkout", "payment")])
+        scored = [("checkout", 0.090), ("payment", 0.001)]
+        out = propagation_scores(scored, g, onset={}, anomaly={}, dependency_boost={"payment": 3.0}, dependency_gamma=0.0)
+        assert [s for s, _ in out] == ["checkout", "payment"]
 
 
 class TestRerankCandidatesAdapter:
