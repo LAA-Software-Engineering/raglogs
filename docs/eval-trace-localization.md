@@ -68,3 +68,32 @@ Per fault type (cause-above-symptom): `callee_fail` ranker 100%; `latency_only` 
 
 The corpus is synthetic, so a win here proves the *mechanism* is causally correct, not that
 it transfers; external validation on captured OTel/Chaos traces remains the final step.
+
+## The eval discipline (sealed DEV / TEST split)
+
+The synthetic `symptom_only` case has done its job: it exposed the mechanism weakness (a
+trace-status-only cause is a candidate but the ranker prefers the loud symptom, and the
+multiplicative reranker can't lift it). **From here the synthetic corpus is a
+mechanism/unit benchmark only** — "does the code obey the causal rule?" — never an
+"RCA accuracy improved" claim. Continuing to change the reranker until this synthetic case
+passes would be training against our own exam.
+
+Real progress is measured on **captured** OTel/Chaos traces, under a sealed split
+(`src/eval/sealed_split.py`, `scripts/seal_corpus_split.py`). The rigorous cycle:
+
+1. **Capture** a real OTel/Chaos trace corpus (ERROR-status spans + parent/child + labels)
+   — `scripts/eval/otel_corpus.py`, `deploy/otel-demo/`.
+2. **Seal, before touching the algorithm**: `seal_corpus_split.py` holds out **whole fault
+   families / services** (not random cases) into a TEST split and writes `split.yaml` with a
+   fingerprint. The dev eval scores **DEV only**; TEST is refused unless explicitly unsealed.
+   Holding out by family/service asks whether the trace logic *transfers*, not whether it
+   memorises a particular injected failure.
+3. **Develop** the trace-status reranker/feature with: **RCAEval** = no-regression guard,
+   **synthetic** = mechanism test, **real DEV** = model/feature selection.
+4. **Freeze.**
+5. **real TEST = one-shot** (`eval_trace_localization.py --sealed-test`). A win here is the
+   first real evidence trace-status localization works; a failure kills the arc with
+   confidence, like the shelved abstention gate.
+
+`eval_trace_localization.py` respects `split.yaml` automatically — DEV by default, TEST only
+under `--sealed-test`.

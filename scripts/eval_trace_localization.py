@@ -64,6 +64,9 @@ def main() -> int:
     ap.add_argument("corpus", type=Path)
     ap.add_argument("--ranker", required=True)
     ap.add_argument("--calibrator", required=True)
+    ap.add_argument("--sealed-test", action="store_true",
+                    help="ONE-SHOT: score the sealed TEST split instead of DEV. Only for the "
+                         "frozen result — never during development.")
     args = ap.parse_args()
 
     import os
@@ -88,6 +91,20 @@ def main() -> int:
     cases = [c for c in cases if labels.get(c.id)]
     if not cases:
         print(f"no trace-localization cases in {args.corpus}")
+        return 1
+
+    # Respect a sealed DEV/TEST split when present: dev loop scores DEV only; TEST is a
+    # deliberate one-shot (--sealed-test). No split.yaml -> score everything (back-compat).
+    from src.eval.sealed_split import MANIFEST_NAME, dev_ids, load_manifest, test_ids
+
+    if (args.corpus / MANIFEST_NAME).exists():
+        manifest = load_manifest(args.corpus)
+        keep = set(test_ids(manifest, unseal=True) if args.sealed_test else dev_ids(manifest))
+        subset = "SEALED TEST (one-shot)" if args.sealed_test else "DEV"
+        cases = [c for c in cases if c.id in keep]
+        print(f"[sealed split] scoring {subset}: {len(cases)} cases\n")
+    elif args.sealed_test:
+        print(f"--sealed-test given but no {MANIFEST_NAME} in {args.corpus}")
         return 1
 
     methods = {"baseline": [], "ranker": [], "+rerank": []}
