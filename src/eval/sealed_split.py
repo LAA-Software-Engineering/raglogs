@@ -9,9 +9,15 @@ particular injected failure. The frozen model then gets exactly one look at TEST
 
 This module is the guard rail. :func:`make_split` assigns cases deterministically (a case is
 TEST iff its fault family or root-cause service is in the held-out set); :func:`write_manifest`
-seals it to ``split.yaml`` with a fingerprint of the test set; and the loaders refuse to hand
-back TEST ids unless the caller *explicitly* unseals — so a dev-loop eval can only ever score
-DEV, and reading TEST is a deliberate, auditable act.
+seals it to ``split.yaml`` with a **content fingerprint** of the test set; and the loaders
+refuse to hand back TEST ids unless the caller *explicitly* unseals — so a dev-loop eval can
+only ever score DEV, and reading TEST is a deliberate, auditable act.
+
+The fingerprint is a self-discipline integrity check, not an adversarial defence: it hashes
+the test cases' ids **and file contents**, so a TEST case silently changing (a re-capture, an
+edited label) is *detected* on load; but the hash lives beside the data, so a motivated editor
+could recompute it. The real teeth are ``unseal=True``, the refusal to re-seal, and simply not
+peeking.
 
 Pure over ``case.yaml`` dicts (no DB), so it works for any corpus — OTel flag cases, Chaos
 Mesh cases, or the synthetic mechanism benchmark — and is unit-testable.
@@ -30,7 +36,8 @@ _FLAG_RE = re.compile(r"flag=([A-Za-z0-9_]+)")
 
 class SealedError(RuntimeError):
     """Raised when TEST cases are requested without an explicit unseal, or the sealed
-    test set has been tampered with (fingerprint mismatch)."""
+    test set has drifted since it was sealed (content-fingerprint mismatch — a re-capture
+    or edited case, not necessarily malicious)."""
 
 
 def fault_family(doc: dict) -> str:
@@ -69,16 +76,21 @@ class Split:
     holdout_families: list[str] = field(default_factory=list)
     holdout_services: list[str] = field(default_factory=list)
 
-    @property
-    def test_fingerprint(self) -> str:
-        return _fingerprint(self.test)
 
-
-def _fingerprint(ids: list[str]) -> str:
-    """Stable hash of the test-id set — detects a test split silently changing under a
-    frozen result (the seal's integrity check)."""
-    joined = "\n".join(sorted(ids)).encode()
-    return hashlib.sha256(joined).hexdigest()
+def _content_fingerprint(corpus_dir: Path, ids: list[str]) -> str:
+    """Hash of the test cases' ids **and file contents** — so the seal detects not just a
+    reshuffled id set but a TEST case whose ``case.yaml`` / telemetry silently changed under
+    a frozen result. Every file in each test case dir is hashed (sorted, name-qualified)."""
+    h = hashlib.sha256()
+    for cid in sorted(ids):
+        h.update(cid.encode())
+        h.update(b"\0")
+        cdir = Path(corpus_dir) / cid
+        for f in sorted(p for p in cdir.glob("*") if p.is_file()):
+            h.update(f.name.encode())
+            h.update(b"\0")
+            h.update(hashlib.sha256(f.read_bytes()).digest())
+    return h.hexdigest()
 
 
 def make_split(
@@ -114,7 +126,7 @@ def write_manifest(corpus_dir: Path, split: Split) -> Path:
         "sealed": True,
         "holdout_families": split.holdout_families,
         "holdout_services": split.holdout_services,
-        "test_fingerprint": split.test_fingerprint,
+        "test_fingerprint": _content_fingerprint(corpus_dir, split.test),
         "dev": split.dev,
         "test": split.test,
     }
@@ -129,11 +141,11 @@ def load_manifest(corpus_dir: Path) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"no sealed split at {path}; create one with make_split + write_manifest")
     doc = yaml.safe_load(path.read_text()) or {}
-    recomputed = _fingerprint(list(doc.get("test", [])))
+    recomputed = _content_fingerprint(corpus_dir, list(doc.get("test", [])))
     if doc.get("test_fingerprint") != recomputed:
         raise SealedError(
-            f"{path}: test fingerprint mismatch — the sealed TEST set was modified "
-            f"(expected {doc.get('test_fingerprint')}, got {recomputed})"
+            f"{path}: test fingerprint mismatch — the sealed TEST set drifted since sealing "
+            f"(ids or case contents changed; expected {doc.get('test_fingerprint')}, got {recomputed})"
         )
     return doc
 

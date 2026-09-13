@@ -53,19 +53,29 @@ class TestMakeSplit:
 
 
 class TestManifestSeal:
-    def _write(self, tmp_path):
+    def _corpus(self, tmp_path):
+        import yaml
+
         cases = {
             "a": {"trace_localization": {"fault_type": "callee_fail"}},
             "b": {"trace_localization": {"fault_type": "symptom_only"}},
         }
+        for cid, doc in cases.items():
+            d = tmp_path / cid
+            d.mkdir()
+            (d / "case.yaml").write_text(yaml.safe_dump({"id": cid, **doc}))
+        return cases
+
+    def _write(self, tmp_path):
+        cases = self._corpus(tmp_path)
         split = make_split(cases, holdout_families=["symptom_only"])
         return write_manifest(tmp_path, split), split
 
     def test_write_and_load_roundtrip(self, tmp_path):
-        _, split = self._write(tmp_path)
+        self._write(tmp_path)
         m = load_manifest(tmp_path)
         assert dev_ids(m) == ["a"]
-        assert m["test_fingerprint"] == split.test_fingerprint
+        assert len(m["test_fingerprint"]) == 64  # sha256 hex, content-based
 
     def test_test_ids_sealed_by_default(self, tmp_path):
         self._write(tmp_path)
@@ -79,9 +89,16 @@ class TestManifestSeal:
         with pytest.raises(SealedError):
             write_manifest(tmp_path, split)
 
-    def test_fingerprint_mismatch_detected(self, tmp_path):
+    def test_id_set_drift_detected(self, tmp_path):
         self._write(tmp_path)
         p = tmp_path / "split.yaml"
-        p.write_text(p.read_text().replace("- b", "- b\n- c"))  # tamper: add a test id
+        p.write_text(p.read_text().replace("- b", "- b\n- c"))  # add a test id
+        with pytest.raises(SealedError):
+            load_manifest(tmp_path)
+
+    def test_case_content_drift_detected(self, tmp_path):
+        # editing a TEST case's contents after sealing is caught (id set unchanged)
+        self._write(tmp_path)
+        (tmp_path / "b" / "case.yaml").write_text("id: b\ntampered: true\n")
         with pytest.raises(SealedError):
             load_manifest(tmp_path)

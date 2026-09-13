@@ -53,10 +53,13 @@ def main() -> int:
 
     split = make_split(docs, holdout_families=args.families, holdout_services=args.services)
     path = write_manifest(args.corpus, split)
+    import yaml as _yaml
+
+    fp = (_yaml.safe_load(path.read_text()) or {}).get("test_fingerprint", "")
     print(f"sealed split -> {path}")
     print(f"  DEV : {len(split.dev)} cases")
     print(f"  TEST: {len(split.test)} cases (held out: families={split.holdout_families} services={split.holdout_services})")
-    print(f"  test fingerprint: {split.test_fingerprint[:16]}…")
+    print(f"  test content fingerprint: {fp[:16]}…")
     return 0
 
 
