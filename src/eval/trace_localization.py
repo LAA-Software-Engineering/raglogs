@@ -91,9 +91,12 @@ class LocResult:
         return case.root_cause in self.ranked_services[:3]
 
     def cause_above_symptom(self, case: TraceLocCase) -> bool | None:
-        """Is the true cause ranked above *every* labelled symptom service? ``None`` when
-        the case has no distinct symptom (the question doesn't apply) or the cause is
-        unranked (can't be above anything)."""
+        """Is the true cause ranked above *every* labelled symptom service? ``None`` only
+        when the case has no distinct symptom (the question doesn't apply). An unranked
+        cause returns ``False`` — a failure, not an exclusion: on a ``symptom_only`` case
+        the cause scores ~0 and isn't a candidate, and that must count against the metric
+        (it is exactly why the reported ``symptom_only`` rate is 0%), never be dropped from
+        the denominator."""
         if not case.has_distinct_symptom:
             return None
         order = {s: i for i, s in enumerate(self.ranked_services)}
