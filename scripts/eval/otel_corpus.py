@@ -62,6 +62,27 @@ def _dry_capture(ws: datetime, we: datetime):
     return ([{"timestamp": ws.isoformat(), "service": "checkout", "message": "dry-run", "level": "error"}], [], [])
 
 
+def _export_reset(otlp_dir: Path):
+    """Truncate the Collector's OTLP-JSON export files. The demo's file exporter appends,
+    so truncating to empty between cases resumes cleanly and bounds each case's export (and
+    thus the whole-file read in ``capture_from_otlp_dir``) to a single window — without this
+    the append-only files grow across cases and the reader OOMs on long windows (#79).
+
+    Assumes the exporter opens with ``O_APPEND`` (the demo's plain file exporter does): each
+    write seeks to EOF, so after an external truncate the next write lands at offset 0 with no
+    sparse-hole corruption. A future collector config using a rotating or non-append writer
+    would not truncate cleanly — revisit this then."""
+    def reset() -> None:
+        for name in ("logs.json", "traces.json", "metrics.json"):
+            try:
+                open(otlp_dir / name, "w").close()
+            except OSError:
+                pass
+        print("    reset export files", flush=True)
+
+    return reset
+
+
 def _kubectl_chaos_hooks(chaos_dir: Path):
     """apply/delete a Chaos Mesh experiment via `kubectl` from a per-scenario
     manifest (deploy/otel-demo/chaos/<scenario.name>.yaml)."""
@@ -107,6 +128,9 @@ def main() -> int:
     capture = _dry_capture if args.dry_run else capture_from_otlp_dir(args.otlp_dir)
     sleep = (lambda _s: None) if args.dry_run else time.sleep
     now = (lambda: datetime.now(timezone.utc))
+    # Truncate the export files before each case so the reader never accumulates prior
+    # cases' telemetry (the OOM in long-window captures, #79). No-op in dry-run.
+    reset_exports = (lambda: None) if args.dry_run else _export_reset(args.otlp_dir)
     written: list[Path] = []
 
     # Chaos-Mesh infra faults (k8s + Chaos Mesh) — a separate mode from the
@@ -116,6 +140,7 @@ def main() -> int:
         for sc in CHAOS_SCENARIOS:
             case_id = f"otel_chaos_{sc.name}"
             print(f"[{len(written)+1}] chaos {sc.kind}={sc.name} ({sc.service})", flush=True)
+            reset_exports()
             out = generate_chaos_incident(
                 args.out_dir / case_id, case_id, scenario=sc,
                 apply_chaos=apply_chaos, delete_chaos=delete_chaos,
@@ -149,6 +174,7 @@ def main() -> int:
     for sc in scenarios:
         case_id = f"otel_{sc.flag}"
         print(f"[{len(written)+1}] flag {sc.flag} ({sc.service})", flush=True)
+        reset_exports()
         out = generate_incident(
             args.out_dir / case_id, case_id, scenario=sc,
             capture=capture, flip=flip, sleep=sleep, now=now,
@@ -159,6 +185,7 @@ def main() -> int:
     for i in range(args.negatives):
         case_id = f"otel_healthy_{i + 1}"
         print(f"[{len(written)+1}] negative {case_id}", flush=True)
+        reset_exports()
         out = generate_incident(
             args.out_dir / case_id, case_id, scenario=None,
             capture=capture, flip=flip, sleep=sleep, now=now,
