@@ -337,12 +337,63 @@ def _rank_candidates(
     candidates = build_candidates(table, scorer=ranker.score, exclude=excluded)
     if not candidates:
         return None, [], None
+    # Trace-graph propagation rerank (#118 / #79 carve-out, opt-in). Refines the
+    # order so a true upstream culprit can overtake the loud caller that only
+    # carries the downstream symptom. No-op without traces / onset data.
+    if settings.rca_propagation_rerank:
+        candidates = _propagation_rerank(
+            db, scope, candidates, window_start, window_end
+        )
     # Calibrated P(top-1 correct) — only when a calibrator model is configured.
     from src.core.rca.calibration import calibrated_confidence, load_calibrator
 
     calibrator = load_calibrator(settings.rca_calibrator_model_path)
     confidence = calibrated_confidence(calibrator, candidates) if calibrator is not None else None
     return candidates[0].service, [c.to_dict() for c in candidates[:top_k]], confidence
+
+
+def _propagation_rerank(
+    db: Session,
+    scope: str,
+    candidates: list,
+    window_start: datetime,
+    window_end: datetime,
+) -> list:
+    """Reorder candidates with the trace-graph propagation reranker (#118). Builds
+    the caller->callee graph and each service's error-log onset from persisted
+    telemetry; a no-op (original order) when there are no traces."""
+    from src.core.rca.linkage import build_service_graph
+    from src.core.rca.propagation import rerank_candidates
+
+    graph = build_service_graph(db, scope, window_start, window_end)
+    if graph.empty:
+        return candidates
+    onset = _error_onsets(db, scope, window_start, window_end)
+    return rerank_candidates(candidates, graph, onset)
+
+
+def _error_onsets(
+    db: Session, scope: str, window_start: datetime, window_end: datetime
+) -> dict[str, float]:
+    """Per-service onset: the earliest error/fatal log timestamp in the window, as
+    epoch seconds (only onset *differences* matter to the reranker)."""
+    from sqlalchemy import func, select
+
+    from src.db.models import LogEntry
+    from src.db.scope_filter import filter_log_entries_by_scope
+
+    q = (
+        select(LogEntry.service, func.min(LogEntry.timestamp))
+        .where(
+            LogEntry.timestamp >= window_start,
+            LogEntry.timestamp <= window_end,
+            func.lower(LogEntry.level).in_(("error", "fatal", "critical")),
+            LogEntry.service.isnot(None),
+        )
+        .group_by(LogEntry.service)
+    )
+    q = filter_log_entries_by_scope(q, scope)
+    return {svc: ts.timestamp() for svc, ts in db.execute(q).all() if svc and ts}
 
 
 def _packet_to_dict(packet: EvidencePacket) -> dict:

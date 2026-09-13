@@ -218,6 +218,14 @@ class Settings(BaseSettings):
     # ranker. Empty = no calibrated confidence (fall back to ordinal confidence).
     rca_calibrator_model_path: str = ""
 
+    # Trace-graph propagation reranker (#118 / #79 carve-out). When on, the
+    # ranker's candidate order is refined using the caller->callee trace graph +
+    # per-service anomaly onset, to lift a true upstream culprit above the loud
+    # caller that only shows the downstream symptom. Default OFF (opt-in, same
+    # discipline as the ranker): needs a measured LOSO lift before default-on,
+    # and it is a no-op without traces. See docs/eval-trace-propagation.md.
+    rca_propagation_rerank: bool = False
+
     # Comma-separated services that are never a root cause and should be dropped
     # from RCA candidates (#79): traffic generators / infra sidecars that carry
     # heavy telemetry but can't be the fault (e.g. load-generator,flagd,
