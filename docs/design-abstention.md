@@ -1,5 +1,10 @@
 # Abstention gate design (#79 / #118 gen-2)
 
+> **STATUS: SHELVED — negative result (2026-09-12).** This design was
+> implemented, calibrated, and externally validated; it does not ship. See
+> `docs/eval-abstention.md` ("Why it was shelved") for the measured reasons and
+> the reopen criteria. Retained as the design record.
+
 ## Problem (today)
 
 The frozen OTel-Demo run (#79) abstained on **0/2** healthy windows — raglogs

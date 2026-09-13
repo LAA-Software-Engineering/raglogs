@@ -109,9 +109,3 @@ Every setting is read from an environment variable (see `.env.example`). This ta
 | `RCA_RANKER_MODEL_PATH` | str | `""` |
 | `RCA_CALIBRATOR_MODEL_PATH` | str | `""` |
 | `RCA_EXCLUDED_SERVICES` | str | `""` |
-| `ABSTENTION_ENABLED` | bool | `false` |
-| `ABSTENTION_TAU_LOG` | float | `0.25` |
-| `ABSTENTION_TAU_METRIC` | float | `0.25` |
-| `ABSTENTION_THRESHOLD` | float | `0.407` |
-| `ABSTENTION_METRIC_CORROBORATION_K` | int | `2` |
-| `ABSTENTION_METRIC_CORROBORATION_THRESHOLD` | float | `0.3` |
