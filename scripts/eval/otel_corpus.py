@@ -66,7 +66,12 @@ def _export_reset(otlp_dir: Path):
     """Truncate the Collector's OTLP-JSON export files. The demo's file exporter appends,
     so truncating to empty between cases resumes cleanly and bounds each case's export (and
     thus the whole-file read in ``capture_from_otlp_dir``) to a single window — without this
-    the append-only files grow across cases and the reader OOMs on long windows (#79)."""
+    the append-only files grow across cases and the reader OOMs on long windows (#79).
+
+    Assumes the exporter opens with ``O_APPEND`` (the demo's plain file exporter does): each
+    write seeks to EOF, so after an external truncate the next write lands at offset 0 with no
+    sparse-hole corruption. A future collector config using a rotating or non-append writer
+    would not truncate cleanly — revisit this then."""
     def reset() -> None:
         for name in ("logs.json", "traces.json", "metrics.json"):
             try:
