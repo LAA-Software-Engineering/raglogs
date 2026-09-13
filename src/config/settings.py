@@ -224,34 +224,11 @@ class Settings(BaseSettings):
     # frontend-proxy). Empty by default (deployment-specific; keeps core generic).
     rca_excluded_services: str = ""
 
-    # Abstention gate (#79): when enabled, raglogs returns "insufficient evidence"
-    # on a window whose logs+metrics show no incident-strength anomaly vs baseline,
-    # instead of manufacturing a narrative from healthy background traffic. OFF by
-    # default (no behaviour change). The transform scales (tau_*) and threshold are
-    # FROZEN from RCAEval nested-LOSO calibration (docs/eval-abstention.md); the
-    # threshold is the recall/abstention knob (lower = higher recall, less
-    # abstention). Traces are intentionally excluded — the span-rate ratio is a
-    # noisy fault-vs-no-fault detector (it stays in the ranker). See
-    # docs/design-abstention.md.
-    # NOTE (before default-on): tau/threshold were frozen at symmetric ~300 s
-    # incident+baseline windows. The arms are rate/magnitude-normalized (partly
-    # scale-invariant), but the threshold's transfer to very different window sizes
-    # (e.g. a 24h default baseline vs a 2h incident) is not yet measured — validate
-    # at production window sizes before flipping this on by default.
-    abstention_enabled: bool = False
-    # Frozen Gen-3.1 gate params, selected on RCAEval (RE3+RE2) nested-LOSO for the
-    # hierarchical detector (docs/eval-abstention.md): held-out recall 93.9% /
-    # healthy abstention 58.6%. tau_* are the log-space saturation scales; the metric
-    # arm scores a service only when >= k of its metrics reach corroboration_threshold
-    # (then mean of its top-k), which is what stops max over thousands of raw OTLP
-    # metrics from always saturating. Gate is opt-in; these are calibrated on RCAEval
-    # but NOT yet externally re-validated on a fresh typed OTel corpus — do that
-    # before considering default-on.
-    abstention_tau_log: float = 0.25
-    abstention_tau_metric: float = 0.25
-    abstention_threshold: float = 0.407
-    abstention_metric_corroboration_k: int = 2
-    abstention_metric_corroboration_threshold: float = 0.3
+    # NOTE: an abstention "gate" (does an incident exist at all?) was investigated
+    # under #79 and SHELVED as a negative result — see docs/eval-abstention.md. No
+    # modality on the available dev corpora both calibrates and transfers, so raglogs
+    # does not ship a configurable abstention gate; the existing "no significant
+    # clusters -> insufficient evidence" behaviour stands.
 
 
 _settings: Settings | None = None

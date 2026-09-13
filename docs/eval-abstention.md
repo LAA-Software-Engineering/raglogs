@@ -1,7 +1,27 @@
 # Abstention gate — calibration & evaluation (#79)
 
+> **STATUS: SHELVED — negative result (2026-09-12).** The abstention gate does
+> not ship. No modality both *calibrates* on the available dev corpus (RCAEval
+> RE2/RE3) and *transfers* to an untouched external deployment (OpenTelemetry
+> Demo). This is a **dataset problem, not a threshold-tuning problem** — see the
+> "Why it was shelved" section at the end. The code (`abstention.py`,
+> `metric_semantics.py`, `scripts/calibrate_abstention.py`) and its tests were
+> removed; this document is retained as the experimental record.
+>
+> **What still ships:** the multi-modal RCA ranker (opt-in, `#118`), the
+> conservative confidence calibrator (`#83`), and the existing "no significant
+> clusters → insufficient evidence" behaviour. Only the incident-vs-baseline
+> *gate* was dropped.
+>
+> **Reopen criteria:** a development corpus that has *both* realistic OTLP
+> counters / gauges / histograms under healthy traffic *and* enough
+> resource/network incidents to calibrate the metric arm without sacrificing
+> recall. RCAEval has neither the counter-rate signal to calibrate against nor
+> the healthy-traffic negatives, so any threshold fit there is mis-scaled the
+> moment it meets real cumulative counters.
+
 Measured result behind the abstention gate designed in `docs/design-abstention.md`
-and implemented in `src/core/rca/abstention.py`. Calibrated with
+(the code, now removed, lived in `src/core/rca/abstention.py`). Calibrated with
 `scripts/calibrate_abstention.py` on RCAEval (RE3 + RE2), **nested
 leave-one-system-out** so the recall-constrained operating point is not overfit.
 
@@ -130,3 +150,30 @@ saturates on healthy OTel — the failure this whole cycle targets — before an
 default-on. Reproduce with `scripts/calibrate_abstention.py --suites re3,re2`.
 
 _Numbers 2026-09-12. Gate = `max(log, hierarchical-metric)`, logs+metrics only._
+
+## Why it was shelved (2026-09-12)
+
+The Gen-3.1 defaults above were then run against **typed** OTel-Demo telemetry (the
+`#164` round-trip gave the detector real `metric_type`). The metric arm **still
+saturated** (`metric_arm ≈ 0.998` on a healthy window): `τ_metric = 0.25` was
+calibrated on RCAEval *level* changes, but RCAEval has **no cumulative counters at
+all**, so the counter-*rate* path it now feeds was never calibrated — its scale is
+simply wrong the moment it meets real OTLP counters. Retuning `τ_metric` on OTel
+would be tuning on the validation corpus, which is exactly what the frozen-eval
+discipline forbids.
+
+Dropping to a **logs-only** gate (Gen-3.2) removed the counter problem but was
+degenerate on the dev corpus: at any recall the constrained fit would accept
+(≥58%), healthy abstention was **0%**, and buying real abstention collapsed
+RE2 resource-fault recall to ~30–40%. Logs alone cannot separate "elevated error
+volume that is an incident" from "elevated error volume that is not" on these
+corpora — the very resource/network faults the gate most needs to catch are the
+ones whose error signature is weakest.
+
+The through-line across Gen-2 → Gen-3.1 → Gen-3.2: **every arm either fails to
+calibrate on RCAEval or fails to transfer to OTel, and no threshold search fixes
+that** because the two corpora do not overlap in the signal the gate depends on
+(RCAEval: no counters, no healthy negatives; OTel: counters that no dev fit has
+seen). This is a corpus-coverage gap, so the gate is shelved rather than shipped
+default-off — a default-off knob nobody can safely turn on is worse than no knob.
+Reopen only under the criteria stated at the top of this file.
