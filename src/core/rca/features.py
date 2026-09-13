@@ -169,6 +169,54 @@ def trace_features(
     return rate, dur
 
 
+# OTLP span status: 2 = ERROR (OTel Demo emits it; RCAEval traces are all UNSET/OK,
+# so error-status is a bonus where present and latency carries the rest).
+_ERROR_STATUS = frozenset({"2", "error", "status_code_error"})
+
+
+def _is_error_status(sc) -> bool:
+    return sc is not None and str(sc).strip().lower() in _ERROR_STATUS
+
+
+def trace_symptoms(
+    rows,
+    incident_start: float,
+    incident_end: float,
+) -> dict[str, tuple[float, float]]:
+    """Per-service trace *symptom* evidence for the propagation reranker (#118): the
+    onset and strength of trouble seen in traces, so the reranker still fires where
+    logs are silent (the OTel Demo emits almost no error logs, but its spans carry
+    ERROR status).
+
+    A span is a symptom when it carries **ERROR status** — the trace analog of an
+    error log. Latency-excursion was evaluated as an additional trigger and dropped:
+    on RCAEval it materially regressed resource faults (a resource fault balloons
+    latency across every downstream service, so "earliest excursion" is noise), while
+    error-status is clean. This keeps RCAEval — which has essentially no error-status
+    spans — on its log-only behaviour, and lets OTel (which does emit ERROR status)
+    fire.
+
+    ``rows`` is an iterable of ``(service, ts_sec, status_code)`` — epoch seconds so
+    the pipeline (datetimes) and the eval harness (parquet millis) share one
+    definition. Returns ``service -> (onset_sec, magnitude)`` (first error span's time,
+    error-span count); services with no error span are omitted.
+    """
+    from collections import defaultdict
+
+    onset: dict[str, float] = {}
+    mag: dict[str, int] = defaultdict(int)
+    for service, ts_sec, status_code in rows:
+        if not service or ts_sec is None or not _is_error_status(status_code):
+            continue
+        if not (incident_start <= ts_sec <= incident_end):
+            continue
+        ts = float(ts_sec)
+        mag[service] += 1
+        if service not in onset or ts < onset[service]:
+            onset[service] = ts
+    return {s: (onset[s], float(mag[s])) for s in mag}
+
+
 def metric_features(
     samples, baseline_start: datetime, incident_start: datetime, incident_end: datetime
 ) -> dict[str, float]:

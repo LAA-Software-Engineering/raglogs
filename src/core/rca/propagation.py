@@ -152,6 +152,36 @@ def propagation_scores(
     return adjusted
 
 
+def combine_log_trace_evidence(
+    log_onset: Mapping[str, float],
+    log_err: Mapping[str, float],
+    trace_sym: Mapping[str, tuple[float, float]],
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Merge log and trace symptom evidence into ``(onset, anomaly)`` maps for the
+    reranker, per-service **log-first with trace fallback** (the #118 external finding:
+    the log-onset mechanism lifts RCAEval but is silent on OTel, which is trace-rich).
+
+    A service that shows log errors keeps its log onset + log-error magnitude — so a
+    log-rich corpus (RCAEval) behaves exactly as before and its measured lift is
+    preserved. A service with no log errors falls back to its trace symptom onset +
+    magnitude, so on a log-silent corpus (OTel) the reranker still has signal. Returns
+    ``(onset, anomaly)`` over the union of services carrying either kind of evidence.
+    """
+    onset: dict[str, float] = {}
+    anomaly: dict[str, float] = {}
+    for s in set(log_err) | set(trace_sym):
+        le = log_err.get(s, 0.0)
+        if le > 0:
+            anomaly[s] = float(le)
+            if s in log_onset:
+                onset[s] = log_onset[s]
+        elif s in trace_sym:
+            t_onset, mag = trace_sym[s]
+            anomaly[s] = float(mag)
+            onset[s] = t_onset
+    return onset, anomaly
+
+
 def rerank_candidates(
     candidates,
     graph: ServiceGraph,

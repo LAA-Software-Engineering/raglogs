@@ -341,9 +341,7 @@ def _rank_candidates(
     # order so a true upstream culprit can overtake the loud caller that only
     # carries the downstream symptom. No-op without traces / onset data.
     if settings.rca_propagation_rerank:
-        candidates = _propagation_rerank(
-            db, scope, candidates, window_start, window_end
-        )
+        candidates = _propagation_rerank(db, scope, candidates, window_start, window_end)
     # Calibrated P(top-1 correct) — only when a calibrator model is configured.
     from src.core.rca.calibration import calibrated_confidence, load_calibrator
 
@@ -360,16 +358,42 @@ def _propagation_rerank(
     window_end: datetime,
 ) -> list:
     """Reorder candidates with the trace-graph propagation reranker (#118). Builds
-    the caller->callee graph and each service's error-log onset from persisted
-    telemetry; a no-op (original order) when there are no traces."""
+    the caller->callee graph, then each service's symptom onset + strength from
+    **trace ERROR-status** evidence with a fallback to error logs — so the reranker
+    still fires where logs are silent (the OTel external finding). A no-op (original
+    order) when there are no traces."""
     from src.core.rca.linkage import build_service_graph
-    from src.core.rca.propagation import rerank_candidates
+    from src.core.rca.propagation import combine_log_trace_evidence, rerank_candidates
 
     graph = build_service_graph(db, scope, window_start, window_end)
     if graph.empty:
         return candidates
-    onset = _error_onsets(db, scope, window_start, window_end)
-    return rerank_candidates(candidates, graph, onset)
+    trace_sym = _trace_symptoms(db, scope, window_start, window_end)
+    log_onset = _error_onsets(db, scope, window_start, window_end)
+    log_err = {c.service: float(getattr(c.features, "log_err", 0.0)) for c in candidates}
+    onset, anomaly = combine_log_trace_evidence(log_onset, log_err, trace_sym)
+    return rerank_candidates(candidates, graph, onset, anomaly=anomaly)
+
+
+def _trace_symptoms(
+    db: Session, scope: str, window_start: datetime, window_end: datetime
+) -> dict[str, tuple[float, float]]:
+    """Per-service trace ERROR-status symptom (onset, magnitude) over the incident
+    window, via :func:`src.core.rca.features.trace_symptoms`."""
+    from sqlalchemy import select
+
+    from src.core.rca.features import trace_symptoms
+    from src.db.models import TraceSpan
+
+    rows = db.execute(
+        select(TraceSpan.service, TraceSpan.start_time, TraceSpan.status_code).where(
+            TraceSpan.scope == scope,
+            TraceSpan.start_time >= window_start,
+            TraceSpan.start_time <= window_end,
+        )
+    ).all()
+    spans = [(svc, ts.timestamp(), sc) for svc, ts, sc in rows if svc and ts is not None]
+    return trace_symptoms(spans, window_start.timestamp(), window_end.timestamp())
 
 
 def _error_onsets(

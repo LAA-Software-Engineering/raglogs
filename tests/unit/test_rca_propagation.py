@@ -1,6 +1,11 @@
 """Unit tests for the trace-graph propagation reranker (#118 / #79). No DB."""
+from src.core.rca.features import trace_symptoms
 from src.core.rca.linkage import ServiceGraph
-from src.core.rca.propagation import propagation_scores, rerank_candidates
+from src.core.rca.propagation import (
+    combine_log_trace_evidence,
+    propagation_scores,
+    rerank_candidates,
+)
 
 
 def _graph(edges):
@@ -101,6 +106,45 @@ class TestDirectionFallback:
         scored = [("caller", 0.55), ("callee", 0.50)]
         anomaly = {"caller": 10.0, "callee": 10.0}
         assert _order(scored, graph, {}, anomaly) == ["caller", "callee"]
+
+
+class TestTraceSymptoms:
+    def test_error_status_span_is_the_symptom(self):
+        rows = [
+            ("svc", 105.0, "2"),   # ERROR (OTLP) -> onset here
+            ("svc", 110.0, "2"),   # another ERROR -> magnitude 2
+            ("svc", 108.0, "0"),   # OK, ignored
+            ("svc", 90.0, "2"),    # before incident window, ignored
+        ]
+        out = trace_symptoms(rows, incident_start=100, incident_end=200)
+        assert out["svc"] == (105.0, 2.0)
+
+    def test_error_status_word_form_matches(self):
+        assert trace_symptoms([("svc", 150.0, "ERROR")], 100, 200) == {"svc": (150.0, 1.0)}
+
+    def test_ok_and_unset_status_produce_no_symptom(self):
+        rows = [("svc", 105.0, "0"), ("svc", 106.0, "1"), ("svc", 107.0, None)]
+        assert trace_symptoms(rows, 100, 200) == {}
+
+
+class TestCombineEvidence:
+    def test_log_service_keeps_log_evidence(self):
+        onset, anomaly = combine_log_trace_evidence(
+            log_onset={"a": 10.0}, log_err={"a": 5.0}, trace_sym={"a": (99.0, 3.0)}
+        )
+        assert onset == {"a": 10.0} and anomaly == {"a": 5.0}  # log wins where present
+
+    def test_trace_fallback_when_no_log_errors(self):
+        onset, anomaly = combine_log_trace_evidence(
+            log_onset={}, log_err={"a": 0.0}, trace_sym={"a": (99.0, 3.0)}
+        )
+        assert onset == {"a": 99.0} and anomaly == {"a": 3.0}
+
+    def test_union_of_services(self):
+        onset, anomaly = combine_log_trace_evidence(
+            log_onset={"a": 1.0}, log_err={"a": 2.0}, trace_sym={"b": (5.0, 4.0)}
+        )
+        assert set(anomaly) == {"a", "b"} and anomaly["b"] == 4.0 and onset["b"] == 5.0
 
 
 class TestRerankCandidatesAdapter:
