@@ -102,11 +102,21 @@ def failed_edge_dependencies(spans) -> dict[str, float]:
 
     ``spans`` is an iterable of ``(span_id, parent_span_id, service, status_code)``. For
     each ERROR span, the implicated dependency is the service of its **child** span(s) (the
-    callee the RPC was to); a dependency implicated by many error spans — the shared
-    culprit several symptomatic callers reach into — accumulates the most. An ERROR span
-    with no child of a *different* service is an erroring **leaf**, so it implicates its own
-    service (the service failed internally, e.g. paymentFailure). Returns ``service ->
-    score`` (unnormalised); empty when there are no error spans.
+    callee the RPC was to). When an ERROR span has children in **several** distinct services
+    (a coarse handler span fanning out to many callees), the attribution is *ambiguous* — we
+    cannot tell which downstream call failed — so its weight is **split** ``1/n`` across
+    those callees rather than crediting each fully; a single-callee error span gives the full
+    ``1.0``. A dependency implicated by many error spans — the shared culprit several
+    symptomatic callers reach into — still accumulates the most, while an incidental sibling
+    under one fan-out span gets only a fraction. An ERROR span with no child of a *different*
+    service is an erroring **leaf**, so it implicates its own service (the service failed
+    internally, e.g. paymentFailure). Returns ``service -> score`` (unnormalised); empty when
+    there are no error spans.
+
+    Disambiguating *which* callee actually failed (rather than diluting across a fan-out)
+    needs per-RPC signal the span model retains but this doesn't yet read — the ``operation``
+    / peer attributes of the specific failing client span — left for when real trace-labelled
+    data is available to validate it.
 
     Known gap (surfaced for one-shot validation, not solved here): a truly *unreachable*
     callee produces no span at all, so it can't be implicated via a child edge — that
@@ -126,8 +136,10 @@ def failed_edge_dependencies(spans) -> dict[str, float]:
     for span_id, service in error_spans:
         callees = {svc for _cid, svc in children_by_parent.get(span_id, []) if svc != service}
         if callees:
+            # split the span's weight across ambiguous callees (1/n); a lone callee gets 1.0
+            share = 1.0 / len(callees)
             for callee in callees:
-                score[callee] += 1.0  # the RPC to this dependency failed
+                score[callee] += share
         else:
             score[service] += 1.0  # erroring leaf: the service itself failed internally
     return dict(score)

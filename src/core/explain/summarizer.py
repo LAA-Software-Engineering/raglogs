@@ -337,16 +337,26 @@ def _rank_candidates(
     candidates = build_candidates(table, scorer=ranker.score, exclude=excluded)
     if not candidates:
         return None, [], None
+    ranker_top = candidates[0].service
     # Trace-graph propagation rerank (#118 / #79 carve-out, opt-in). Refines the
     # order so a true upstream culprit can overtake the loud caller that only
     # carries the downstream symptom. No-op without traces / onset data.
     if settings.rca_propagation_rerank:
         candidates = _propagation_rerank(db, scope, candidates, window_start, window_end)
-    # Calibrated P(top-1 correct) — only when a calibrator model is configured.
+    # Calibrated P(top-1 correct) — only when a calibrator model is configured. The
+    # calibrator was fit on the *ranker's* top-1 score, so it is only valid when the
+    # reranker left top-1 unchanged. When the reranker promotes a different service
+    # (whose original ranker score no longer reflects the decision rule), the calibrated
+    # probability would be semantically false — withhold it (falls back to the ordinal
+    # label) until the combined ranker+reranker policy is calibrated on real trace data.
     from src.core.rca.calibration import calibrated_confidence, load_calibrator
 
     calibrator = load_calibrator(settings.rca_calibrator_model_path)
-    confidence = calibrated_confidence(calibrator, candidates) if calibrator is not None else None
+    rerank_changed_top1 = candidates[0].service != ranker_top
+    if calibrator is not None and not rerank_changed_top1:
+        confidence = calibrated_confidence(calibrator, candidates)
+    else:
+        confidence = None
     return candidates[0].service, [c.to_dict() for c in candidates[:top_k]], confidence
 
 

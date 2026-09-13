@@ -1,4 +1,6 @@
 """Unit tests for the trace-graph propagation reranker (#118 / #79). No DB."""
+import pytest
+
 from src.core.rca.features import trace_symptoms
 from src.core.rca.linkage import ServiceGraph
 from src.core.rca.propagation import (
@@ -170,12 +172,29 @@ class TestFailedEdgeDependencies:
         assert dep == {"payment": 1.0}
 
     def test_shared_culprit_accumulates(self):
-        # two independent error spans both call payment -> payment accumulates
+        # two independent error spans each with a single payment callee -> payment = 2.0
         spans = [
             ("a1", None, "checkout", "2"), ("a2", "a1", "payment", "0"),
             ("b1", None, "recommendation", "2"), ("b2", "b1", "payment", "0"),
         ]
         assert failed_edge_dependencies(spans)["payment"] == 2.0
+
+    def test_ambiguous_fanout_splits_weight_true_culprit_still_wins(self):
+        # a single coarse ERROR span fanning out to 3 callees is ambiguous -> 1/3 each,
+        # NOT full credit to all three (the reviewer's real-span case). A second, clean
+        # single-callee error span implicating payment lets the true culprit accumulate.
+        spans = [
+            ("c1", None, "checkout", "2"),          # coarse ERROR span, 3 downstream callees
+            ("c1p", "c1", "payment", "0"),
+            ("c1c", "c1", "cart", "0"),
+            ("c1s", "c1", "shipping", "0"),
+            ("f1", None, "frontend", "2"),          # clean ERROR span -> payment only
+            ("f1p", "f1", "payment", "0"),
+        ]
+        dep = failed_edge_dependencies(spans)
+        assert dep["cart"] == pytest.approx(1 / 3) and dep["shipping"] == pytest.approx(1 / 3)
+        assert dep["payment"] == pytest.approx(1 / 3 + 1.0)
+        assert dep["payment"] > dep["cart"]  # incidental siblings don't outweigh the culprit
 
     def test_no_error_spans_empty(self):
         assert failed_edge_dependencies([("s", None, "frontend", "0")]) == {}
