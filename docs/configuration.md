@@ -108,4 +108,5 @@ Every setting is read from an environment variable (see `.env.example`). This ta
 | `RCA_WEIGHT_ONSET` | float | `0.0` |
 | `RCA_RANKER_MODEL_PATH` | str | `""` |
 | `RCA_CALIBRATOR_MODEL_PATH` | str | `""` |
+| `RCA_PROPAGATION_RERANK` | bool | `false` |
 | `RCA_EXCLUDED_SERVICES` | str | `""` |
