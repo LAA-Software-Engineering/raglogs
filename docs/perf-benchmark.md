@@ -110,6 +110,29 @@ Component microbenchmark (200k identical ISO timestamps, same machine):
 **286× faster** on the parse itself; since timestamp parsing was ~12% of ingest wall, the
 end-to-end effect is proportionate: **1M-line ingest 2,364 → 2,661 lines/s (423 s → 376 s, ≈ +12%)**
 in a single before/after run (small sizes are within run-to-run noise). **Explain is unchanged** (it
-does not parse timestamps). The dominant remaining ingest cost is now the SQLAlchemy INSERT
-compilation (`_extend_values_for_multiparams` / per-row bind params) — the next, harder target,
-tracked separately because it entangles with the dedup `ON CONFLICT … RETURNING` path.
+does not parse timestamps).
+
+### 2. Bulk INSERT via executemany / insertmanyvalues (2026-09-15)
+
+A coarse phase split (undistorted timers, not `cProfile`) then showed **persist was ~85% of ingest
+wall** (`_process_line` only ~15%), and within persist, `db.execute` ~67% / statement build ~16%.
+The cost was the shape of the insert: `pg_insert(LogEntry).values([500 dicts])` builds one giant
+multi-`VALUES` statement — 500 × 20-column bind params to *compile* in SQLAlchemy **and** re-parse
+in psycopg (`_split_query`) every batch. Switched to a **parameterless** statement executed with the
+value list (`db.execute(stmt, [values, …])`), so SQLAlchemy's insertmanyvalues compiles once and
+reuses it. `RETURNING id` + `_entries_inserted`'s id-set correlation keep the dedup accounting
+identical (verified: a re-ingest of the same file dedups 5,000/5,000; the executemany form was
+measured at 3.6× the old form on a 20k isolated insert).
+
+| lines | ingest lines/s (before → after) | 1M ingest wall |
+|---|---|---|
+| 100,000 | 2,328 → **5,882** | — |
+| 1,000,000 | 2,661 → **5,766** | **376 s → 173 s** |
+
+**~2.2× faster ingest** (≈ **2.5×** over the pre-#85 baseline once the timestamp fast path is
+included). Explain and peak RSS unchanged. Eval delta: **none** — identical rows/dedup, output
+unchanged.
+
+The remaining ingest cost is now split between the per-line work (parse/normalize/fingerprint) and
+the DB round-trip itself; further wins (e.g. `COPY`, larger batches, partitioning) get evaluated
+against this new curve, cheapest first — but ingest is no longer the glaring bottleneck it was.
