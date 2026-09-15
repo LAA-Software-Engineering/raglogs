@@ -54,9 +54,13 @@ def parse_timestamp_field(value: str | int | float) -> Optional[datetime]:
     if isinstance(value, str):
         # Fast path: ISO 8601 via the stdlib C parser. Log timestamps are
         # overwhelmingly ISO, and dateutil's generic parser is ~50x slower —
-        # it dominated the ingest hot path (#85 profile). fromisoformat and
-        # dateutil agree on any valid ISO string, so this only reorders which
-        # parser wins; anything fromisoformat rejects falls through unchanged.
+        # it dominated the ingest hot path (#85 profile). For the ISO strings
+        # this codebase realistically sees, fromisoformat and dateutil agree, so
+        # this reorders which parser wins; anything fromisoformat rejects falls
+        # through unchanged. One known divergence: a UTC offset carrying a
+        # seconds component (e.g. "+02:00:30") — fromisoformat keeps full
+        # precision, where the old dateutil→regex path truncated to "+02:00".
+        # More correct, and no real log source emits sub-minute offsets.
         try:
             dt = datetime.fromisoformat(rewrite_iso_z(value))
             return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)

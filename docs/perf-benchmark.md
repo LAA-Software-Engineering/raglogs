@@ -94,8 +94,11 @@ The ingest profile (`cProfile` over 100k lines) put `dateutil.parser.parse` at ~
 wall — it was parsing *every* line's timestamp with a generic, pure-Python parser, even though
 log timestamps are overwhelmingly ISO 8601. `parse_timestamp_field` now tries the stdlib C parser
 (`datetime.fromisoformat`, via the shared `rewrite_iso_z`) first and only falls back to `dateutil`
-for anything it rejects — behaviour-preserving (the two agree on any valid ISO string; 36 timestamp
-/ parsing / normalization tests unchanged).
+for anything it rejects — behaviour-preserving for the ISO strings this codebase realistically
+sees (36 timestamp / parsing / normalization tests unchanged). One known divergence (#176 review):
+a UTC offset with a *seconds* component (e.g. `+02:00:30`) — `fromisoformat` keeps full precision
+where the old `dateutil`→regex path truncated it to `+02:00`; more correct, and no real log source
+emits sub-minute offsets.
 
 Component microbenchmark (200k identical ISO timestamps, same machine):
 
