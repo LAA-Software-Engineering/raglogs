@@ -141,6 +141,11 @@ test-int:
 test-cov:
 	pytest tests/unit/ --cov=src --cov-report=term-missing
 
+# Ingest→explain performance benchmark (#85). Needs a live Postgres (DB_URL).
+# Prints a cost-vs-N curve; commit the numbers, don't optimise blind.
+bench: db-up
+	$(PYTHON) scripts/bench_pipeline.py --sizes $(or $(SIZES),10000,100000,500000,1000000)
+
 # ── Eval harness ──────────────────────────────────────────────────────────────
 
 eval: db-up
