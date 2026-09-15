@@ -82,17 +82,9 @@ def test_process_line_stamps_caller_scope() -> None:
 
 
 def test_upsert_statement_compiles_on_conflict_do_nothing() -> None:
-    entry = LogEntry(
-        id=uuid.uuid4(),
-        source_adapter="file",
-        source_ref="app.log",
-        original_line_hash="a" * 64,
-        scope="default",
-        timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        fingerprint="abcd1234abcd1234",
-        raw_message="hello",
-    )
-    stmt = log_entry_upsert_statement([entry])
+    # Parameterless statement (executed with a list of value dicts via executemany);
+    # it compiles to the same ON CONFLICT DO NOTHING upsert against the dedup index.
+    stmt = log_entry_upsert_statement()
     compiled = str(stmt.compile(dialect=postgresql.dialect())).upper()
     assert "ON CONFLICT" in compiled
     assert "DO NOTHING" in compiled

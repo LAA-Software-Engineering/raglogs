@@ -171,13 +171,26 @@ def _log_entry_values(entry: LogEntry) -> dict[str, Any]:
     }
 
 
-def log_entry_upsert_statement(batch: list[LogEntry]) -> Insert:
-    """INSERT … ON CONFLICT DO NOTHING against ``ux_log_entries_dedup``."""
-    stmt = pg_insert(LogEntry).values([_log_entry_values(entry) for entry in batch])
-    return stmt.on_conflict_do_nothing(
-        index_elements=["scope", "source_ref", "original_line_hash", "timestamp"],
-        index_where=LOG_ENTRY_DEDUP_INDEX_WHERE,
-    ).returning(LogEntry.id)
+def log_entry_upsert_statement() -> Insert:
+    """INSERT … ON CONFLICT DO NOTHING against ``ux_log_entries_dedup``.
+
+    A **parameterless** statement, executed once with a list of value dicts
+    (``db.execute(stmt, [values, …])``) so SQLAlchemy's insertmanyvalues compiles
+    the statement once and reuses it, rather than the old ``.values([dicts])`` form
+    which built a giant single multi-VALUES statement — 500×N-column bind params to
+    compile in SQLAlchemy and re-parse in psycopg every batch, the dominant ingest
+    cost (#85 profile: persist was 85% of ingest wall; this path ~3.6x faster on the
+    execute). ``RETURNING id`` still reports which rows survived the dedup, and
+    :func:`_entries_inserted` correlates them by id (order-independent), so the
+    dedup accounting is unchanged."""
+    return (
+        pg_insert(LogEntry)
+        .on_conflict_do_nothing(
+            index_elements=["scope", "source_ref", "original_line_hash", "timestamp"],
+            index_where=LOG_ENTRY_DEDUP_INDEX_WHERE,
+        )
+        .returning(LogEntry.id)
+    )
 
 
 def _entries_inserted(batch: list[LogEntry], result: Any) -> list[LogEntry]:
@@ -214,8 +227,8 @@ def _flush_log_batch(
     """
     if not batch:
         return 0, 0
-    stmt = log_entry_upsert_statement(batch)
-    result = db.execute(stmt)
+    stmt = log_entry_upsert_statement()
+    result = db.execute(stmt, [_log_entry_values(entry) for entry in batch])
     inserted_entries = _entries_inserted(batch, result)
     skipped = len(batch) - len(inserted_entries)
     if embedder is not None and inserted_entries:
