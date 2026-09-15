@@ -137,3 +137,41 @@ confidence, like the shelved abstention gate. (The synthetic `symptom_only` faul
 this finding — it marks the *cause* with error-status; realigning it to the real
 caller-errors/callee-silent pattern is a follow-up, kept separate so the mechanism unit tests
 stay the source of truth in the meantime.)
+
+## One-shot result (2026-09-15): the frozen mechanism on a fresh real corpus
+
+The frozen symptom-anchor reranker (#172) was run **once** on a newly captured, untouched
+OTel-Demo corpus (12 cases: 9 flag faults + 3 healthy negatives, 120 s baseline / 300 s
+incident), via `frozen-eval` with the propagation reranker **off vs on** (candidate
+exclusion `load-generator,flagd,frontend-proxy,image-provider`, same ranker + calibrator):
+
+| | top-1 | top-3 | negative abstention |
+|---|---|---|---|
+| ranker only | 0.0% | 55.6% | (unchanged) |
+| + failed-edge rerank | **11.1%** | 55.6% | (unchanged) |
+
+Per case (positives): **`cartFailure` — a clean top-1 win** (`[recommendation, checkout,
+cart]` → `[cart, …]`: cart marked its own error and checkout's failed edge implicates it);
+**`paymentFailure` — directionally correct** (payment #3 → #2, held off #1 by infra
+error-status noise); **`paymentUnreachable` / `recommendationCacheFailure` /
+`productCatalogFailure` — unchanged**, the cause emits **zero** error-status (the unreachable /
+silent-callee gap); resource/latency faults (ad / image / kafka / load-gen) inert (no
+error-status). **No case regressed**, and negatives were unaffected.
+
+**Verdict — a modest, honest positive (not a wash, not a big win).** On real data the mechanism
+does genuine, non-harmful causal work *where the cause emits error-status* (`cartFailure` clean,
+`paymentFailure` directional), lifting top-1 from 0% to 11.1% with no regression. Its reach is
+narrow, limited by two real-data facts this corpus exposed:
+
+1. **Unreachable / silent callee** — a service that never responds (paymentUnreachable) or
+   returns a degraded-but-non-error response (recommendation cache) emits no ERROR span, so the
+   failed-edge walk has nothing to attribute. Needs a callee span-rate-drop signal (a dependency
+   whose span rate collapses under an erroring caller), not error-status.
+2. **Infra error-status noise** — `frontend-proxy` and `load-generator` carry ERROR-status spans
+   in *every* case, including the healthy negatives, so their failed edges add noise. They are
+   already excluded from *candidates*; a natural next step is to exclude denylisted services from
+   being symptom *anchors* too.
+
+Both are **future work, deliberately not patched against this corpus** (it is now spent). The
+mechanism ships opt-in (`RCA_PROPAGATION_RERANK`, default off); this one-shot earns it a real —
+if narrow — place, rather than the kill the discipline reserved for a wash.
