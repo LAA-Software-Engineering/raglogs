@@ -4,6 +4,8 @@ from typing import Optional
 
 from dateutil import parser as dateutil_parser
 
+from src.utils.time import rewrite_iso_z
+
 # Common timestamp patterns for plain-text log parsing
 TIMESTAMP_PATTERNS = [
     # ISO 8601 with timezone
@@ -50,6 +52,16 @@ def parse_timestamp_field(value: str | int | float) -> Optional[datetime]:
             return None
 
     if isinstance(value, str):
+        # Fast path: ISO 8601 via the stdlib C parser. Log timestamps are
+        # overwhelmingly ISO, and dateutil's generic parser is ~50x slower —
+        # it dominated the ingest hot path (#85 profile). fromisoformat and
+        # dateutil agree on any valid ISO string, so this only reorders which
+        # parser wins; anything fromisoformat rejects falls through unchanged.
+        try:
+            dt = datetime.fromisoformat(rewrite_iso_z(value))
+            return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
         try:
             dt = dateutil_parser.parse(value)
             if dt.tzinfo is None:

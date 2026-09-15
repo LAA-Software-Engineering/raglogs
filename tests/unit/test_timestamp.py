@@ -77,3 +77,38 @@ def test_bare_digit_calendar_date_before_unix_epoch_range():
     assert parse_timestamp_field("19991231") == datetime(
         1999, 12, 31, tzinfo=timezone.utc
     )
+
+
+def test_iso_fast_path_matches_dateutil():
+    # The fromisoformat fast path (#85) must return exactly what dateutil did for
+    # valid ISO 8601 — it only reorders which parser wins, never the result.
+    from dateutil import parser as du
+
+    for s in [
+        "2026-01-01T12:00:00+00:00",
+        "2026-03-12T22:01:10.123456+02:00",
+        "2026-03-12T22:01:10",              # naive -> UTC
+        "2026-03-12 22:01:10",              # space separator
+        "2026-03-12",                       # date only
+    ]:
+        expected = du.parse(s)
+        if expected.tzinfo is None:
+            expected = expected.replace(tzinfo=timezone.utc)
+        assert parse_timestamp_field(s) == expected, s
+
+
+def test_trailing_z_is_utc():
+    assert parse_timestamp_field("2026-01-01T12:00:00Z") == datetime(
+        2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc
+    )
+
+
+def test_non_iso_string_still_parses_via_fallback():
+    # slash-separated and human dates: fromisoformat rejects them, so they must fall
+    # through to the dateutil path unchanged.
+    assert parse_timestamp_field("2026/03/12 22:01:10") == datetime(
+        2026, 3, 12, 22, 1, 10, tzinfo=timezone.utc
+    )
+    assert parse_timestamp_field("March 12, 2026 10:00:00") == datetime(
+        2026, 3, 12, 10, 0, 0, tzinfo=timezone.utc
+    )

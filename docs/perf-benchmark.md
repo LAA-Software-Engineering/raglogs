@@ -85,3 +85,28 @@ real target is **ingest per-line CPU**, which the issue did not call out:
 
 Each optimization lands with a before/after `make bench` delta — the same evidence discipline the
 RCA work used.
+
+## Optimization log
+
+### 1. ISO-8601 timestamp fast path (2026-09-15)
+
+The ingest profile (`cProfile` over 100k lines) put `dateutil.parser.parse` at ~12% of ingest
+wall — it was parsing *every* line's timestamp with a generic, pure-Python parser, even though
+log timestamps are overwhelmingly ISO 8601. `parse_timestamp_field` now tries the stdlib C parser
+(`datetime.fromisoformat`, via the shared `rewrite_iso_z`) first and only falls back to `dateutil`
+for anything it rejects — behaviour-preserving (the two agree on any valid ISO string; 36 timestamp
+/ parsing / normalization tests unchanged).
+
+Component microbenchmark (200k identical ISO timestamps, same machine):
+
+| parser | per timestamp | 200k |
+|---|---|---|
+| `dateutil.parse` | 108.1 µs | 21.6 s |
+| `fromisoformat` | 0.4 µs | 0.075 s |
+
+**286× faster** on the parse itself; since timestamp parsing was ~12% of ingest wall, the
+end-to-end effect is proportionate: **1M-line ingest 2,364 → 2,661 lines/s (423 s → 376 s, ≈ +12%)**
+in a single before/after run (small sizes are within run-to-run noise). **Explain is unchanged** (it
+does not parse timestamps). The dominant remaining ingest cost is now the SQLAlchemy INSERT
+compilation (`_extend_values_for_multiparams` / per-row bind params) — the next, harder target,
+tracked separately because it entangles with the dedup `ON CONFLICT … RETURNING` path.
