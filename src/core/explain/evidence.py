@@ -154,9 +154,20 @@ def find_trigger_candidates(
     lookback_minutes: Optional[int] = None,
     ingestion_job_id: Optional[uuid.UUID] = None,
     scope: str = DEFAULT_LOG_SCOPE,
+    search_end: Optional[datetime] = None,
 ) -> list[TriggerCandidate]:
     """
     Find likely trigger events in a window slightly before the main window.
+
+    ``search_end`` caps the *upper* end of the scanned range (default: ``window_end``).
+    Callers pass the primary error cluster's onset (``first_seen``) here: a trigger
+    *causes* the incident, so it cannot occur after the errors begin, and the timing
+    evidence only ever consumes a pre-onset trigger. Bounding to the onset makes the
+    trigger regex scan — the dominant cost of ``explain`` on a large window (#85 profile:
+    ~53%) — evaluate only the logs up to onset instead of the whole incident window,
+    without changing which trigger is selected (candidates are returned earliest-first,
+    and the earliest — the one the timing check and the deploy-trigger metric use — is by
+    definition at or before onset).
 
     The WHERE clause filters to rows the Python extraction below would
     actually evaluate a trigger match against, before ordering/capping, so the
@@ -195,6 +206,7 @@ def find_trigger_candidates(
         lookback_minutes = get_settings().trigger_lookback_minutes
 
     search_start = window_start - timedelta(minutes=lookback_minutes)
+    upper_bound = search_end if search_end is not None else window_end
 
     normalized_populated = and_(
         LogEntry.normalized_message.isnot(None),
@@ -218,7 +230,7 @@ def find_trigger_candidates(
         LogEntry.service,
     ).where(
         LogEntry.timestamp >= search_start,
-        LogEntry.timestamp <= window_end,
+        LogEntry.timestamp <= upper_bound,
         trigger_match,
     )
     q = filter_log_entries_by_scope(q, scope)
@@ -406,12 +418,17 @@ def assemble_evidence(
             db, clusters, primary, window_start, window_end, scope
         )
     else:
+        # A trigger precedes the incident, so bound the (regex-heavy) scan at the primary
+        # cluster's onset instead of the whole window (#85 perf). Falls back to window_end
+        # when there's no primary cluster / onset.
+        onset = primary.first_seen if primary is not None else None
         triggers = find_trigger_candidates(
             db,
             window_start,
             window_end,
             ingestion_job_id=ingestion_job_id,
             scope=scope,
+            search_end=onset,
         )
 
     # Collect affected services

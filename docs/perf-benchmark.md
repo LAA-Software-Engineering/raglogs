@@ -136,3 +136,30 @@ unchanged.
 The remaining ingest cost is now split between the per-line work (parse/normalize/fingerprint) and
 the DB round-trip itself; further wins (e.g. `COPY`, larger batches, partitioning) get evaluated
 against this new curve, cheapest first — but ingest is no longer the glaring bottleneck it was.
+
+### 3. Bound the trigger scan at the primary error onset (2026-09-15)
+
+An explain profile (`cProfile`, 500k) put `find_trigger_candidates` at ~53% of explain, and a
+direct timing confirmed it: the trigger query — a regex `~*` over `TRIGGER_PATTERNS` with no
+usable index — scanned the **whole** incident window (`[window_start − lookback, window_end]`),
+**4.28 s** for 500k rows (0 matches; the regex evaluates on every in-range row). But a trigger
+*causes* the incident, so it cannot occur after the errors begin; the timing evidence only ever
+consumes a pre-onset trigger, and candidates are returned earliest-first. So the scan is now
+bounded at the primary cluster's onset (`first_seen`, already computed): the same query with
+`search_end=onset` runs in **0.01 s** (428×).
+
+| lines | explain s (before → after) |
+|---|---|
+| 500,000 | 10.70 → **7.62** (−29%) |
+| 1,000,000 | 22.02 → **10.55** (−52%) |
+
+**1M-line explain 22 s → 10.6 s** — essentially the <10 s target, with ingest unchanged. What
+remains is the clustering full-window scan (~10 s at 1M), deliberately left for a later cycle (it
+inherently inspects the evidence set, unlike the regex scan).
+
+**Eval delta: none.** The bound's only observable effect is dropping trigger-pattern log lines
+that occur *after* onset from the trailing (2nd/3rd) *displayed* candidates; the selected earliest
+trigger — which drives confidence and `deploy_trigger_correct` — is at/before onset by
+construction and unchanged (integration test `test_search_end_bounds_the_scan_at_onset`). Measured:
+the OTel frozen corpus has **0 / 41,638** log lines matching any `TRIGGER_PATTERN`, so
+`find_trigger_candidates` returns empty with and without the bound — output identical.

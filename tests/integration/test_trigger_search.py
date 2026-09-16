@@ -344,3 +344,40 @@ def test_every_trigger_pattern_is_found_via_the_sql_filter(db_session, message: 
     candidates = find_trigger_candidates(db_session, window_start, window_end, scope=scope)
 
     assert any(c.message == message for c in candidates), f"not found via SQL filter: {message!r}"
+
+
+def test_search_end_bounds_the_scan_at_onset(db_session) -> None:
+    """#85 perf: ``search_end`` (the primary error onset) excludes trigger-shaped lines
+    that occur *after* the incident began — a trigger causes the incident, so it precedes
+    onset — while still returning a real pre-onset trigger. The pre-onset trigger (the one
+    the timing evidence and deploy-trigger metric use) is unchanged."""
+    from src.core.explain.evidence import find_trigger_candidates
+    from src.db.models import LogEntry
+
+    scope = "trig-search-end"
+    window_start = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    window_end = window_start + timedelta(hours=1)
+    onset = window_start + timedelta(minutes=5)  # primary error cluster's first_seen
+
+    pre = LogEntry(
+        id=uuid.uuid4(), timestamp=window_start + timedelta(minutes=1), service="deployer",
+        level="info", normalized_message="deployment started for payments v42",
+        source_adapter="file", scope=scope,
+    )
+    post = LogEntry(
+        id=uuid.uuid4(), timestamp=onset + timedelta(minutes=10), service="deployer",
+        level="info", normalized_message="deployment started for cart v9",
+        source_adapter="file", scope=scope,
+    )
+    db_session.add_all([pre, post])
+    db_session.flush()
+
+    bounded = find_trigger_candidates(db_session, window_start, window_end, scope=scope, search_end=onset)
+    msgs = [c.message for c in bounded]
+    assert any("payments v42" in m for m in msgs)      # pre-onset trigger kept
+    assert all("cart v9" not in m for m in msgs)        # post-onset excluded by the bound
+
+    # Without the bound (search to window_end) the post-onset line is visible again,
+    # confirming the bound is what excludes it (behaviour otherwise unchanged).
+    unbounded = find_trigger_candidates(db_session, window_start, window_end, scope=scope)
+    assert any("cart v9" in c.message for c in unbounded)
