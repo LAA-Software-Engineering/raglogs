@@ -242,3 +242,61 @@ This closes most of the gap to the explain target (1M < 10 s): 22.0 → ~11–16
 remaining explain cost is the clusterer's O(N) full-window scan itself (the fetch + the inherent
 per-line grouping) and the reactive trigger regex floor; pushing the grouping aggregation
 server-side (SQL `GROUP BY` + `array_agg`) is the next, heavier lever, evaluated against this curve.
+
+## API concurrency / connection-pool load test (#85)
+
+The curve above is *single-stream*: one explain at a time. #85 also flags "pool sizing" and
+"no load test" — questions about what happens when **N clients hit the HTTP API at once**.
+`scripts/bench_api.py` (`make bench-api`) answers it: it seeds a window, then drives the real
+ASGI app (`src.api.app:app`, in-process over `httpx`) at rising concurrency and reports
+throughput + latency percentiles per level. Rate limiting is disabled (else the shared
+`anonymous` token bucket caps at 100 rps), the LLM is `disabled` (Noop, no network), and the
+anyio threadpool limiter is raised so the **DB connection pool** (`DB_POOL_SIZE` +
+`DB_MAX_OVERFLOW`, default 20+20) is the isolated variable. Each request is a real
+`POST /v1/query/explain`; `force_refresh=true` runs the full pipeline (`pipeline` mode) and
+`force_refresh=false` hits the explanation cache (`cached` mode).
+
+Reference hardware (as above), 2026-09-16, `--lines 10000 --concurrency 1,2,4,8,16,32,64
+--requests 120`, pool 20+20:
+
+**`pipeline` (full explain, CPU-bound):**
+
+| concurrency | req/s | p50 ms | p95 ms | p99 ms | max ms | errors |
+|---|---|---|---|---|---|---|
+| 1  | 6.7 | 156 | 183 | 207 | 260 | 0 |
+| 2  | **7.9** | 247 | 315 | 371 | 383 | 0 |
+| 4  | 4.4 | 890 | 1,008 | 1,047 | 1,053 | 0 |
+| 8  | 3.5 | 2,264 | 2,704 | 2,757 | 2,814 | 0 |
+| 16 | 3.6 | 4,447 | 4,763 | 4,880 | 4,918 | 0 |
+| 32 | 3.5 | 9,002 | 9,631 | 9,833 | 9,940 | 0 |
+| 64 | 3.3 | 13,274 | 25,129 | 25,216 | 25,345 | 0 |
+
+**`cached` (explanation cache hit, I/O-bound):**
+
+| concurrency | req/s | p50 ms | p95 ms | p99 ms | errors |
+|---|---|---|---|---|---|
+| 1  | 214 | 4.4 | 6.2 | 7.6 | 0 |
+| 4  | 145 | 25 | 45 | 47 | 0 |
+| 16 | 168 | 92 | 128 | 134 | 0 |
+| 64 | 188 | 323 | 396 | 400 | 0 |
+
+What the load test says — and it **re-answers the "pool sizing" item by evidence**:
+
+- **The API is GIL/CPU-bound per process, not pool-bound.** The full-pipeline path peaks at
+  **concurrency ≈ 2 (~8 req/s)** — one CPU's worth — then throughput *degrades* to ~3.5 req/s
+  while latency inflates almost linearly with concurrency (p50 156 ms → 13 s from 1 → 64). The
+  clustering/evidence work holds the GIL, so extra concurrent requests add contention, not work.
+- **The connection pool is never the bottleneck: 0 pool-timeout errors** at any level, including
+  64 concurrent against a 40-connection pool. Dropping the pool to **2 connections** (`--pool-size 2
+  --max-overflow 0`) actually *improved* the CPU-bound path (6.1 vs 4.4 req/s at c=4; p50 2.5 s vs
+  4.4 s at c=16) — a small pool throttles GIL thrashing. So an **oversized pool is mildly
+  counterproductive** here; sizing it far above the worker's core count buys nothing.
+- **The cached path sustains ~150–210 req/s** and also flattens (GIL on response assembly), latency
+  rising with concurrency but no errors.
+
+**Implication for #85's pool-sizing / scale work:** the lever is **process-level parallelism**
+(multiple uvicorn/gunicorn workers, each with a modest pool ≈ its core budget) plus the per-request
+CPU cuts already landed (OPT 1–4), **not** a larger connection pool. The default 20+20 is already
+well above what one GIL-bound process can use; if anything, right-size it down per worker. This is
+the load-test baseline the worker/pool configuration work is measured against — rerun with
+`make bench-api`.
