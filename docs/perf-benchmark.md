@@ -41,6 +41,22 @@ Reference hardware: **Intel i7-12650H (16 threads), 23 GiB RAM, WSL2**; PostgreS
 | 500,000 | 215.03 | 2,325 | 1,004 | 10.70 | 7 | 568 |
 | 1,000,000 | 422.95 | 2,364 | 2,004 | 22.02 | 7 | 1,042 |
 
+**Current curve (post OPT 1–4)**, same harness/hardware, taken 2026-09-16 — the regression
+guard the optimizations are measured against:
+
+| lines | ingest s | lines/s | ingest q | explain s | explain q | peak MB |
+|---|---|---|---|---|---|---|
+| 10,000 | 2.05 | 4,879 | 24 | 0.22 | 7 | 104 |
+| 100,000 | 18.75 | 5,335 | 204 | 2.01 | 7 | 188 |
+| 500,000 | 81.95 | 6,101 | 1,004 | 8.07 | 7 | 568 |
+| 1,000,000 | 163.39 | 6,120 | 2,004 | 16.51 | 7 | 1,041 |
+
+Cumulative vs the baseline: **ingest ~2,320 → ~6,120 lines/s (~2.6× at 1M)**, **explain 22.0 →
+16.5 s at 1M** (the single-run bench figure; a warm best-of-4 lands ~11–14 s — see OPT 4). The
+`explain_window` figure carries run-to-run variance of several seconds at 1M (it is dominated by
+the clusterer's full-window scan); the per-optimization deltas below are measured with warmer,
+direct timing to see through that noise.
+
 What the curve says:
 
 - **Ingest is the bottleneck, and it is the real limit** — a flat **~2,320 lines/s**, so a
@@ -61,10 +77,12 @@ What the curve says:
 waits for an explanation — is the **explain** phase (ingest is continuous/background):
 
 > **A 1M-line incident window should explain in under 10 s on the reference hardware.**
-> Today it is **22 s** (2.2× over) — the gap this issue's clustering-path optimizations must close.
+> At baseline it was **22 s** (2.2× over); after OPT 3–4 it is **~11–16 s** (~11 s warm) —
+> most of the gap closed, the rest is the clusterer's O(N) full-window scan (next, heavier lever).
 
-Secondary, operational: **ingest throughput ≥ 10k lines/s** (today ~2.3k, ~4× short) so a 1M-line
-backlog ingests in ~1–2 min rather than 7. Both targets are set *after* the first measurement, not
+Secondary, operational: **ingest throughput ≥ 10k lines/s** (baseline ~2.3k; now ~6.1k after
+OPT 1–2, ~1.6× short) so a 1M-line backlog ingests in ~2.7 min rather than 7. Both targets are set
+*after* the first measurement, not
 before, so we are fixing a measured limit rather than speculative scale debt. This benchmark is now
 the regression guard — a change that moves any column shows up in `make bench`.
 
@@ -172,3 +190,55 @@ preserved for them (reproduced: a case whose only trigger is a post-onset circui
 keeps its label with the bound — integration test `test_search_end_does_not_bound_reactive_triggers`).
 Measured on the OTel frozen corpus: **0 / 41,638** log lines match any trigger pattern, so
 `find_trigger_candidates` returns empty with and without the change.
+
+**Measured-negative (not shipped): consolidating the per-class trigger regexes into one
+alternation.** The trigger WHERE issues one `~*` per pattern (6 causal, 6 reactive); an obvious
+idea is to fold each class into a single `(p1|p2|…)` regex to scan the string once. Measured on
+1M rows it is a *loss* at the current pattern counts: a combined 6-branch alternation costs a flat
+**~0.70 s** per scan regardless of branch count, while 6 separate `~*` cost **~0.52 s** total
+(~0.09 s each) — so combined is **0.74–0.82×** (slower) for 6 patterns, only crossing over to
+faster above ~8 (12→1 was 1.54× *faster*). Since causal and reactive are scanned under different
+time bounds they cannot be merged into one regex anyway, so consolidation would only ever apply
+within a 6-pattern class, where it loses. Recorded so it is not re-attempted; the reactive
+full-window regex floor (~2 s at 1M) needs a trigram index, not a regex rewrite, and that is
+deferred (a trigram GIN index is a heavier, storage-carrying change — the curve does not yet
+justify it).
+
+### 4. Positional row unpack in the clustering hot loop (2026-09-16)
+
+With the trigger scan bounded (OPT 3), an explain profile at scale (undistorted wall timers, 1M
+rows) put the remaining cost in the clusterer's full-window read: it selects a 6-column
+projection of every in-window row and groups it by fingerprint in Python. Two parts dominated —
+building the result rows and the grouping loop itself:
+
+| clustering read + group (1M rows) | fetch | group | total |
+|---|---|---|---|
+| SQLAlchemy `Row` + attribute access (before) | 4.9 s | **3.0 s** | 7.9 s |
+| tuple unpack in the loop (after) | 4.9 s | **0.34 s** | 5.3 s |
+
+The grouping loop is unchanged in *what* it does; the only difference is that each row's columns
+are read by **positional unpack** (`for fingerprint, normalized_message, service, … in rows`)
+instead of attribute access (`row.fingerprint`). Attribute access on a SQLAlchemy `Row` goes
+through a per-key index lookup that, repeated six times per line over a million lines, dominated
+the loop — positional unpack is **~9× faster** on it. The loop was extracted into `_group_rows`
+so the projection's column order is a single documented contract (`_CLUSTER_ROW_COLUMNS`), pinned
+by a unit test (`tests/unit/test_clustering.py::TestGroupRows`) so a future reordering of the
+`SELECT` fails loudly rather than silently mis-mapping columns.
+
+End-to-end explain at 1M (warm, best of 4, same table):
+
+| explain wall @ 1M | before | after |
+|---|---|---|
+| `explain_window` (no_llm) | 14.65 s | **11.34 s** |
+
+**~3.3 s off explain at 1M (~23%)**, matching the ~2.7 s grouping-loop delta above (the rest is
+run-to-run variance). Ingest and peak RSS unchanged. **Eval delta: none — the grouping is
+byte-identical.** Verified directly on a 1M-row window: the positional and attribute-access loops
+produce identical per-fingerprint member-id sets, service/level/error-service counts, and
+first/last-seen for every fingerprint; the change is purely *how* each row's columns are read, not
+*which* rows group where.
+
+This closes most of the gap to the explain target (1M < 10 s): 22.0 → ~11–16 s across OPT 3–4. The
+remaining explain cost is the clusterer's O(N) full-window scan itself (the fetch + the inherent
+per-line grouping) and the reactive trigger regex floor; pushing the grouping aggregation
+server-side (SQL `GROUP BY` + `array_agg`) is the next, heavier lever, evaluated against this curve.

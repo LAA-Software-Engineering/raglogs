@@ -1,10 +1,11 @@
 import uuid
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import insert, select
+from sqlalchemy import Select, insert, select
 from sqlalchemy.orm import Session
 
 from src.core.clustering.baseline import compute_change_ratio, get_baseline_counts
@@ -24,6 +25,68 @@ from src.utils.time import resolve_baseline_window
 # Levels that count as a "problem" line for (service, fingerprint) root-cause
 # attribution — matches the trivial baseline's error/fatal/critical filter (#82).
 _ERROR_LEVELS = ("error", "fatal", "critical")
+
+# Column order of the clustering projection, and therefore the positional-unpack
+# contract of _group_rows(). Kept next to the query and the helper so the two
+# never silently drift.
+_CLUSTER_ROW_COLUMNS = ("fingerprint", "normalized_message", "service", "level", "timestamp", "id")
+
+
+def _cluster_select() -> Select:
+    """The clustering projection, as an importable statement.
+
+    Its column order **is** the positional-unpack contract consumed by
+    :func:`_group_rows` — a unit test asserts ``_cluster_select().selected_columns.keys()``
+    equals :data:`_CLUSTER_ROW_COLUMNS`, so reordering the columns here (the "insert a
+    column in the wrong slot" mistake) fails loudly at unit time rather than silently
+    mis-mapping a value into the wrong aggregate. Runtime ``.where(...)`` filters are
+    layered on by the caller; they do not affect column order.
+    """
+    return select(
+        LogEntry.fingerprint,
+        LogEntry.normalized_message,
+        LogEntry.service,
+        LogEntry.level,
+        LogEntry.timestamp,
+        LogEntry.id,
+    )
+
+
+def _group_rows(rows: Iterable) -> dict[str, dict]:
+    """Group projected log rows by fingerprint.
+
+    ``rows`` are ``(fingerprint, normalized_message, service, level, timestamp, id)``
+    tuples in the column order the clustering query selects (:data:`_CLUSTER_ROW_COLUMNS`).
+    They are unpacked **positionally**: attribute access on a SQLAlchemy ``Row`` goes
+    through a per-key lookup that dominates this per-line loop at scale, so positional
+    unpacking is ~9x faster here on a large window (#85: 1M-row grouping 3.0s -> 0.34s)
+    while producing byte-identical groups. This is the hot path of ``explain`` on a big
+    window, so the projection's column order is a contract — see the unit test that pins it.
+    """
+    groups: dict[str, dict] = defaultdict(
+        lambda: {
+            "messages": [],
+            "services": defaultdict(int),
+            "levels": defaultdict(int),
+            "error_services": defaultdict(int),
+            "timestamps": [],
+            "ids": [],
+        }
+    )
+    for fingerprint, normalized_message, service, level, timestamp, entry_id in rows:
+        g = groups[fingerprint]
+        if normalized_message:
+            g["messages"].append(normalized_message)
+        if service:
+            g["services"][service] += 1
+            if level and level.lower() in _ERROR_LEVELS:
+                g["error_services"][service] += 1
+        if level:
+            g["levels"][level] += 1
+        if timestamp:
+            g["timestamps"].append(timestamp)
+        g["ids"].append(entry_id)
+    return groups
 
 
 @dataclass
@@ -146,15 +209,9 @@ def _run_clustering(
     Main clustering pipeline for a time window.
     Returns (ClusterRun, list[ClusterData]) sorted by importance descending.
     """
-    # 1. Query log entries in window
-    q = select(
-        LogEntry.fingerprint,
-        LogEntry.normalized_message,
-        LogEntry.service,
-        LogEntry.level,
-        LogEntry.timestamp,
-        LogEntry.id,
-    ).where(
+    # 1. Query log entries in window. The projection (and its column order, the
+    #    positional-unpack contract of _group_rows) lives in _cluster_select().
+    q = _cluster_select().where(
         LogEntry.timestamp >= window_start,
         LogEntry.timestamp <= window_end,
         LogEntry.fingerprint.isnot(None),
@@ -182,32 +239,8 @@ def _run_clustering(
         )
         return cluster_run, []
 
-    # 2. Group by fingerprint
-    groups: dict[str, dict] = defaultdict(
-        lambda: {
-            "messages": [],
-            "services": defaultdict(int),
-            "levels": defaultdict(int),
-            "error_services": defaultdict(int),
-            "timestamps": [],
-            "ids": [],
-        }
-    )
-
-    for row in rows:
-        fp = row.fingerprint
-        g = groups[fp]
-        if row.normalized_message:
-            g["messages"].append(row.normalized_message)
-        if row.service:
-            g["services"][row.service] += 1
-            if row.level and row.level.lower() in _ERROR_LEVELS:
-                g["error_services"][row.service] += 1
-        if row.level:
-            g["levels"][row.level] += 1
-        if row.timestamp:
-            g["timestamps"].append(row.timestamp)
-        g["ids"].append(row.id)
+    # 2. Group by fingerprint (positional unpack of the projection — see _group_rows)
+    groups = _group_rows(rows)
 
     # 3. Get baseline counts
     baseline_start, baseline_end = resolve_baseline_window(
