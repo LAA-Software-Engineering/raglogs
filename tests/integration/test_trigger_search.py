@@ -344,3 +344,68 @@ def test_every_trigger_pattern_is_found_via_the_sql_filter(db_session, message: 
     candidates = find_trigger_candidates(db_session, window_start, window_end, scope=scope)
 
     assert any(c.message == message for c in candidates), f"not found via SQL filter: {message!r}"
+
+
+def test_search_end_bounds_causal_triggers_at_onset(db_session) -> None:
+    """#85 perf: ``search_end`` (the primary error onset) excludes *causal* trigger lines
+    (deploy/config/…) that occur after the incident began — a deploy after the errors
+    started did not cause them — while still returning a real pre-onset causal trigger (the
+    one the timing evidence and deploy-trigger metric use)."""
+    from src.core.explain.evidence import find_trigger_candidates
+    from src.db.models import LogEntry
+
+    scope = "trig-search-end"
+    window_start = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    window_end = window_start + timedelta(hours=1)
+    onset = window_start + timedelta(minutes=5)  # primary error cluster's first_seen
+
+    pre = LogEntry(
+        id=uuid.uuid4(), timestamp=window_start + timedelta(minutes=1), service="deployer",
+        level="info", normalized_message="deployment started for payments v42",
+        source_adapter="file", scope=scope,
+    )
+    post = LogEntry(
+        id=uuid.uuid4(), timestamp=onset + timedelta(minutes=10), service="deployer",
+        level="info", normalized_message="deployment started for cart v9",
+        source_adapter="file", scope=scope,
+    )
+    db_session.add_all([pre, post])
+    db_session.flush()
+
+    bounded = find_trigger_candidates(db_session, window_start, window_end, scope=scope, search_end=onset)
+    msgs = [c.message for c in bounded]
+    assert any("payments v42" in m for m in msgs)      # pre-onset trigger kept
+    assert all("cart v9" not in m for m in msgs)        # post-onset excluded by the bound
+
+    # Without the bound (search to window_end) the post-onset line is visible again,
+    # confirming the bound is what excludes it (behaviour otherwise unchanged).
+    unbounded = find_trigger_candidates(db_session, window_start, window_end, scope=scope)
+    assert any("cart v9" in c.message for c in unbounded)
+
+
+def test_search_end_does_not_bound_reactive_triggers(db_session) -> None:
+    """#189 review: a *reactive* trigger (circuit-breaker trip, pod eviction, queue
+    saturation, …) commonly fires AFTER onset. The onset bound must NOT drop it — doing so
+    would empty trigger_candidates and flip the bool(trigger_candidates) confidence gate.
+    Here the ONLY trigger-shaped line is a post-onset circuit-breaker trip, so the bounded
+    and unbounded searches must agree (both find it)."""
+    from src.core.explain.evidence import find_trigger_candidates
+    from src.db.models import LogEntry
+
+    scope = "trig-reactive"
+    window_start = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    window_end = window_start + timedelta(hours=1)
+    onset = window_start + timedelta(minutes=2)
+
+    breaker = LogEntry(
+        id=uuid.uuid4(), timestamp=onset + timedelta(minutes=3), service="gateway",
+        level="error", normalized_message="circuit breaker tripped for downstream payments-api",
+        source_adapter="file", scope=scope,
+    )
+    db_session.add(breaker)
+    db_session.flush()
+
+    bounded = find_trigger_candidates(db_session, window_start, window_end, scope=scope, search_end=onset)
+    unbounded = find_trigger_candidates(db_session, window_start, window_end, scope=scope)
+    assert any("circuit breaker" in c.message for c in bounded)     # reactive kept despite the bound
+    assert [c.message for c in bounded] == [c.message for c in unbounded]  # identical -> confidence unchanged

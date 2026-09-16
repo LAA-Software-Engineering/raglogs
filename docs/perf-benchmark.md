@@ -136,3 +136,39 @@ unchanged.
 The remaining ingest cost is now split between the per-line work (parse/normalize/fingerprint) and
 the DB round-trip itself; further wins (e.g. `COPY`, larger batches, partitioning) get evaluated
 against this new curve, cheapest first — but ingest is no longer the glaring bottleneck it was.
+
+### 3. Bound the trigger scan at the primary error onset (2026-09-15)
+
+An explain profile (`cProfile`, 500k) put `find_trigger_candidates` at ~53% of explain, and a
+direct timing confirmed it: the trigger query — a regex `~*` over the trigger patterns with no
+usable index — scanned the **whole** incident window (`[window_start − lookback, window_end]`),
+~5 s for 1M rows even with 0 matches (the regex evaluates on every in-range row).
+
+**Which patterns can be bounded (the #189-review correction).** A *causal precursor* — deploy,
+config change, migration, release, rollout (`CAUSAL_TRIGGER_PATTERNS`) — that fired *after* the
+errors began did not cause them, so its search can be bounded at the primary cluster's onset
+(`first_seen`, already computed). But `TRIGGER_PATTERNS` also holds *reactive* patterns —
+circuit-breaker trips, pod evictions, queue saturation, restarts, token expiry
+(`REACTIVE_TRIGGER_PATTERNS`) — that commonly fire *after* onset; bounding those would drop a real
+trigger and flip the `bool(trigger_candidates)` confidence gate (medium → low). So only the causal
+patterns are bounded at onset; the reactive ones are always searched through `window_end`.
+
+Direct trigger-query timing on 1M rows (2 warm runs):
+
+| trigger query | wall |
+|---|---|
+| unbounded (whole window, all patterns) | 5.23 s |
+| causal-bounded at onset, reactive unbounded | **2.46 s** |
+
+So the causal bound roughly halves the trigger scan (the reactive full-window scan is now the
+floor). End-to-end explain improves by ~the same ~2.7 s at 1M; the benchmark's explain wall is
+noisy (±several seconds, run to run) and dominated by the clustering full-window scan (~10–15 s at
+1M, deliberately left for a later cycle), so the trigger-query delta above is the reliable number.
+
+**Eval delta: none on the available corpora; behaviour change precisely scoped.** The only
+observable change is that a *causal* trigger occurring **after** onset is no longer returned
+(correct — it cannot be the cause); *reactive* triggers are unaffected, so the confidence gate is
+preserved for them (reproduced: a case whose only trigger is a post-onset circuit-breaker trip
+keeps its label with the bound — integration test `test_search_end_does_not_bound_reactive_triggers`).
+Measured on the OTel frozen corpus: **0 / 41,638** log lines match any trigger pattern, so
+`find_trigger_candidates` returns empty with and without the change.

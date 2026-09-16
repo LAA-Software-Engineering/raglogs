@@ -9,7 +9,11 @@ from sqlalchemy.orm import Session
 
 from src.config import get_settings
 from src.core.clustering.clusterer import ClusterData
-from src.core.normalization.patterns import TRIGGER_PATTERNS, is_trigger_message
+from src.core.normalization.patterns import (
+    CAUSAL_TRIGGER_PATTERNS,
+    REACTIVE_TRIGGER_PATTERNS,
+    is_trigger_message,
+)
 from src.db.models import DEFAULT_LOG_SCOPE, LogEntry
 from src.db.scope_filter import filter_log_entries_by_scope
 
@@ -22,7 +26,11 @@ from src.db.scope_filter import filter_log_entries_by_scope
 # the patterns use \b, lookaround, or other constructs where Python's `re` and
 # Postgres's ARE dialect diverge — verified match-for-match against a live
 # Postgres for every pattern in tests/integration/test_trigger_search.py.
-_TRIGGER_SQL_PATTERNS = [p.pattern for p in TRIGGER_PATTERNS]
+#
+# Split by causality (#189 review): only causal-precursor patterns are bounded at
+# the incident onset; reactive patterns are searched through window_end.
+_TRIGGER_SQL_CAUSAL = [p.pattern for p in CAUSAL_TRIGGER_PATTERNS]
+_TRIGGER_SQL_REACTIVE = [p.pattern for p in REACTIVE_TRIGGER_PATTERNS]
 
 # Safety valve, not the primary recall mechanism now that the WHERE clause
 # already narrows to trigger-shaped rows: real trigger phrasing is rare, so
@@ -154,9 +162,22 @@ def find_trigger_candidates(
     lookback_minutes: Optional[int] = None,
     ingestion_job_id: Optional[uuid.UUID] = None,
     scope: str = DEFAULT_LOG_SCOPE,
+    search_end: Optional[datetime] = None,
 ) -> list[TriggerCandidate]:
     """
     Find likely trigger events in a window slightly before the main window.
+
+    ``search_end`` caps the upper end of the scan **for causal-precursor patterns only**
+    (default: ``window_end``). Callers pass the primary error cluster's onset
+    (``first_seen``) here: a *causal* trigger (deploy / config change / migration / release
+    / rollout — :data:`CAUSAL_TRIGGER_PATTERNS`) that fired after the errors began did not
+    cause them, so bounding those at
+    onset shrinks the trigger regex scan — the dominant cost of ``explain`` on a large
+    window (#85 profile: ~53%) — without changing which causal trigger is selected.
+    **Reactive** patterns (circuit-breaker trips, pod evictions, queue saturation, …,
+    :data:`REACTIVE_TRIGGER_PATTERNS`) commonly fire *after* onset, so they are always
+    searched through ``window_end``: dropping them would remove a real trigger candidate
+    and flip the ``bool(trigger_candidates)`` confidence gate (#189 review).
 
     The WHERE clause filters to rows the Python extraction below would
     actually evaluate a trigger match against, before ordering/capping, so the
@@ -195,20 +216,32 @@ def find_trigger_candidates(
         lookback_minutes = get_settings().trigger_lookback_minutes
 
     search_start = window_start - timedelta(minutes=lookback_minutes)
+    # Causal-precursor patterns are bounded at the incident onset (a deploy/config/etc.
+    # after the errors began did not cause them); reactive patterns (circuit-breaker
+    # trips, pod evictions, queue saturation, …) commonly fire *after* onset, so they
+    # are searched through window_end and still count for confidence (#189 review).
+    causal_upper = search_end if search_end is not None else window_end
 
     normalized_populated = and_(
         LogEntry.normalized_message.isnot(None),
         LogEntry.normalized_message != "",
     )
+
+    def _class_match(col):
+        return or_(
+            and_(
+                LogEntry.timestamp <= causal_upper,
+                or_(*(col.op("~*")(p) for p in _TRIGGER_SQL_CAUSAL)),
+            ),
+            and_(
+                LogEntry.timestamp <= window_end,
+                or_(*(col.op("~*")(p) for p in _TRIGGER_SQL_REACTIVE)),
+            ),
+        )
+
     trigger_match = or_(
-        and_(
-            normalized_populated,
-            or_(*(LogEntry.normalized_message.op("~*")(p) for p in _TRIGGER_SQL_PATTERNS)),
-        ),
-        and_(
-            not_(normalized_populated),
-            or_(*(LogEntry.raw_message.op("~*")(p) for p in _TRIGGER_SQL_PATTERNS)),
-        ),
+        and_(normalized_populated, _class_match(LogEntry.normalized_message)),
+        and_(not_(normalized_populated), _class_match(LogEntry.raw_message)),
     )
 
     q = select(
@@ -218,7 +251,6 @@ def find_trigger_candidates(
         LogEntry.service,
     ).where(
         LogEntry.timestamp >= search_start,
-        LogEntry.timestamp <= window_end,
         trigger_match,
     )
     q = filter_log_entries_by_scope(q, scope)
@@ -406,12 +438,17 @@ def assemble_evidence(
             db, clusters, primary, window_start, window_end, scope
         )
     else:
+        # A trigger precedes the incident, so bound the (regex-heavy) scan at the primary
+        # cluster's onset instead of the whole window (#85 perf). Falls back to window_end
+        # when there's no primary cluster / onset.
+        onset = primary.first_seen if primary is not None else None
         triggers = find_trigger_candidates(
             db,
             window_start,
             window_end,
             ingestion_job_id=ingestion_job_id,
             scope=scope,
+            search_end=onset,
         )
 
     # Collect affected services

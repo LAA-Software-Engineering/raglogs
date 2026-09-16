@@ -41,20 +41,34 @@ NORMALIZATION_RULES: list[tuple[re.Pattern, str]] = [
 ]
 
 # Patterns that indicate trigger events
-TRIGGER_PATTERNS: list[re.Pattern] = [
+# Causal-precursor triggers: a deliberate change that PRECEDES and causes the
+# incident. A trigger search may safely be bounded at incident onset for these —
+# a deploy/config/migration/webhook/release/rollout that happens *after* the errors
+# began did not cause them (#85 perf bound).
+CAUSAL_TRIGGER_PATTERNS: list[re.Pattern] = [
     re.compile(r"deploy(?:ment)?\s+(?:started|completed|finished|done)", re.IGNORECASE),
-    re.compile(r"application\s+(?:started|restarted|restart)", re.IGNORECASE),
-    re.compile(r"service\s+(?:started|restarted|restart)", re.IGNORECASE),
-    re.compile(r"pod\s+(?:restart|restarted|terminated|evicted)", re.IGNORECASE),
     re.compile(r"config(?:uration)?\s+(?:reloaded|changed|updated)", re.IGNORECASE),
     re.compile(r"migration\s+(?:started|completed|running)", re.IGNORECASE),
-    re.compile(r"queue\s+(?:full|saturated|overflow)", re.IGNORECASE),
-    re.compile(r"circuit[\s_]?breaker\s+(?:open|tripped|activated)", re.IGNORECASE),
     re.compile(r"webhook\s+(?:secret|key|config)\s+(?:changed|invalid|expired)", re.IGNORECASE),
-    re.compile(r"token\s+(?:expired|expiration|invalid)", re.IGNORECASE),
     re.compile(r"release\s+\S+\s+(?:deployed|started|live)", re.IGNORECASE),
     re.compile(r"rollout\s+(?:started|completed|done)", re.IGNORECASE),
 ]
+
+# Reactive triggers: symptomatic events that commonly fire DURING/AFTER an incident
+# (crash-loop restarts, pod eviction, queue saturation, circuit-breaker trips, token
+# expiry). These legitimately occur post-onset, so a trigger search must NOT bound
+# them at onset — doing so would drop a real reactive trigger and flip the confidence
+# label, which gates on the mere existence of a trigger candidate (#189 review).
+REACTIVE_TRIGGER_PATTERNS: list[re.Pattern] = [
+    re.compile(r"application\s+(?:started|restarted|restart)", re.IGNORECASE),
+    re.compile(r"service\s+(?:started|restarted|restart)", re.IGNORECASE),
+    re.compile(r"pod\s+(?:restart|restarted|terminated|evicted)", re.IGNORECASE),
+    re.compile(r"queue\s+(?:full|saturated|overflow)", re.IGNORECASE),
+    re.compile(r"circuit[\s_]?breaker\s+(?:open|tripped|activated)", re.IGNORECASE),
+    re.compile(r"token\s+(?:expired|expiration|invalid)", re.IGNORECASE),
+]
+
+TRIGGER_PATTERNS: list[re.Pattern] = CAUSAL_TRIGGER_PATTERNS + REACTIVE_TRIGGER_PATTERNS
 
 
 def is_trigger_message(message: str) -> bool:
