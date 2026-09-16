@@ -1,5 +1,8 @@
+from datetime import datetime, timezone
+
 import pytest
 from src.core.clustering.baseline import compute_change_ratio
+from src.core.clustering.clusterer import _CLUSTER_ROW_COLUMNS, _group_rows
 from src.core.clustering.scoring import compute_importance_score, get_severity_weight
 
 
@@ -73,3 +76,64 @@ class TestImportanceScore:
             change_ratio=5.0, services_count=3
         )
         assert multi > single
+
+
+class TestGroupRows:
+    """_group_rows unpacks the clustering projection positionally (the #85 hot-path
+    optimization); these tests pin that the column order maps to the right aggregate,
+    so a future reordering of the SELECT can't silently corrupt clusters."""
+
+    def _row(self, fp, msg, service, level, ts, entry_id):
+        # Build in the documented column order so the test fails if either the
+        # helper's unpack or _CLUSTER_ROW_COLUMNS drifts.
+        return (fp, msg, service, level, ts, entry_id)
+
+    def test_column_contract_is_the_documented_order(self):
+        assert _CLUSTER_ROW_COLUMNS == (
+            "fingerprint", "normalized_message", "service", "level", "timestamp", "id",
+        )
+
+    def test_groups_by_fingerprint_with_correct_aggregates(self):
+        t0 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        t1 = datetime(2026, 1, 1, 12, 5, tzinfo=timezone.utc)
+        t2 = datetime(2026, 1, 1, 12, 9, tzinfo=timezone.utc)
+        # service and level are deliberately disjoint vocabularies: a positional
+        # swap would land "api" in levels or "error" in services and fail below.
+        rows = [
+            self._row("fp1", "boom", "api", "error", t1, 1),
+            self._row("fp1", "boom", "api", "error", t0, 2),
+            self._row("fp1", "boom", "web", "warn", t2, 3),
+            self._row("fp2", "ok", "worker", "info", t1, 4),
+        ]
+        groups = _group_rows(rows)
+
+        assert set(groups) == {"fp1", "fp2"}
+        fp1 = groups["fp1"]
+        assert fp1["ids"] == [1, 2, 3]
+        assert dict(fp1["services"]) == {"api": 2, "web": 1}
+        assert dict(fp1["levels"]) == {"error": 2, "warn": 1}
+        # only error/fatal/critical lines count toward error_services
+        assert dict(fp1["error_services"]) == {"api": 2}
+        assert min(fp1["timestamps"]) == t0
+        assert max(fp1["timestamps"]) == t2
+        assert fp1["messages"] == ["boom", "boom", "boom"]
+
+        fp2 = groups["fp2"]
+        assert fp2["ids"] == [4]
+        assert dict(fp2["error_services"]) == {}
+
+    def test_none_fields_are_skipped(self):
+        rows = [
+            ("fp", None, None, None, None, 10),  # all-None but id
+            ("fp", "m", "svc", "info", datetime(2026, 1, 1, tzinfo=timezone.utc), 11),
+        ]
+        groups = _group_rows(rows)
+        g = groups["fp"]
+        assert g["ids"] == [10, 11]           # id is always recorded
+        assert g["messages"] == ["m"]          # None message skipped
+        assert dict(g["services"]) == {"svc": 1}
+        assert dict(g["levels"]) == {"info": 1}
+        assert len(g["timestamps"]) == 1       # None timestamp skipped
+
+    def test_empty_input(self):
+        assert _group_rows([]) == {}
