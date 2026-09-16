@@ -1,7 +1,7 @@
 .PHONY: help install install-dev \
         db-up db-down docker-up docker-down docker-demo docker-logs \
         init migrate demo ingest explain clusters ask \
-        api web web-serve worker test test-unit test-int test-cov eval eval-data bench loghub lint format \
+        api web web-serve worker test test-unit test-int test-cov eval eval-data bench bench-api loghub lint format \
         openapi jsonschema config-docs client-go client-python clean
 
 PYTHON  := python
@@ -145,6 +145,12 @@ test-cov:
 # Prints a cost-vs-N curve; commit the numbers, don't optimise blind.
 bench: db-up
 	$(PYTHON) scripts/bench_pipeline.py --sizes $(or $(SIZES),10000,100000,500000,1000000)
+
+# API concurrency / connection-pool load test (#85). Needs a live Postgres (DB_URL).
+# Drives the real ASGI app at rising concurrency; reports throughput + latency percentiles.
+bench-api: db-up
+	$(PYTHON) scripts/bench_api.py --lines $(or $(LINES),10000) \
+		--concurrency $(or $(CONCURRENCY),1,2,4,8,16,32,64) --requests $(or $(REQUESTS),120)
 
 # ── Eval harness ──────────────────────────────────────────────────────────────
 
