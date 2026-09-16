@@ -158,6 +158,23 @@ def test_null_service_null_level_and_empty_message(db_session):
     _assert_equivalent(db_session, scope, cap=_MAX_CLUSTER_MEMBERS)
 
 
+def test_empty_string_service_and_level(db_session):
+    """Empty-string service/level (schema-permitted, though the parser normalizes it
+    away before persist) must be dropped identically by both paths — _group_rows uses
+    truthiness (`if service:`), so queries B/C exclude "" too (#192 review)."""
+    from src.core.clustering.clusterer import _MAX_CLUSTER_MEMBERS
+
+    scope = "agg:emptystr"
+    rows = [
+        _row(scope, "fpx", 0, service="", level="error", message="m"),      # "" service
+        _row(scope, "fpx", 1, service="api", level="", message="m"),        # "" level
+        _row(scope, "fpx", 2, service="api", level="error", message="m"),
+        _row(scope, "fpx", 3, service="", level="", message="m"),           # both ""
+    ]
+    _insert(db_session, rows)
+    _assert_equivalent(db_session, scope, cap=_MAX_CLUSTER_MEMBERS)
+
+
 def test_timestamp_ties_and_single_row(db_session):
     from src.core.clustering.clusterer import _MAX_CLUSTER_MEMBERS
 

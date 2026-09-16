@@ -168,10 +168,14 @@ def _aggregate_groups(
         g["timestamps"] = [t for t in (first_seen, last_seen) if t is not None]
 
     # B: per-service counts, plus per-service error-level counts in the same scan.
+    # `!= ""` mirrors _group_rows' truthiness test (`if service:`), which drops both
+    # NULL and empty string; the same applies to level in query C and message in D.
     is_error = func.lower(LogEntry.level).in_(_ERROR_LEVELS)
     qb = base(
         select(LogEntry.fingerprint, LogEntry.service, func.count(), func.count().filter(is_error))
-    ).where(LogEntry.service.isnot(None)).group_by(LogEntry.fingerprint, LogEntry.service)
+    ).where(
+        LogEntry.service.isnot(None), LogEntry.service != ""
+    ).group_by(LogEntry.fingerprint, LogEntry.service)
     for fp, svc, cnt, err_cnt in db.execute(qb):
         g = group_for(fp)
         g["services"][svc] = cnt
@@ -181,7 +185,9 @@ def _aggregate_groups(
     # C: per-level counts.
     qc = base(
         select(LogEntry.fingerprint, LogEntry.level, func.count())
-    ).where(LogEntry.level.isnot(None)).group_by(LogEntry.fingerprint, LogEntry.level)
+    ).where(
+        LogEntry.level.isnot(None), LogEntry.level != ""
+    ).group_by(LogEntry.fingerprint, LogEntry.level)
     for fp, level, cnt in db.execute(qc):
         group_for(fp)["levels"][level] = cnt
 
