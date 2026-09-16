@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 from src.core.clustering.baseline import compute_change_ratio
-from src.core.clustering.clusterer import _CLUSTER_ROW_COLUMNS, _group_rows
+from src.core.clustering.clusterer import _CLUSTER_ROW_COLUMNS, _cluster_select, _group_rows
 from src.core.clustering.scoring import compute_importance_score, get_severity_weight
 
 
@@ -92,6 +92,14 @@ class TestGroupRows:
         assert _CLUSTER_ROW_COLUMNS == (
             "fingerprint", "normalized_message", "service", "level", "timestamp", "id",
         )
+
+    def test_real_query_column_order_matches_the_contract(self):
+        # Assert against the ACTUAL statement the clusterer runs, not a hand-copied
+        # literal: a reorder of the columns in _cluster_select() (e.g. swapping
+        # service/level) changes selected_columns and fails here, which is the whole
+        # point of the positional-unpack contract. selected_columns.keys() is the
+        # compiled column order of the projection.
+        assert tuple(_cluster_select().selected_columns.keys()) == _CLUSTER_ROW_COLUMNS
 
     def test_groups_by_fingerprint_with_correct_aggregates(self):
         t0 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)

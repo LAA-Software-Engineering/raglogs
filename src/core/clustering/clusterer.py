@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import insert, select
+from sqlalchemy import Select, insert, select
 from sqlalchemy.orm import Session
 
 from src.core.clustering.baseline import compute_change_ratio, get_baseline_counts
@@ -30,6 +30,26 @@ _ERROR_LEVELS = ("error", "fatal", "critical")
 # contract of _group_rows(). Kept next to the query and the helper so the two
 # never silently drift.
 _CLUSTER_ROW_COLUMNS = ("fingerprint", "normalized_message", "service", "level", "timestamp", "id")
+
+
+def _cluster_select() -> Select:
+    """The clustering projection, as an importable statement.
+
+    Its column order **is** the positional-unpack contract consumed by
+    :func:`_group_rows` — a unit test asserts ``_cluster_select().selected_columns.keys()``
+    equals :data:`_CLUSTER_ROW_COLUMNS`, so reordering the columns here (the "insert a
+    column in the wrong slot" mistake) fails loudly at unit time rather than silently
+    mis-mapping a value into the wrong aggregate. Runtime ``.where(...)`` filters are
+    layered on by the caller; they do not affect column order.
+    """
+    return select(
+        LogEntry.fingerprint,
+        LogEntry.normalized_message,
+        LogEntry.service,
+        LogEntry.level,
+        LogEntry.timestamp,
+        LogEntry.id,
+    )
 
 
 def _group_rows(rows: Iterable) -> dict[str, dict]:
@@ -189,16 +209,9 @@ def _run_clustering(
     Main clustering pipeline for a time window.
     Returns (ClusterRun, list[ClusterData]) sorted by importance descending.
     """
-    # 1. Query log entries in window. Column order here is the positional-unpack
-    #    contract of _group_rows() (_CLUSTER_ROW_COLUMNS) — do not reorder in isolation.
-    q = select(
-        LogEntry.fingerprint,
-        LogEntry.normalized_message,
-        LogEntry.service,
-        LogEntry.level,
-        LogEntry.timestamp,
-        LogEntry.id,
-    ).where(
+    # 1. Query log entries in window. The projection (and its column order, the
+    #    positional-unpack contract of _group_rows) lives in _cluster_select().
+    q = _cluster_select().where(
         LogEntry.timestamp >= window_start,
         LogEntry.timestamp <= window_end,
         LogEntry.fingerprint.isnot(None),
