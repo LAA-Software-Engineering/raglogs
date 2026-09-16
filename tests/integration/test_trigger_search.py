@@ -346,11 +346,11 @@ def test_every_trigger_pattern_is_found_via_the_sql_filter(db_session, message: 
     assert any(c.message == message for c in candidates), f"not found via SQL filter: {message!r}"
 
 
-def test_search_end_bounds_the_scan_at_onset(db_session) -> None:
-    """#85 perf: ``search_end`` (the primary error onset) excludes trigger-shaped lines
-    that occur *after* the incident began — a trigger causes the incident, so it precedes
-    onset — while still returning a real pre-onset trigger. The pre-onset trigger (the one
-    the timing evidence and deploy-trigger metric use) is unchanged."""
+def test_search_end_bounds_causal_triggers_at_onset(db_session) -> None:
+    """#85 perf: ``search_end`` (the primary error onset) excludes *causal* trigger lines
+    (deploy/config/…) that occur after the incident began — a deploy after the errors
+    started did not cause them — while still returning a real pre-onset causal trigger (the
+    one the timing evidence and deploy-trigger metric use)."""
     from src.core.explain.evidence import find_trigger_candidates
     from src.db.models import LogEntry
 
@@ -381,3 +381,31 @@ def test_search_end_bounds_the_scan_at_onset(db_session) -> None:
     # confirming the bound is what excludes it (behaviour otherwise unchanged).
     unbounded = find_trigger_candidates(db_session, window_start, window_end, scope=scope)
     assert any("cart v9" in c.message for c in unbounded)
+
+
+def test_search_end_does_not_bound_reactive_triggers(db_session) -> None:
+    """#189 review: a *reactive* trigger (circuit-breaker trip, pod eviction, queue
+    saturation, …) commonly fires AFTER onset. The onset bound must NOT drop it — doing so
+    would empty trigger_candidates and flip the bool(trigger_candidates) confidence gate.
+    Here the ONLY trigger-shaped line is a post-onset circuit-breaker trip, so the bounded
+    and unbounded searches must agree (both find it)."""
+    from src.core.explain.evidence import find_trigger_candidates
+    from src.db.models import LogEntry
+
+    scope = "trig-reactive"
+    window_start = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    window_end = window_start + timedelta(hours=1)
+    onset = window_start + timedelta(minutes=2)
+
+    breaker = LogEntry(
+        id=uuid.uuid4(), timestamp=onset + timedelta(minutes=3), service="gateway",
+        level="error", normalized_message="circuit breaker tripped for downstream payments-api",
+        source_adapter="file", scope=scope,
+    )
+    db_session.add(breaker)
+    db_session.flush()
+
+    bounded = find_trigger_candidates(db_session, window_start, window_end, scope=scope, search_end=onset)
+    unbounded = find_trigger_candidates(db_session, window_start, window_end, scope=scope)
+    assert any("circuit breaker" in c.message for c in bounded)     # reactive kept despite the bound
+    assert [c.message for c in bounded] == [c.message for c in unbounded]  # identical -> confidence unchanged
