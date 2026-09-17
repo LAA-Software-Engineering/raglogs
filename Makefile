@@ -1,7 +1,7 @@
 .PHONY: help install install-dev \
         db-up db-down docker-up docker-down docker-demo docker-logs \
         init migrate demo ingest explain clusters ask \
-        api web web-serve worker test test-unit test-int test-cov eval eval-data bench bench-api loghub lint format \
+        api web web-serve worker test test-unit test-int test-cov eval eval-data bench bench-api bench-workers loghub lint format \
         openapi jsonschema config-docs client-go client-python clean
 
 PYTHON  := python
@@ -151,6 +151,12 @@ bench: db-up
 bench-api: db-up
 	$(PYTHON) scripts/bench_api.py --lines $(or $(LINES),10000) \
 		--concurrency $(or $(CONCURRENCY),1,2,4,8,16,32,64) --requests $(or $(REQUESTS),120)
+
+# Out-of-process multi-worker scaling (#85). Real `uvicorn --workers N` + real socket.
+# Needs a live Postgres (DB_URL). Reports throughput per worker count.
+bench-workers: db-up
+	$(PYTHON) scripts/bench_workers.py --lines $(or $(LINES),10000) \
+		--workers $(or $(WORKERS),1,2,4,8) --concurrency-per-worker 2 --requests $(or $(REQUESTS),300)
 
 # ── Eval harness ──────────────────────────────────────────────────────────────
 

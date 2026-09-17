@@ -343,3 +343,48 @@ CPU cuts already landed (OPT 1–4), **not** a larger connection pool. The defau
 well above what one GIL-bound process can use; if anything, right-size it down per worker. This is
 the load-test baseline the worker/pool configuration work is measured against — rerun with
 `make bench-api`.
+
+## Multi-worker scaling (#85, out-of-process)
+
+The load test above said the single-process ceiling is GIL/CPU, and the remedy is
+**process-level parallelism**. `scripts/bench_workers.py` (`make bench-workers`) validates that
+the way the #191 review asked for — a **real `uvicorn --workers N` in a separate OS process**,
+driven over a **real socket** (no shared GIL with the load generator, which the in-process
+`bench_api.py` cannot isolate). It seeds once, then per worker-count starts a server, waits for
+`/health`, drives `POST /v1/query/explain`, and tears it down. Each worker gets a modest pool
+(`5+5`) so `W` workers stay under Postgres `max_connections`.
+
+Reference hardware (16 threads, **Postgres co-located on the same box**), 10k lines, 2 in-flight
+requests per worker (each worker peaks near ~2, per the load test):
+
+| workers | pipeline req/s (force_refresh) | cache-hit req/s |
+|---|---|---|
+| 1 | 12.5 | 224 |
+| 2 | 17.2 | 334 |
+| 4 | 16.4 | 378 |
+| 8 | 19.9 | 329 |
+
+What it shows — and it is a **more honest picture than "linear scaling"**:
+
+- **Workers do lift throughput.** Going from 1 worker upward raises req/s for both paths — the
+  opposite of adding concurrency to *one* process (which degraded it). So the load test's core
+  recommendation — **scale out with workers, not a bigger pool** — holds directionally.
+- **But a single co-located box cannot demonstrate linear scaling, and this one doesn't:** the
+  pipeline path plateaus by ~2–4 workers (~17–20 req/s). Sampling the Postgres container under an
+  8-worker pipeline load showed it consuming **1–2+ cores** (`docker stats` 112–230%) — because
+  OPT 5 deliberately moved the clustering work *into* Postgres, so concurrent explains now contend
+  on shared **Postgres** CPU, and the workers, the Postgres backends, and the in-box load generator
+  all compete for the same 16 threads. The cache-hit path's ~380 req/s ceiling is itself partly the
+  single-process async load driver, not raglogs.
+- **Implication:** after this optimization arc the API's ceiling has moved from per-process Python
+  GIL all the way down to **shared Postgres CPU** — which is the right place for it. Demonstrating
+  linear worker scaling requires running the workers and the database on **separate / scaled
+  hardware** (and a distributed load generator); `make bench-workers` is the harness to do that on
+  real multi-host infrastructure. On a single co-located box, the practical throughput plateau is
+  ~2–4 workers.
+
+This is a fitting endpoint for #85's performance work: the bottleneck has been chased from the DB
+insert shape (OPT 2) → per-line ingest CPU (OPT 1) → the clustering read + Python grouping
+(OPT 3–5) to, finally, shared database CPU under concurrency — a scale limit you relieve with
+infrastructure (a bigger / replicated Postgres, workers on their own hosts), not more single-box
+Python tuning.
