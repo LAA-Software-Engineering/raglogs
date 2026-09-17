@@ -1,7 +1,7 @@
 .PHONY: help install install-dev \
         db-up db-down docker-up docker-down docker-demo docker-logs \
         init migrate demo ingest explain clusters ask \
-        api web web-serve worker test test-unit test-int test-cov eval eval-data bench bench-api bench-workers loghub lint format \
+        api web web-serve worker test test-unit test-int test-cov eval eval-data bench bench-gate bench-api bench-workers loghub lint format \
         openapi jsonschema config-docs client-go client-python clean
 
 PYTHON  := python
@@ -173,9 +173,11 @@ eval-data:
 loghub:
 	$(PYTHON) scripts/loghub_bench.py
 
-# ── Performance benchmark ─────────────────────────────────────────────────────
-
-bench: db-up
+# CI performance gate (#85): a single-size ingest→explain run with a pass/fail target,
+# mirroring .github/workflows/bench.yml (which invokes scripts/benchmark.py directly).
+# The fuller cost-vs-N curve is `make bench` (scripts/bench_pipeline.py) above; this used
+# to also be named `bench`, which silently shadowed it — hence the rename.
+bench-gate: db-up
 	@sleep 2
 	alembic upgrade head
 	$(PYTHON) scripts/benchmark.py
