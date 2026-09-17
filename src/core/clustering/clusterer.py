@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Select, insert, select
+from sqlalchemy import Select, func, insert, select
 from sqlalchemy.orm import Session
 
 from src.core.clustering.baseline import compute_change_ratio, get_baseline_counts
@@ -25,6 +25,10 @@ from src.utils.time import resolve_baseline_window
 # Levels that count as a "problem" line for (service, fingerprint) root-cause
 # attribution — matches the trivial baseline's error/fatal/critical filter (#82).
 _ERROR_LEVELS = ("error", "fatal", "critical")
+
+# Cap on cluster members persisted per cluster (a sample, for performance). Also
+# bounds the per-fingerprint member sample the aggregation path materialises.
+_MAX_CLUSTER_MEMBERS = 100
 
 # Column order of the clustering projection, and therefore the positional-unpack
 # contract of _group_rows(). Kept next to the query and the helper so the two
@@ -89,6 +93,121 @@ def _group_rows(rows: Iterable) -> dict[str, dict]:
     return groups
 
 
+def _base_window_query(sel, window_start, window_end, scope, service, environment, ingestion_job_id):
+    """Apply the clustering window/scope/filter predicates shared by every aggregation
+    query — identical to the row-scan path's filters so both see the same rows."""
+    q = sel.where(
+        LogEntry.timestamp >= window_start,
+        LogEntry.timestamp <= window_end,
+        LogEntry.fingerprint.isnot(None),
+    )
+    q = filter_log_entries_by_scope(q, scope)
+    if service:
+        q = q.where(LogEntry.service == service)
+    if environment:
+        q = q.where(LogEntry.environment == environment)
+    if ingestion_job_id:
+        q = q.where(LogEntry.ingestion_job_id == ingestion_job_id)
+    return q
+
+
+def _aggregate_groups(
+    db: Session,
+    window_start: datetime,
+    window_end: datetime,
+    *,
+    scope: str,
+    service: Optional[str],
+    environment: Optional[str],
+    ingestion_job_id: Optional[uuid.UUID],
+) -> dict[str, dict]:
+    """Server-side equivalent of ``_group_rows``: aggregate per fingerprint in Postgres
+    (``GROUP BY``) instead of fetching every in-window row and grouping in Python.
+
+    Returns the same per-fingerprint group dict ``_group_rows`` does (consumed unchanged
+    by ``_build_cluster_data``), with these deliberate, equivalent representations (#85):
+
+    - ``"count"`` is the true ``count(*)`` — the row-scan path infers it from ``len(ids)``,
+      but here ``"ids"`` is only a capped sample, so the count is carried explicitly.
+    - ``"ids"`` is a **capped** member sample (``array_agg(id)[:N]``, ``N`` =
+      :data:`_MAX_CLUSTER_MEMBERS`) rather than every id: only that many members are ever
+      persisted (``_cluster_and_member_rows``), so materialising all ids per fingerprint
+      (up to the whole window for a dominant template) was pure waste. The sample is now a
+      deterministic prefix instead of an arbitrary fetch-order subset.
+    - ``"timestamps"`` holds just ``[min, max]`` (all ``_build_cluster_data`` reads) and
+      ``"messages"`` just the representative (most common) message.
+
+    Verified row-for-row against ``_group_rows`` in
+    ``tests/integration/test_cluster_aggregation.py`` across adversarial shapes.
+    """
+    def base(sel):
+        return _base_window_query(
+            sel, window_start, window_end, scope, service, environment, ingestion_job_id
+        )
+
+    groups: dict[str, dict] = {}
+
+    def group_for(fp: str) -> dict:
+        g = groups.get(fp)
+        if g is None:
+            g = {"messages": [], "services": {}, "levels": {},
+                 "error_services": {}, "timestamps": [], "ids": [], "count": 0}
+            groups[fp] = g
+        return g
+
+    # A: count, first/last seen, and a capped member sample per fingerprint.
+    members = func.array_agg(LogEntry.id)[1:_MAX_CLUSTER_MEMBERS]
+    qa = base(
+        select(LogEntry.fingerprint, func.count(),
+               func.min(LogEntry.timestamp), func.max(LogEntry.timestamp), members)
+    ).group_by(LogEntry.fingerprint)
+    for fp, cnt, first_seen, last_seen, ids in db.execute(qa):
+        g = group_for(fp)
+        g["count"] = cnt
+        g["ids"] = list(ids) if ids else []
+        g["timestamps"] = [t for t in (first_seen, last_seen) if t is not None]
+
+    # B: per-service counts, plus per-service error-level counts in the same scan.
+    # `!= ""` mirrors _group_rows' truthiness test (`if service:`), which drops both
+    # NULL and empty string; the same applies to level in query C and message in D.
+    is_error = func.lower(LogEntry.level).in_(_ERROR_LEVELS)
+    qb = base(
+        select(LogEntry.fingerprint, LogEntry.service, func.count(), func.count().filter(is_error))
+    ).where(
+        LogEntry.service.isnot(None), LogEntry.service != ""
+    ).group_by(LogEntry.fingerprint, LogEntry.service)
+    for fp, svc, cnt, err_cnt in db.execute(qb):
+        g = group_for(fp)
+        g["services"][svc] = cnt
+        if err_cnt:
+            g["error_services"][svc] = err_cnt
+
+    # C: per-level counts.
+    qc = base(
+        select(LogEntry.fingerprint, LogEntry.level, func.count())
+    ).where(
+        LogEntry.level.isnot(None), LogEntry.level != ""
+    ).group_by(LogEntry.fingerprint, LogEntry.level)
+    for fp, level, cnt in db.execute(qc):
+        group_for(fp)["levels"][level] = cnt
+
+    # D: representative message = most common non-empty normalized_message per fingerprint.
+    qd = base(
+        select(LogEntry.fingerprint, LogEntry.normalized_message, func.count())
+    ).where(
+        LogEntry.normalized_message.isnot(None), LogEntry.normalized_message != ""
+    ).group_by(LogEntry.fingerprint, LogEntry.normalized_message)
+    best: dict[str, tuple[int, str]] = {}
+    for fp, message, cnt in db.execute(qd):
+        current = best.get(fp)
+        if current is None or cnt > current[0]:
+            best[fp] = (cnt, message)
+    for fp, (_, message) in best.items():
+        group_for(fp)["messages"] = [message]
+
+    return groups
+
+
 @dataclass
 class ClusterData:
     fingerprint: str
@@ -114,7 +233,10 @@ def _build_cluster_data(
     fingerprint: str, group: dict, baseline_counts: dict[str, int]
 ) -> ClusterData:
     """Build a ClusterData from one fingerprint's grouped log rows."""
-    count = len(group["ids"])
+    # "count" is set when the group came from server-side aggregation (where "ids"
+    # is only a capped member sample, not the full set); the row-scan path omits it
+    # and the sample is the full membership, so len(ids) is the true count there.
+    count = group["count"] if "count" in group else len(group["ids"])
     services = dict(group["services"])
     levels = dict(group["levels"])
     error_service_counts = dict(group.get("error_services", {}))
@@ -209,25 +331,16 @@ def _run_clustering(
     Main clustering pipeline for a time window.
     Returns (ClusterRun, list[ClusterData]) sorted by importance descending.
     """
-    # 1. Query log entries in window. The projection (and its column order, the
-    #    positional-unpack contract of _group_rows) lives in _cluster_select().
-    q = _cluster_select().where(
-        LogEntry.timestamp >= window_start,
-        LogEntry.timestamp <= window_end,
-        LogEntry.fingerprint.isnot(None),
+    # 1–2. Group in-window rows by fingerprint, in Postgres. _aggregate_groups is the
+    #       server-side equivalent of fetching every row and _group_rows-ing them in
+    #       Python (the previous hot path, kept as the equivalence reference / oracle);
+    #       it returns the same group dict, verified in test_cluster_aggregation.py.
+    groups = _aggregate_groups(
+        db, window_start, window_end,
+        scope=scope, service=service, environment=environment, ingestion_job_id=ingestion_job_id,
     )
-    q = filter_log_entries_by_scope(q, scope)
 
-    if service:
-        q = q.where(LogEntry.service == service)
-    if environment:
-        q = q.where(LogEntry.environment == environment)
-    if ingestion_job_id:
-        q = q.where(LogEntry.ingestion_job_id == ingestion_job_id)
-
-    rows = db.execute(q).all()
-
-    if not rows:
+    if not groups:
         cluster_run = _create_cluster_run(
             db,
             window_start,
@@ -238,9 +351,6 @@ def _run_clustering(
             scope=scope,
         )
         return cluster_run, []
-
-    # 2. Group by fingerprint (positional unpack of the projection — see _group_rows)
-    groups = _group_rows(rows)
 
     # 3. Get baseline counts
     baseline_start, baseline_end = resolve_baseline_window(
@@ -368,10 +478,6 @@ def _create_cluster_run(
         db.add(run)
         db.flush()
     return run
-
-
-# Cap on cluster members persisted per cluster (a sample, for performance).
-_MAX_CLUSTER_MEMBERS = 100
 
 
 def _cluster_and_member_rows(

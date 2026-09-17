@@ -77,8 +77,9 @@ What the curve says:
 waits for an explanation — is the **explain** phase (ingest is continuous/background):
 
 > **A 1M-line incident window should explain in under 10 s on the reference hardware.**
-> At baseline it was **22 s** (2.2× over); after OPT 3–4 it is **~11–16 s** (~11 s warm) —
-> most of the gap closed, the rest is the clusterer's O(N) full-window scan (next, heavier lever).
+> Baseline **22 s**; after OPT 3–5 it is **9.28 s warm (best of 4)** — **target met**, with peak
+> RSS down ~10× (OPT 5 moved the clustering grouping server-side). The single-run bench figure is
+> noisier (dominated by the reactive trigger regex floor); the warm number is the reliable one.
 
 Secondary, operational: **ingest throughput ≥ 10k lines/s** (baseline ~2.3k; now ~6.1k after
 OPT 1–2, ~1.6× short) so a 1M-line backlog ingests in ~2.7 min rather than 7. Both targets are set
@@ -242,6 +243,48 @@ This closes most of the gap to the explain target (1M < 10 s): 22.0 → ~11–16
 remaining explain cost is the clusterer's O(N) full-window scan itself (the fetch + the inherent
 per-line grouping) and the reactive trigger regex floor; pushing the grouping aggregation
 server-side (SQL `GROUP BY` + `array_agg`) is the next, heavier lever, evaluated against this curve.
+
+### 5. Server-side clustering aggregation (2026-09-16)
+
+The lever OPT 4 named. The clusterer fetched **every** in-window row (a 6-column projection of
+all N) and grouped it by fingerprint in Python. After OPT 4 the grouping loop was cheap, but the
+process still transferred and walked N rows, and for a dominant template one fingerprint held
+*hundreds of thousands* of member ids that were materialised only to be sampled down to 100 at
+persist. `_aggregate_groups` moves the grouping into Postgres — a handful of `GROUP BY` queries
+(per-fingerprint count / first-seen / last-seen / capped member sample; per-service counts + error
+counts; per-level counts; most-common message) — returning the *same* per-fingerprint group dict
+that `_group_rows` did, now built from ~K aggregated rows instead of N.
+
+Two representational changes, both equivalent for analysis:
+- the persisted **member sample** (always capped at `_MAX_CLUSTER_MEMBERS` = 100, explicitly "a
+  sample, for performance") is now a deterministic `array_agg(id)[:100]` prefix instead of an
+  arbitrary fetch-order subset — so the huge id lists are never materialised;
+- on an exact within-fingerprint message-frequency *tie*, the representative message is one valid
+  mode rather than another (tied messages within a fingerprint share a template, so downstream
+  `is_trigger` and display are unaffected).
+
+**Correctness gate.** `tests/integration/test_cluster_aggregation.py` builds `ClusterData` both
+ways — `_group_rows` (kept as the reference oracle) vs `_aggregate_groups` — and asserts identical
+count, services, levels, error-service counts, first/last-seen, representative message, importance,
+change_ratio, and is_trigger, plus a valid capped member sample, across adversarial shapes: null
+services, null levels, empty/all-empty messages, timestamp ties, single-row clusters, the >100
+member cap, mixed/case-varied error levels, and end-to-end ordering + primary-cluster selection.
+
+Measured on the reference hardware, 1M rows:
+
+| metric (1M window) | before (row scan) | after (aggregation) |
+|---|---|---|
+| clustering read + group (component) | 7.8 s | **1.1 s** (~6.9×) |
+| `explain_window` wall (warm, best of 4) | 13.57 s | **9.28 s** (−32%) |
+| peak process RSS | 1,048 MB | **101 MB** (~10×) |
+| API pipeline throughput peak (10k lines) | 7.9 req/s @ conc 2 | **11.3 req/s** (~1.43×) |
+
+**This takes 1M explain under the 10 s target** (9.28 s warm) and cuts peak memory ~10× (no
+N-row / N-id Python materialisation). Because the analysis output is *identical* (proven above),
+the per-request CPU drop also lifts the GIL-bound API throughput ceiling — the concurrency win the
+load test predicted. **Eval delta: none** — clustering output is identical by construction (the
+equivalence suite is stronger than a corpus sample); the only observable change is which 100
+display-only member rows are sampled.
 
 ## API concurrency / connection-pool load test (#85)
 
