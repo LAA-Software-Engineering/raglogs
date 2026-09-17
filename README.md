@@ -257,11 +257,14 @@ make openapi              # export OpenAPI spec (clients/openapi.json)
 make clean
 ```
 
-`make bench` ingests synthetic log lines and explains the window, reporting wall
-time and query counts per phase so regressions are visible (runs on a schedule
-and on `main` via `.github/workflows/bench.yml`). The working target is
-**explain a window in under 10s**; treat the benchmark output, not this
-sentence, as the source of truth. See issue #85 for the remaining perf work.
+`make bench` runs a reproducible ingest→explain cost-vs-N curve
+(`scripts/bench_pipeline.py`), reporting wall time, query counts, and peak RSS per
+phase so regressions are visible; `make bench-gate` is the single-size pass/fail
+gate that CI runs on a schedule and on `main` (`.github/workflows/bench.yml`,
+`scripts/benchmark.py`). The working target is **explain a 1M-line window in under
+10s** (currently met at ~9s warm — treat the benchmark output, not this sentence,
+as the source of truth). `make bench-api` / `make bench-workers` cover API
+concurrency and multi-worker scaling. See issue #85 for the perf work.
 
 New log sources are adapters in `src/adapters/` — see
 [docs/adapters.md](docs/adapters.md). Project conventions and boundaries live in
