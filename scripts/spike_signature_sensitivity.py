@@ -233,19 +233,22 @@ def consistent(pred, o, fset, obs_onset_ranks, onset_usable):
     return True
 
 
-def hyp_signature(pred, fset, onset_usable):
+def hyp_signature(pred, fset, mode):
     """S_O(C): built PURELY from the hypothesis prediction over usable coordinates — presence
     expectation per (service, presence-observable), plus the predicted categorical onset order
-    (hop-rank per affected service) when the mode's onset source is usable. No observed value
-    enters here, so two hypotheses share a ~_O class iff their predictions agree on every usable
-    coordinate (i.e. only their unavailable distinguishers differ)."""
+    keyed by its SOURCE (onset_error|onset_lat) when that source is usable. Keying the onset by
+    source makes the signature coordinate algebra match _distinguishers(): with both onset sources
+    usable but presence dims unavailable, an error and a latency hypothesis occupy different onset
+    coordinates and do not collapse. No observed value enters here."""
+    src = _mode_src_name(mode)
+    onset_usable = src in fset
     parts = []
     for v in sorted(pred):
         row = tuple(0 if pred[v]["cell"][d] == ABSENT_HARD else 1 for d in _avail_presence(fset))
         parts.append(row)
     if onset_usable:
-        parts.append(tuple((v, pred[v]["onset"]) for v in sorted(pred)
-                           if pred[v]["onset"] is not None))
+        parts.append((src, tuple((v, pred[v]["onset"]) for v in sorted(pred)
+                                 if pred[v]["onset"] is not None)))
     return tuple(parts)
 
 
@@ -299,10 +302,9 @@ def resolve(c, fset, err_rate_cut, lat_mult, onset_tol_s, jitter_s=0.0):
             pred, _ = predict(s, mode, c)
             preds[(s, mode)] = pred
             src = mode_onset_source(mode, fset)
-            onset_usable = src is not None
             obs_ranks = ranks_by_src.get(src, {})
-            if consistent(pred, o, fset, obs_ranks, onset_usable):
-                survivors.append(((s, mode), hyp_signature(pred, fset, onset_usable)))
+            if consistent(pred, o, fset, obs_ranks, src is not None):
+                survivors.append(((s, mode), hyp_signature(pred, fset, mode)))
     classes = defaultdict(list)
     for hyp, sig in survivors:
         classes[sig].append(hyp)
@@ -315,40 +317,41 @@ def resolve(c, fset, err_rate_cut, lat_mult, onset_tol_s, jitter_s=0.0):
     else:
         outcome = "NON_IDENTIFIABLE"
 
+    # --- INFERENCE PACKET (ground-truth-free) ---
+    # D_missing for the non-identifiable class: the source-tagged coordinates that separate its
+    # members in principle but were NOT usable. Computed from the class MEMBERS alone, so it is
+    # producible in production where the true hypothesis is unknown.
+    d_missing = set()
+    if outcome == "NON_IDENTIFIABLE":
+        members = next(iter(classes.values()))
+        for i, a in enumerate(members):
+            for b in members[i + 1:]:
+                for cd in _distinguishers(a, b, preds, c["services"]):
+                    if not _usable_coord(cd, fset):
+                        d_missing.add(cd)
+
+    # --- SCORING (reads ground truth ONLY here) ---
     tl = c["tl"]
     true_mode = "latency" if tl["fault_type"] == "latency_only" else (
         "error_silent" if tl["fault_type"] == "symptom_only" else "error")
     true_hyp = (tl["root_cause"], true_mode)  # EXACT (service, mode)
-    survivor_hyps = {h for h, _ in survivors}
-    retained = true_hyp in survivor_hyps
-
-    # Two distinct metrics, per #177 (not one "correct" bit):
-    #   struct_ok — the emitted STRUCTURAL OUTCOME is a supported, honest result:
-    #     IDENTIFIED  → the sole survivor is the true hypothesis;
-    #     NON_IDENTIFIABLE → the surviving class contains the truth AND every co-member differs
-    #        from it only on UNAVAILABLE coordinates (anti-gaming), with a non-empty D_missing;
-    #     UNCERTAIN   → the truth is retained in some surviving class (distinct usable signatures
-    #        were, by construction, not collapsed and no non-identifiability was falsely claimed);
-    #     NONE        → failure (truth lost).
-    #   unique_ok — the stricter "pinned a single (service, mode)": IDENTIFIED on the true hypothesis.
-    d_missing = set()
-    struct_ok = False
+    retained = true_hyp in {h for h, _ in survivors}
+    #   struct_ok — the emitted outcome is a supported, honest result:
+    #     IDENTIFIED → sole survivor is the true hypothesis;
+    #     NON_IDENTIFIABLE → the class contains the truth and has a non-empty (member-derived)
+    #        D_missing (its co-members are separable only by unavailable coordinates — automatic,
+    #        since a ~_O class shares its usable signature);
+    #     UNCERTAIN → the truth is retained in some surviving class;
+    #     NONE → failure.
+    #   unique_ok — the stricter "pinned a single (service, mode)".
     if outcome == "IDENTIFIED":
         struct_ok = survivors[0][0] == true_hyp
-    elif outcome == "NON_IDENTIFIABLE" and retained:
-        cls = next(iter(classes.values()))
-        legit = True
-        for h in cls:
-            if h == true_hyp:
-                continue
-            diff = _distinguishers(true_hyp, h, preds, c["services"])
-            if any(_usable_coord(cd, fset) for cd in diff):
-                legit = False  # a usable coordinate distinguishes them -> should not co-class
-                break
-            d_missing |= diff
-        struct_ok = legit and bool(d_missing)
+    elif outcome == "NON_IDENTIFIABLE":
+        struct_ok = retained and bool(d_missing)
     elif outcome == "UNCERTAIN":
         struct_ok = retained
+    else:
+        struct_ok = False
     unique_ok = outcome == "IDENTIFIED" and survivors[0][0] == true_hyp
     return {"outcome": outcome, "n_survivors": len(survivors), "n_classes": len(classes),
             "retained": retained, "struct_ok": struct_ok, "unique_ok": unique_ok,

@@ -30,11 +30,14 @@ python scripts/spike_signature_sensitivity.py
   coordinate — i.e. only their *unavailable* distinguishers differ.
 - **Outcome from the surviving partition, exactly per #177**: IDENTIFIED = one singleton class;
   NON_IDENTIFIABLE = one class, ≥2 hypotheses; UNCERTAIN = ≥2 classes; NONE = no survivor.
-- **Scoring uses the exact `(service, mode)` hypothesis.** IDENTIFIED-correct iff the sole survivor
-  *is* the true hypothesis. NON_IDENTIFIABLE-correct iff the surviving class contains the true
-  hypothesis **and** every co-member differs from it only on **unavailable** coordinates (anti-gaming:
-  no co-member a usable coordinate would have split off), with `D_missing` = those unavailable
-  distinguishers (non-empty). Ground truth is used only to score — never to build the label.
+- **`D_missing` is part of the inference packet, computed ground-truth-free**: for a
+  NON_IDENTIFIABLE class it is the union of the source-tagged pairwise distinguishers between the
+  class's *members* that are not in `F_usable` (the coordinates that would separate them but were
+  not collected). It is produced from the class alone, exactly as production would.
+- **Ground truth (exact `(service, mode)`) is used only to score, never to build the result.**
+  `struct_ok` = the emitted outcome is contract-correct — IDENTIFIED on the true hypothesis; a
+  NON_IDENTIFIABLE class that contains the truth and has a non-empty (member-derived) `D_missing`;
+  or an UNCERTAIN that retains the truth. `unique` = the stricter "pinned one `(service, mode)`".
 
 ## Finding 1 — the structural outcome is always contract-correct; observability sets *unique-identification*
 
