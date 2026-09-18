@@ -180,13 +180,12 @@ def _avail_presence(fset):
     return tuple(d for d in PRESENCE if d in fset)
 
 
-def _onset_source(fset):
-    # which observed-onset source is usable; None if onset order is unavailable/disabled
-    if "onset_error" in fset:
-        return "onset_error"
-    if "onset_lat" in fset:
-        return "onset_lat"
-    return None
+def mode_onset_source(mode, fset):
+    """Onset source for a hypothesis mode: error/error_silent use error-onset (spans),
+    latency uses latency-onset (metrics). None if that source is not usable. Mode-aware so
+    F_usable=all keeps latency onset for latency hypotheses (not just error-onset globally)."""
+    src = "onset_error" if mode in ("error", "error_silent") else "onset_lat"
+    return src if src in fset else None
 
 
 def _observed_onset_ranks(o, source, tol_s, jitter_s=0.0):
@@ -212,16 +211,18 @@ def _observed_onset_ranks(o, source, tol_s, jitter_s=0.0):
     return ranks
 
 
-def consistent(pred, o, fset, obs_onset_ranks, source):
-    """Survive iff no HARD prediction is contradicted by a usable observation."""
-    for v, cell in ((v, pred[v]["cell"]) for v in o):
+def consistent(pred, o, fset, obs_onset_ranks, onset_usable):
+    """Survive iff no HARD prediction is contradicted by a usable observation. Observed onset
+    (from the mode's source) is used ONLY here, as a hard order check — never in the signature."""
+    for v in o:
+        cell = pred[v]["cell"]
         for d in _avail_presence(fset):
             p, obs = cell[d], o[v][d]
             if p == PRESENT_HARD and obs == 0:
                 return False
             if p == ABSENT_HARD and obs == 1:
                 return False
-    if source is not None:
+    if onset_usable:
         pred_on = {v: pred[v]["onset"] for v in o if pred[v]["onset"] is not None}
         for a in pred_on:
             for b in pred_on:
@@ -232,33 +233,62 @@ def consistent(pred, o, fset, obs_onset_ranks, source):
     return True
 
 
-def signature(pred, o, fset, obs_onset_ranks, source):
-    """Observable expectation per usable coordinate (present vs absent), plus observed onset rank on
-    predicted-affected services when onset is usable. Two hypotheses share a class iff equal here."""
+def hyp_signature(pred, fset, onset_usable):
+    """S_O(C): built PURELY from the hypothesis prediction over usable coordinates — presence
+    expectation per (service, presence-observable), plus the predicted categorical onset order
+    (hop-rank per affected service) when the mode's onset source is usable. No observed value
+    enters here, so two hypotheses share a ~_O class iff their predictions agree on every usable
+    coordinate (i.e. only their unavailable distinguishers differ)."""
     parts = []
-    for v in sorted(o):
-        row = []
-        for d in _avail_presence(fset):
-            row.append(0 if pred[v]["cell"][d] == ABSENT_HARD else 1)  # expect-present vs expect-absent
-        parts.append(tuple(row))
-    if source is not None:
-        onset_part = tuple(
-            (v, obs_onset_ranks.get(v)) for v in sorted(o) if pred[v]["onset"] is not None
-        )
-        parts.append(onset_part)
+    for v in sorted(pred):
+        row = tuple(0 if pred[v]["cell"][d] == ABSENT_HARD else 1 for d in _avail_presence(fset))
+        parts.append(row)
+    if onset_usable:
+        parts.append(tuple((v, pred[v]["onset"]) for v in sorted(pred)
+                           if pred[v]["onset"] is not None))
     return tuple(parts)
+
+
+def _all_coords_differ(pred_a, pred_b, services):
+    """Coordinates (service, observable) where two hypothesis predictions differ — the
+    distinguishers between them (over ALL coordinates, usable or not)."""
+    diff = set()
+    for v in services:
+        for d in PRESENCE:
+            ea = 0 if pred_a[v]["cell"][d] == ABSENT_HARD else 1
+            eb = 0 if pred_b[v]["cell"][d] == ABSENT_HARD else 1
+            if ea != eb:
+                diff.add((v, d))
+        if pred_a[v]["onset"] != pred_b[v]["onset"]:
+            diff.add((v, "onset"))
+    return diff
+
+
+def _usable_coord(coord, fset):
+    v, d = coord
+    if d == "onset":
+        return ("onset_error" in fset) or ("onset_lat" in fset)
+    return d in fset
 
 
 def resolve(c, fset, err_rate_cut, lat_mult, onset_tol_s, jitter_s=0.0):
     o = observed(c, err_rate_cut, lat_mult)
-    source = _onset_source(fset)
-    obs_onset_ranks = _observed_onset_ranks(o, source, onset_tol_s, jitter_s) if source else {}
+    # observed onset ranks per source (used only for hard consistency, never in the signature)
+    ranks_by_src = {
+        src: _observed_onset_ranks(o, src, onset_tol_s, jitter_s)
+        for src in ("onset_error", "onset_lat") if src in fset
+    }
+    preds = {}
     survivors = []
     for s in c["services"]:
         for mode in MODES:
             pred, _ = predict(s, mode, c)
-            if consistent(pred, o, fset, obs_onset_ranks, source):
-                survivors.append(((s, mode), signature(pred, o, fset, obs_onset_ranks, source)))
+            preds[(s, mode)] = pred
+            src = mode_onset_source(mode, fset)
+            onset_usable = src is not None
+            obs_ranks = ranks_by_src.get(src, {})
+            if consistent(pred, o, fset, obs_ranks, onset_usable):
+                survivors.append(((s, mode), hyp_signature(pred, fset, onset_usable)))
     classes = defaultdict(list)
     for hyp, sig in survivors:
         classes[sig].append(hyp)
@@ -270,23 +300,40 @@ def resolve(c, fset, err_rate_cut, lat_mult, onset_tol_s, jitter_s=0.0):
         outcome = "IDENTIFIED"
     else:
         outcome = "NON_IDENTIFIABLE"
+
     tl = c["tl"]
     true_mode = "latency" if tl["fault_type"] == "latency_only" else (
         "error_silent" if tl["fault_type"] == "symptom_only" else "error")
-    true_svc = tl["root_cause"]
-    retained = any(h[0] == true_svc for h, _ in survivors)  # true cause SERVICE survives (any mode)
-    reported_class = classes.get(survivors[0][1], []) if outcome != "NONE" else []
-    # "correct" = the resolution names the true cause: IDENTIFIED on it, or it is in the reported
-    # NON_IDENTIFIABLE class (an honest "can't separate" that still retains the truth).
+    true_hyp = (tl["root_cause"], true_mode)  # EXACT (service, mode)
+    survivor_hyps = {h for h, _ in survivors}
+    retained = true_hyp in survivor_hyps
+
+    # correctness against #177's success criteria, exact hypothesis identity:
+    #   IDENTIFIED  correct iff the sole survivor IS the true hypothesis.
+    #   NON_IDENTIFIABLE correct iff the (single) surviving class contains the true hypothesis AND
+    #     every co-member is separable-in-principle from it only by UNAVAILABLE distinguishers
+    #     (anti-gaming: no co-member that a usable coordinate would have split off). D_missing =
+    #     the union of those unavailable distinguishers, and must be non-empty.
+    #   UNCERTAIN / NONE: not correct.
+    correct = False
+    d_missing = set()
     if outcome == "IDENTIFIED":
-        correct = survivors[0][0][0] == true_svc
-    elif outcome == "NON_IDENTIFIABLE":
-        correct = any(h[0] == true_svc for h in reported_class)
-    else:
-        correct = False
+        correct = survivors[0][0] == true_hyp
+    elif outcome == "NON_IDENTIFIABLE" and retained:
+        cls = next(iter(classes.values()))
+        legit = True
+        for h in cls:
+            if h == true_hyp:
+                continue
+            diff = _all_coords_differ(preds[true_hyp], preds[h], c["services"])
+            if any(_usable_coord(cd, fset) for cd in diff):
+                legit = False  # a usable coordinate distinguishes them -> should not co-class
+                break
+            d_missing |= diff
+        correct = legit and bool(d_missing)
     return {"outcome": outcome, "n_survivors": len(survivors), "n_classes": len(classes),
-            "retained": retained, "correct": correct, "fault_type": tl["fault_type"],
-            "true_mode": true_mode}
+            "retained": retained, "correct": correct, "d_missing": len(d_missing),
+            "fault_type": tl["fault_type"], "true_mode": true_mode}
 
 
 def main():
@@ -312,19 +359,20 @@ def main():
               f"{oc['NONE']:>6}{ret:>8}/{len(cases)}{cor:>7}/{len(cases)}")
 
     # Explicit verification of the two properties the review demanded.
-    print("\n== review-property checks (symptom_only = silent callee cause) ==")
+    print("\n== review-property checks (symptom_only = silent callee cause; exact (svc,mode)) ==")
     sym = [c for c in cases if c["tl"]["fault_type"] == "symptom_only"]
-    # (a) silent cause retained when its distinguisher (span) is unavailable (logs_only)
-    ret_logs = sum(resolve(c, AVAIL["logs_only"], ER, LAT, TOL)["retained"] for c in sym)
-    # (b) a genuine NON_IDENTIFIABLE class arises there (cause indistinguishable from loud caller)
-    nonid_logs = sum(
-        resolve(c, AVAIL["logs_only"], ER, LAT, TOL)["outcome"] == "NON_IDENTIFIABLE" for c in sym)
-    # contrast: with spans usable the silent cause IS separated -> IDENTIFIED-correct
-    ident_spans = sum(resolve(c, AVAIL["spans_only"], ER, LAT, TOL)["correct"] for c in sym)
-    print(f"   logs_only : silent cause retained {ret_logs}/{len(sym)}, "
-          f"NON_IDENTIFIABLE {nonid_logs}/{len(sym)} (cause ≡ loud caller, distinguisher absent)")
-    print(f"   spans_only: silent cause correctly IDENTIFIED {ident_spans}/{len(sym)} "
-          f"(the ERROR span separates it)")
+    rl = [resolve(c, AVAIL["logs_only"], ER, LAT, TOL) for c in sym]
+    rs = [resolve(c, AVAIL["spans_only"], ER, LAT, TOL) for c in sym]
+    ra = [resolve(c, AVAIL["all"], ER, LAT, TOL) for c in sym]
+    print(f"   logs_only : true (svc,error_silent) retained {sum(r['retained'] for r in rl)}/{len(sym)}"
+          f", NON_IDENTIFIABLE {sum(r['outcome'] == 'NON_IDENTIFIABLE' for r in rl)}/{len(sym)}"
+          f" (cause ≡ loud caller; D_missing avg {statistics.mean([r['d_missing'] for r in rl]):.1f} coords)")
+    print(f"   spans_only: NON_IDENTIFIABLE {sum(r['outcome'] == 'NON_IDENTIFIABLE' for r in rs)}/{len(sym)}"
+          f" (span present, but err_log/err_rate absent → error vs error_silent MODE unresolved),"
+          f" legit/retained {sum(r['correct'] for r in rs)}/{len(sym)}")
+    print(f"   all       : IDENTIFIED {sum(r['outcome'] == 'IDENTIFIED' for r in ra)}/{len(sym)}"
+          f", exact-correct {sum(r['correct'] for r in ra)}/{len(sym)}"
+          f" (every distinguisher usable → unique (svc,mode))")
 
     print("\n== onset robustness (F_usable=all): outcome + correct ==")
     print(f"   {'onset_tol_s':>11}{'jitter_s':>9}{'IDENT':>6}{'NON_ID':>7}{'UNCERT':>7}{'correct':>9}")
