@@ -1,8 +1,8 @@
 # Spike: signature-equality sensitivity before Phase D (#181)
 
-Time-boxed investigation, **not production code**. It de-risks the central structural
-assumption of the #177 epic — that the IDENTIFIED / NON_IDENTIFIABLE / UNCERTAIN outcome
-can rest on **exact categorical signature equality** over discretized *usable* observables —
+Time-boxed investigation, **not production code**. It de-risks the structural assumption of the
+#177 epic — that the IDENTIFIED / NON_IDENTIFIABLE / UNCERTAIN outcome can rest on exact
+categorical equality of **causal-hypothesis prediction** signatures over **usable** observables —
 before the Phase D partitioner is built. Reproduce with:
 
 ```bash
@@ -10,116 +10,132 @@ python scripts/gen_trace_localization_corpus.py         # -> data/eval-cases/tra
 python scripts/spike_signature_sensitivity.py
 ```
 
-## The question
+> **History.** The first version of this spike (PR #195, round 1) was wrong in a way the review
+> caught: it partitioned *services by the telemetry they emitted* and consulted ground truth to
+> *build* the outcome label. That measures "did services emit different local signals," not "do
+> causal hypotheses predict the same observable state." This version replaces both the
+> representation and the outcome semantics; its conclusions **supersede** round 1's (in particular
+> round 1's "onset ordering is essential" was an artifact of the wrong model — see Finding 3).
 
-Structural identifiability hinges on `C_i ~_O C_j ⇔ S_O(C_i) = S_O(C_j)` over observables
-restricted to `F_usable`. Two knobs make that label degenerate:
+## Method
 
-1. **`|F_usable|` too small** → distinct causes collapse into one NON_IDENTIFIABLE blob;
-2. **discretization too fine** → every candidate becomes structurally distinct and
-   everything lands in UNCERTAIN.
+The structural inference Phase D/E require, with a **prototype** expectation model standing in for
+the still-open Phases A (observables/availability) and C (observation expectations):
 
-We want to see both regimes on real-ish data before building on top of the assumption. The
-substrate is the 24-case synthetic trace corpus (#170): 3 topologies × 4 fault types × 2
-seeds, with ground-truth `root_cause` / `symptom_services` labels, so "did the signature
-separate the cause from its loud symptom?" is directly measurable.
+1. **Hypotheses** `H = {(service, mode) : mode ∈ {error, latency}}` — "service *s* is the root
+   cause, failing in mode *m*."
+2. **Forward prediction** `S(h)`: a fault at a callee propagates **up** the caller chain
+   (a caller of a failing/slow dependency sees errors/latency), cause-first. Affected set =
+   `{s} ∪ transitive-callers(s)`; each affected service is predicted to show the mode signal, with
+   a predicted onset rank = hop distance from the cause. Deliberately simple and **ground-truth-free**.
+3. **`F_usable`** is an *explicit availability set* (which observable types were measured), swept as
+   scenarios — not derived from whether service values happened to vary.
+4. **Consistency (covering / hard-incompatibility, Phase C spirit):** a hypothesis survives iff it
+   can **explain every observed anomaly** over `F_usable` and is itself anomalous — i.e. the observed
+   anomalous services (in the hypothesis's mode) are a subset of its affected set, the cause is
+   itself anomalous, and no other-mode anomaly is left uncovered. This is the causal content the
+   exact-match signature lacked: a downstream symptom **cannot** explain its own callee's anomaly, so
+   it is ruled out as a cause by topology alone.
+5. **Outcome (exactly #177), from the surviving partition only:** IDENTIFIED = one surviving class
+   that is a singleton; NON_IDENTIFIABLE = one class, ≥2 hypotheses; UNCERTAIN = ≥2 classes;
+   NONE = no survivor (a prototype-model-fidelity failure, reported, not hidden).
+6. **Ground truth** (`root_cause` + fault-type→mode) is used **only** to score, per case, whether the
+   true hypothesis was *retained* and the resolution is *correct* — never to build the label.
 
-## What the corpus telemetry looks like (per fault type)
+## Finding 1 — availability of usable observables is decisive (the epic's premise, shown structurally)
 
-Signals available on the **cause** vs its **symptom** (the caller that only *reports* the
-failure):
+Outcome distribution and truth scoring as `F_usable` varies (`err_rate_cut=0.05`, `lat_mult=2.0`,
+`onset_tol=5s`):
 
-| fault type | cause signature | symptom signature | presence-only separable? |
+| `F_usable` | IDENTIFIED | NON_ID | UNCERTAIN | NONE | retained | correct |
+|---|---|---|---|---|---|---|
+| all (logs+spans+metrics+onset) | 24 | 0 | 0 | 0 | **24/24** | **24/24** |
+| no_onset | 24 | 0 | 0 | 0 | 24/24 | 24/24 |
+| metrics_only (err_rate, lat, onset) | 24 | 0 | 0 | 0 | 18/24 | **18/24** |
+| spans_only (err_span, onset) | 18 | 0 | 0 | 6 | 18/24 | 18/24 |
+| logs_only | 18 | 0 | 0 | 6 | 12/24 | **12/24** |
+
+The **same fault** resolves correctly or incorrectly purely as a function of which observables are
+usable — exactly the #177 contract that the outcome must be conditioned on usable observations:
+
+- **logs-only** structurally *misidentifies* the `symptom_only` faults (the cause is silent in logs,
+  so covering picks the loud caller — the symptom) **and** is blind to `latency_only` (no error
+  anomaly to explain → NONE): 12/24 correct.
+- **spans** resolve `symptom_only` (the cause carries an ERROR span even with no logs); they are
+  blind to `latency_only` (NONE) — 18/24.
+- **metrics** miss the silent-callee `symptom_only` faults (flat error-rate on the cause) — 18/24.
+- **full telemetry** identifies all 24.
+
+## Finding 2 — topology + covering does the identification; the corpus barely exercises the non-singleton branches
+
+Under covering consistency the cause is the *deepest anomalous node whose upward closure explains
+every observed anomaly*, so a single-injected-fault case almost always yields a unique survivor →
+IDENTIFIED. NON_IDENTIFIABLE and UNCERTAIN essentially do not occur on this corpus. **That is a
+limitation of the corpus, not evidence the outcome is robust:** every case has exactly one injected
+fault and a unique deepest anomalous service. Phase D's NON_IDENTIFIABLE / UNCERTAIN branches —
+the whole point of the epic — are **not** exercised here and must be validated on a richer corpus
+(co-occurring faults, and unobserved intermediate nodes that make two causes genuinely
+indistinguishable).
+
+## Finding 3 — onset ordering is *not* load-bearing (retracting round 1)
+
+Correct-resolution rate on `F_usable=all` as the onset policy varies:
+
+| onset_tol_s | jitter_s | IDENTIFIED | correct |
 |---|---|---|---|
-| `callee_fail` | err_log + err_span + err_rate | err_log + err_span + err_rate | **no** — identical |
-| `caller_fail` | err_log + err_span + err_rate (no distinct symptom) | — | n/a |
-| `symptom_only` | **err_span only** (trace ERROR, no logs, flat metrics) | err_log + err_span + err_rate | **yes** — distinct |
-| `latency_only` | latency spike only | latency spike only | **no** — identical |
+| 0 (exact) | 0 | 24 | 24/24 |
+| 5 | 0 | 24 | 24/24 |
+| 5 | 3 | 24 | 24/24 |
+| 5 | 8 | 24 | 24/24 |
+| 20 | 0 | 24 | 24/24 |
+| ∞ (onset order ignored) | 0 | 24 | 24/24 |
 
-The cause always degrades *first* (onset gap); the symptom follows. So on `callee_fail` and
-`latency_only` the cause and symptom are **presence-signature-identical** and only **onset
-ordering** separates them.
+With a proper covering model the call-graph topology already separates cause from symptom, so onset
+is **robust but redundant** here — identical results with onset disabled and under ±8s jitter.
+Round 1 claimed onset was essential (6/18 → 18/18); that was an artifact of the telemetry-vector
+representation, where cause and symptom had identical local vectors and only the (tautological,
+generator-guaranteed, ms-unique) onset rank separated them. **Onset is safe to include as a
+tie-breaking refinement, but Phase D must not depend on it**, and if used it needs a declared
+tolerance bucket (not raw-timestamp ranks).
 
-## Finding 1 — `|F_usable|` is low and uneven
+## Finding 4 — discretization sensitivity is concentrated in the latency threshold
 
-Usable presence dimensions (those that actually vary across services in a case):
+IDENTIFIED count over a factorial `err_rate_cut × lat_mult` grid (`F_usable=all`, onset_tol=5s):
 
-| fault type | `|F_usable|` |
-|---|---|
-| callee_fail | 3 |
-| caller_fail | 3 |
-| symptom_only | 3 |
-| **latency_only** | **1** |
-
-`latency_only` exposes the first degenerate regime directly: a **single** usable observable,
-so any two latency-inflating services are signature-identical. With presence-only signatures
-these cases are unavoidably NON_IDENTIFIABLE.
-
-## Finding 2 — presence-only signatures leave half the corpus non-identifiable
-
-Cause-above-symptom separability by signature, and the outcome split at a sensible cutoff
-(`err_rate ≥ +0.05`, `latency ≥ 2× baseline`):
-
-| signature policy | cause>symptom separable | IDENTIFIED | NON_IDENTIFIABLE | UNCERTAIN |
+| err_rate_cut \ lat_mult | 1.2× | 1.5× | 2.0× | 3.0× |
 |---|---|---|---|---|
-| presence-only | **6 / 18** | 12 | 12 | 0 |
-| presence **+ onset** | **18 / 18** | 24 | 0 | 0 |
+| 0.02 | 0 | 21 | 24 | 24 |
+| 0.05 | 0 | 21 | 24 | 24 |
+| 0.10 | 0 | 21 | 24 | 24 |
+| 0.20 | 0 | 21 | 24 | 24 |
+| 0.35 | 0 | 21 | 24 | 24 |
 
-Per fault type:
+Stability criterion (IDENTIFIED ≥ 22/24): met in **10/20** cells — every cell with `lat_mult ≥ 2.0`,
+independent of the error-rate cutoff. Two clear facts, now *measured* rather than extrapolated from
+four paired points:
 
-| policy | callee_fail | latency_only | symptom_only |
-|---|---|---|---|
-| presence-only | 0/6 | 0/6 | 6/6 |
-| presence + onset | 6/6 | 6/6 | 6/6 |
+- **The error-rate cutoff is not a sensitive knob** here — the rows are identical, because error
+  identification keys on span/log *presence*, not a thresholded rate.
+- **The latency multiplier is the sensitive knob**: `lat_mult = 1.2×` is degenerate (baseline jitter
+  crosses the threshold → the cause's latency anomaly is not cleanly separable → 0 identified);
+  `1.5×` is borderline (21/24); `≥ 2.0×` is stable. The boundary is at `lat_mult ≈ 2×`, not a
+  rectangle in both knobs.
 
-Presence-only signatures separate the cause **only** on `symptom_only` (where the cause's
-signature is genuinely distinct: trace-error *without* logs/error-rate). On `callee_fail` and
-`latency_only` the cause and symptom are structurally identical without onset — so the
-NON_IDENTIFIABLE label there is *correct*, not a bug: the measurements that would separate
-them (relative onset) simply aren't in a presence-only signature.
+## Recommendation — Phase D proceeds, conditioned on three things
 
-## Finding 3 — discretization has a wide stable band, one blow-up regime
+1. **Condition the outcome on an explicit usable-observable (availability) set.** The same fault is
+   IDENTIFIED-correct or IDENTIFIED-wrong purely by which observables are usable; logs-only
+   telemetry structurally points at the symptom on silent-callee faults. Availability metadata is a
+   first-class input to Phase D, not an afterthought (Phase A).
+2. **The load-bearing mechanism is covering/topology consistency** (a cause must explain every
+   observed anomaly), *not* signature equality over local telemetry and *not* onset ordering. Phase D
+   should build the partition from hypothesis-prediction signatures under covering; onset is an
+   optional, tolerance-bucketed tie-breaker.
+3. **Min-delta gate on latency only** (`lat_mult ≈ 2×`); the error-rate cutoff is not sensitive.
 
-Partition size `|H/~_O|` (mean over the 24 cases) and outcome split as the cutoffs move,
-under the presence+onset policy:
-
-| err_rate cut | latency mult | mean `|H/~_O|` | IDENTIFIED | NON_IDENTIFIABLE | UNCERTAIN |
-|---|---|---|---|---|---|
-| 0.05 | 2.0× | 1.8 | 24 | 0 | 0 |
-| 0.35 | 3.0× | 1.8 | 24 | 0 | 0 |
-| 0.20 | 1.5× | 1.9 | 21 | 0 | 3 |
-| **0.02** | **1.2×** | **4.2** | 0 | 1 | **23** |
-
-Cutoffs anywhere in `err_rate ∈ [0.05, 0.35]`, `latency ∈ [1.5×, 3×]` are stable. Only an
-over-fine cutoff (`0.02` / `1.2×`) triggers the **second** degenerate regime: baseline noise
-crosses the threshold, every candidate gets a distinct signature (`|H/~_O|` → 4.2), and
-everything collapses to UNCERTAIN.
-
-## Recommendation — Phase D proceeds, with two required tweaks
-
-Signature equality **is** a workable basis for the outcome label on this corpus — it cleanly
-separates cause from symptom in **every** case — but only with both of:
-
-1. **Onset ordering must be a first-class signature dimension**, not just presence/absence of
-   error/latency. Without it, `callee_fail` + `latency_only` (half the corpus) are
-   structurally non-identifiable, because cause and symptom share an identical presence
-   signature. This is the single most important input to Phase D's signature definition.
-2. **Minimum-support / minimum-delta gating on continuous observables.** Discretize
-   `error_rate` and `latency` only against a floor (`err_rate ≥ ~0.05` absolute,
-   `latency ≥ ~1.5–2× baseline`); an over-fine cutoff makes baseline noise structurally
-   significant and forces the all-UNCERTAIN degeneracy. The stable band is wide, so this is a
-   floor, not a tuned knob.
-
-**Phase D proceeds as specified**, with the signature schema extended to carry an onset-rank
-dimension and a min-delta gate on the continuous observables. A secondary, honest fallback
-follows from Finding 2: where onset is unavailable or untrustworthy, NON_IDENTIFIABLE on
-`callee_fail`/`latency_only` is the *correct* structural label, and ranking (onset-based)
-should operate **within** that equivalence class rather than being asked to manufacture a
-distinction the usable observables don't support — exactly the #177 contract.
-
-## Caveats
-
-Synthetic corpus, prototype observable model (the production `F_usable` and expectation model
-are Phase A / Phase C). The onset dimension here is a coarse dense-rank of first-degradation;
-Phase D should define its discretization deliberately. No ranker change, no accuracy claim —
-this gates Phase D's design only.
+**Caveat / gating remains open on one axis.** This corpus does not exercise NON_IDENTIFIABLE or
+UNCERTAIN at all, so Phase D's handling of *genuinely indistinguishable* hypotheses is **not**
+validated here. Before or alongside Phase D, extend the corpus with co-occurring faults and
+unobserved intermediate nodes so those branches can be measured — otherwise Phase E's outcome
+semantics ship untested on the very cases they exist for. Synthetic corpus + prototype expectation
+model (production `F_usable`/expectations are Phases A/C); no ranker change, no accuracy claim.
