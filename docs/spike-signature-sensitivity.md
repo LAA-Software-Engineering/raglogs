@@ -36,24 +36,29 @@ python scripts/spike_signature_sensitivity.py
   no co-member a usable coordinate would have split off), with `D_missing` = those unavailable
   distinguishers (non-empty). Ground truth is used only to score — never to build the label.
 
-## Finding 1 — the true hypothesis is never eliminated; observability sets the *resolution granularity*
+## Finding 1 — the structural outcome is always contract-correct; observability sets *unique-identification*
 
-Outcome distribution and exact-hypothesis scoring as `F_usable` varies (`err_rate_cut=0.05`,
-`lat_mult=2.0`, `onset_tol=5s`):
+Two distinct metrics per #177 (not one "correct" bit): **`struct_ok`** = the emitted outcome is a
+supported, honest result (IDENTIFIED on the truth; or a legitimately anti-gamed NON_IDENTIFIABLE
+class that retains the truth with a non-empty `D_missing`; or an UNCERTAIN that retains the truth
+without falsely claiming non-identifiability); **`unique`** = the stricter "pinned a single
+`(service, mode)`". As `F_usable` varies (`err_rate_cut=0.05`, `lat_mult=2.0`, `onset_tol=5s`):
 
-| `F_usable` | IDENTIFIED | NON_ID | UNCERTAIN | retained | correct |
-|---|---|---|---|---|---|
-| all | 24 | 0 | 0 | 24/24 | 24/24 |
-| no_onset | 24 | 0 | 0 | 24/24 | 24/24 |
-| metrics_only | 12 | 10 | 2 | 24/24 | 12/24 |
-| spans_only | 0 | 24 | 0 | 24/24 | 18/24 |
-| logs_only | 6 | 10 | 8 | 24/24 | 16/24 |
+| `F_usable` | IDENTIFIED | NON_ID | UNCERTAIN | retained | struct_ok | unique |
+|---|---|---|---|---|---|---|
+| all / no_onset | 24 | 0 | 0 | 24/24 | 24/24 | 24/24 |
+| metrics_only | 12 | 10 | 2 | 24/24 | 24/24 | 12/24 |
+| spans_only | 0 | 24 | 0 | 24/24 | 24/24 | 0/24 |
+| logs_only | 6 | 10 | 8 | 24/24 | 24/24 | 6/24 |
 
-The exact true `(service, mode)` hypothesis is **retained in every scenario (24/24)** — restricting
-observability degrades the outcome from a unique IDENTIFIED toward NON_IDENTIFIABLE / UNCERTAIN; it
-never eliminates the truth or returns a confident wrong answer. Because the signature is built only
-from usable coordinates, NON_IDENTIFIABLE and UNCERTAIN are genuinely reachable (they were
-structurally impossible in earlier rounds of this spike), so signature equality is actually tested.
+The exact true `(service, mode)` hypothesis is **retained in every scenario (24/24)** and the
+**structural outcome is contract-correct in every scenario (`struct_ok` 24/24)** — valid
+NON_IDENTIFIABLE and UNCERTAIN results are successes, not misses. What availability changes is
+**`unique`**: how often the telemetry pins a single `(service, mode)` (24 → 12 → 0 → 6). Restricting
+observability degrades a unique IDENTIFIED toward an honest NON_IDENTIFIABLE / UNCERTAIN; it never
+eliminates the truth or returns a confident wrong answer. NON_IDENTIFIABLE and UNCERTAIN are
+genuinely reachable (they were structurally impossible in earlier rounds), so signature equality is
+actually being tested.
 
 ## Finding 2 — availability decides *what* is resolvable; silent causes stay representable (headline)
 
@@ -63,22 +68,27 @@ partial-observability regimes:
 
 | `F_usable` on symptom_only | outcome | what is / isn't resolved | truth retained |
 |---|---|---|---|
-| logs_only (span not collected) | **NON_IDENTIFIABLE 6/6** | the *service* is ambiguous — silent callee ≡ loud caller (`D_missing` ≈ 6 coords) | 6/6 |
-| spans_only (span collected; no log/rate) | **NON_IDENTIFIABLE 6/6** | the *service* is found but the **mode** is ambiguous — `error` vs `error_silent` needs `err_log`/`err_rate` | 6/6 |
+| logs_only (span not collected) | **NON_IDENTIFIABLE 6/6** | the *service* is ambiguous — silent callee ≡ loud caller | 6/6 |
+| spans_only (span collected; no log/rate) | **NON_IDENTIFIABLE 6/6** | the *service* is found but the **mode** is ambiguous — `error` vs `error_silent` | 6/6 |
 | all | **IDENTIFIED 6/6** | unique `(service, mode)` | 6/6 |
 
-This is the #177 contract working: the engine reports exactly the resolution the telemetry supports —
-a unique cause when every distinguisher was collected, an honest "these are indistinguishable, and
-here is what was missing" (`D_missing`) when it wasn't — and it **never** silently returns the loud
-symptom. (An earlier round reported "logs-only misidentifies the cause"; that was a modelling bug —
-it made local anomaly a hard eligibility condition and eliminated the silent cause. Corrected here.)
+The engine emits the actual `D_missing` distinguisher **set** (source-tagged), so it says *what to
+collect*, e.g. for `tl_media_symptom_only_0`:
+
+- logs_only → `D_missing = {(storage, err_span), (storage, onset_error), (media, onset_error), …}` — the callee's ERROR span / onset would separate it from its caller;
+- spans_only → `D_missing = {(storage, err_log), (storage, err_rate)}` — exactly the two coordinates that resolve `error` vs `error_silent`.
+
+This is the #177 contract working: a unique cause when every distinguisher was collected, an honest
+"indistinguishable, and here is what was missing" otherwise — and it **never** silently returns the
+loud symptom. (An earlier round reported "logs-only misidentifies the cause"; that was a modelling
+bug that made local anomaly a hard eligibility condition and eliminated the silent cause. Corrected.)
 
 ## Finding 3 — onset is robust but not load-bearing
 
 On `F_usable=all`, varying the onset policy (now a *predicted* hop-rank coordinate; observed onset
 used only for the hard order check):
 
-| onset_tol_s | jitter_s | IDENTIFIED | correct |
+| onset_tol_s | jitter_s | IDENTIFIED | struct_ok |
 |---|---|---|---|
 | 0 (exact) | 0 | 24 | 24/24 |
 | 5 | 0 | 24 | 24/24 |
@@ -92,7 +102,7 @@ but Phase D must not depend on it.**
 
 ## Finding 4 — discretization sensitivity is concentrated in the latency threshold
 
-Exact-correct count over a factorial `err_rate_cut × lat_mult` grid (`F_usable=all`):
+`struct_ok` count over a factorial `err_rate_cut × lat_mult` grid (`F_usable=all`):
 
 | err_rate_cut \ lat_mult | 1.2× | 1.5× | 2.0× | 3.0× |
 |---|---|---|---|---|
@@ -102,7 +112,7 @@ Exact-correct count over a factorial `err_rate_cut × lat_mult` grid (`F_usable=
 | 0.20 | 0 | 19 | 24 | 24 |
 | 0.35 | 0 | 19 | 24 | 24 |
 
-Stable (correct ≥ 22/24) in **10/20** cells — every cell with `lat_mult ≥ 2.0`, independent of the
+Stable (`struct_ok` ≥ 22/24) in **10/20** cells — every cell with `lat_mult ≥ 2.0`, independent of the
 error-rate cutoff. The **error-rate cutoff is not a sensitive knob** (error identification keys on
 span/log presence); the **latency multiplier is** — degenerate at `1.2×` (baseline jitter crosses),
 stable at `≥ 2×`. A latency floor, not a rectangle in both knobs.

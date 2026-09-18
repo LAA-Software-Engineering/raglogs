@@ -249,25 +249,39 @@ def hyp_signature(pred, fset, onset_usable):
     return tuple(parts)
 
 
-def _all_coords_differ(pred_a, pred_b, services):
-    """Coordinates (service, observable) where two hypothesis predictions differ — the
-    distinguishers between them (over ALL coordinates, usable or not)."""
+def _mode_src_name(mode):
+    return "onset_error" if mode in ("error", "error_silent") else "onset_lat"
+
+
+def _distinguishers(hyp_a, hyp_b, preds, services):
+    """Coordinates (service, observable) where two hypotheses' predictions differ — the
+    distinguishers between them, over ALL coordinates (usable or not). Onset keeps its SOURCE
+    identity: a hypothesis's onset lives at (service, onset_error|onset_lat) per its mode, so a
+    coordinate is only counted usable later against the source that actually carries it."""
+    pa, pb = preds[hyp_a], preds[hyp_b]
+    src_a, src_b = _mode_src_name(hyp_a[1]), _mode_src_name(hyp_b[1])
     diff = set()
     for v in services:
         for d in PRESENCE:
-            ea = 0 if pred_a[v]["cell"][d] == ABSENT_HARD else 1
-            eb = 0 if pred_b[v]["cell"][d] == ABSENT_HARD else 1
+            ea = 0 if pa[v]["cell"][d] == ABSENT_HARD else 1
+            eb = 0 if pb[v]["cell"][d] == ABSENT_HARD else 1
             if ea != eb:
                 diff.add((v, d))
-        if pred_a[v]["onset"] != pred_b[v]["onset"]:
-            diff.add((v, "onset"))
+        if src_a == src_b:
+            if pa[v]["onset"] != pb[v]["onset"]:
+                diff.add((v, src_a))
+        else:
+            # different onset sources => each hypothesis's onset is a distinct coordinate;
+            # a predicted onset on either source is a (source-specific) distinguisher.
+            if pa[v]["onset"] is not None:
+                diff.add((v, src_a))
+            if pb[v]["onset"] is not None:
+                diff.add((v, src_b))
     return diff
 
 
 def _usable_coord(coord, fset):
-    v, d = coord
-    if d == "onset":
-        return ("onset_error" in fset) or ("onset_lat" in fset)
+    _v, d = coord  # d is a presence dim or an onset source name
     return d in fset
 
 
@@ -308,32 +322,37 @@ def resolve(c, fset, err_rate_cut, lat_mult, onset_tol_s, jitter_s=0.0):
     survivor_hyps = {h for h, _ in survivors}
     retained = true_hyp in survivor_hyps
 
-    # correctness against #177's success criteria, exact hypothesis identity:
-    #   IDENTIFIED  correct iff the sole survivor IS the true hypothesis.
-    #   NON_IDENTIFIABLE correct iff the (single) surviving class contains the true hypothesis AND
-    #     every co-member is separable-in-principle from it only by UNAVAILABLE distinguishers
-    #     (anti-gaming: no co-member that a usable coordinate would have split off). D_missing =
-    #     the union of those unavailable distinguishers, and must be non-empty.
-    #   UNCERTAIN / NONE: not correct.
-    correct = False
+    # Two distinct metrics, per #177 (not one "correct" bit):
+    #   struct_ok — the emitted STRUCTURAL OUTCOME is a supported, honest result:
+    #     IDENTIFIED  → the sole survivor is the true hypothesis;
+    #     NON_IDENTIFIABLE → the surviving class contains the truth AND every co-member differs
+    #        from it only on UNAVAILABLE coordinates (anti-gaming), with a non-empty D_missing;
+    #     UNCERTAIN   → the truth is retained in some surviving class (distinct usable signatures
+    #        were, by construction, not collapsed and no non-identifiability was falsely claimed);
+    #     NONE        → failure (truth lost).
+    #   unique_ok — the stricter "pinned a single (service, mode)": IDENTIFIED on the true hypothesis.
     d_missing = set()
+    struct_ok = False
     if outcome == "IDENTIFIED":
-        correct = survivors[0][0] == true_hyp
+        struct_ok = survivors[0][0] == true_hyp
     elif outcome == "NON_IDENTIFIABLE" and retained:
         cls = next(iter(classes.values()))
         legit = True
         for h in cls:
             if h == true_hyp:
                 continue
-            diff = _all_coords_differ(preds[true_hyp], preds[h], c["services"])
+            diff = _distinguishers(true_hyp, h, preds, c["services"])
             if any(_usable_coord(cd, fset) for cd in diff):
                 legit = False  # a usable coordinate distinguishes them -> should not co-class
                 break
             d_missing |= diff
-        correct = legit and bool(d_missing)
+        struct_ok = legit and bool(d_missing)
+    elif outcome == "UNCERTAIN":
+        struct_ok = retained
+    unique_ok = outcome == "IDENTIFIED" and survivors[0][0] == true_hyp
     return {"outcome": outcome, "n_survivors": len(survivors), "n_classes": len(classes),
-            "retained": retained, "correct": correct, "d_missing": len(d_missing),
-            "fault_type": tl["fault_type"], "true_mode": true_mode}
+            "retained": retained, "struct_ok": struct_ok, "unique_ok": unique_ok,
+            "d_missing": sorted(d_missing), "fault_type": tl["fault_type"], "true_mode": true_mode}
 
 
 def main():
@@ -346,7 +365,9 @@ def main():
     print("== availability (F_usable) sweep — outcome from partition; truth only scores ==")
     print(f"   (err_rate_cut={ER}, lat_mult={LAT}, onset_tol={TOL}s)\n")
     hdr = (f"   {'F_usable':13s} {'IDENT':>6}{'NON_ID':>7}{'UNCERT':>7}{'NONE':>6}"
-           f"{'retained':>10}{'correct':>9}")
+           f"{'retained':>10}{'struct_ok':>11}{'unique':>8}")
+    print("   (struct_ok = outcome contract-correct incl. valid UNCERTAIN/NON_ID; "
+          "unique = pinned one (svc,mode))")
     print(hdr + "\n   " + "-" * (len(hdr) - 3))
     for name, fset in AVAIL.items():
         rows = [resolve(c, fset, ER, LAT, TOL) for c in cases]
@@ -354,9 +375,10 @@ def main():
         for r in rows:
             oc[r["outcome"]] += 1
         ret = sum(r["retained"] for r in rows)
-        cor = sum(r["correct"] for r in rows)
+        st = sum(r["struct_ok"] for r in rows)
+        uq = sum(r["unique_ok"] for r in rows)
         print(f"   {name:13s} {oc['IDENTIFIED']:>6}{oc['NON_IDENTIFIABLE']:>7}{oc['UNCERTAIN']:>7}"
-              f"{oc['NONE']:>6}{ret:>8}/{len(cases)}{cor:>7}/{len(cases)}")
+              f"{oc['NONE']:>6}{ret:>8}/{len(cases)}{st:>9}/{len(cases)}{uq:>6}/{len(cases)}")
 
     # Explicit verification of the two properties the review demanded.
     print("\n== review-property checks (symptom_only = silent callee cause; exact (svc,mode)) ==")
@@ -366,16 +388,17 @@ def main():
     ra = [resolve(c, AVAIL["all"], ER, LAT, TOL) for c in sym]
     print(f"   logs_only : true (svc,error_silent) retained {sum(r['retained'] for r in rl)}/{len(sym)}"
           f", NON_IDENTIFIABLE {sum(r['outcome'] == 'NON_IDENTIFIABLE' for r in rl)}/{len(sym)}"
-          f" (cause ≡ loud caller; D_missing avg {statistics.mean([r['d_missing'] for r in rl]):.1f} coords)")
+          f", struct_ok {sum(r['struct_ok'] for r in rl)}/{len(sym)} (service ambiguous: cause ≡ loud caller)")
+    print(f"     e.g. {sym[0]['id']} D_missing = {rl[0]['d_missing']}")
     print(f"   spans_only: NON_IDENTIFIABLE {sum(r['outcome'] == 'NON_IDENTIFIABLE' for r in rs)}/{len(sym)}"
-          f" (span present, but err_log/err_rate absent → error vs error_silent MODE unresolved),"
-          f" legit/retained {sum(r['correct'] for r in rs)}/{len(sym)}")
+          f" (span present; err_log/err_rate absent → error vs error_silent MODE unresolved),"
+          f" struct_ok {sum(r['struct_ok'] for r in rs)}/{len(sym)}")
+    print(f"     e.g. {sym[0]['id']} D_missing = {rs[0]['d_missing']}")
     print(f"   all       : IDENTIFIED {sum(r['outcome'] == 'IDENTIFIED' for r in ra)}/{len(sym)}"
-          f", exact-correct {sum(r['correct'] for r in ra)}/{len(sym)}"
-          f" (every distinguisher usable → unique (svc,mode))")
+          f", unique {sum(r['unique_ok'] for r in ra)}/{len(sym)} (every distinguisher usable → unique (svc,mode))")
 
-    print("\n== onset robustness (F_usable=all): outcome + correct ==")
-    print(f"   {'onset_tol_s':>11}{'jitter_s':>9}{'IDENT':>6}{'NON_ID':>7}{'UNCERT':>7}{'correct':>9}")
+    print("\n== onset robustness (F_usable=all): outcome + struct_ok ==")
+    print(f"   {'onset_tol_s':>11}{'jitter_s':>9}{'IDENT':>6}{'NON_ID':>7}{'UNCERT':>7}{'struct_ok':>10}")
     for tol, jit, disable in [(0.0, 0.0, False), (5.0, 0.0, False), (5.0, 8.0, False),
                               (20.0, 0.0, False), (0.0, 0.0, True)]:
         fset = AVAIL["no_onset"] if disable else AVAIL["all"]
@@ -383,24 +406,24 @@ def main():
         oc = defaultdict(int)
         for r in rows:
             oc[r["outcome"]] += 1
-        cor = sum(r["correct"] for r in rows)
+        cor = sum(r["struct_ok"] for r in rows)
         label = "order-off" if disable else f"{tol:g}"
         print(f"   {label:>11}{jit:>9g}{oc['IDENTIFIED']:>6}{oc['NON_IDENTIFIABLE']:>7}"
               f"{oc['UNCERTAIN']:>7}{cor:>7}/{len(cases)}")
 
-    print("\n== factorial discretization sweep (F_usable=all, onset_tol=5s): correct/24 ==")
+    print("\n== factorial discretization sweep (F_usable=all, onset_tol=5s): struct_ok/24 ==")
     er_grid, lat_grid = [0.02, 0.05, 0.10, 0.20, 0.35], [1.2, 1.5, 2.0, 3.0]
     print("   err\\lat " + " ".join(f"{lm:>5}" for lm in lat_grid))
     stable = 0
     for er in er_grid:
         cells = []
         for lm in lat_grid:
-            cor = sum(resolve(c, AVAIL["all"], er, lm, TOL)["correct"] for c in cases)
+            cor = sum(resolve(c, AVAIL["all"], er, lm, TOL)["struct_ok"] for c in cases)
             cells.append(cor)
             if cor >= len(cases) - 2:
                 stable += 1
         print(f"   {er:<7} " + " ".join(f"{x:>5}" for x in cells))
-    print(f"   stability (correct ≥ {len(cases) - 2}/{len(cases)}): "
+    print(f"   stability (struct_ok ≥ {len(cases) - 2}/{len(cases)}): "
           f"{stable}/{len(er_grid) * len(lat_grid)} cells")
 
 
