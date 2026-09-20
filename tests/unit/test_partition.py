@@ -76,6 +76,27 @@ class TestPartitionBasics:
         assert dead in p.eliminated
         assert all(dead not in c.members for c in p.classes)
 
+    def test_below_threshold_observation_cannot_eliminate(self):
+        # the same measurement that is too untrustworthy for a signature must not irreversibly kill a
+        # hypothesis: hard elimination consumes the SAME confidence-gated usable set.
+        m = process_dead_model("payment")
+        dead = from_observation_model("process:payment", Kind.PROCESS, "payment", m)
+        coord = "payment.serving_throughout_window"
+        obs = [observed(coord, "true", measurement_confidence=0.1)]
+        policy = UsabilityPolicy(tau={coord: 0.8})
+        p = partition([dead], obs, policy)
+        assert dead not in p.eliminated
+        assert coord not in p.f_usable        # excluded from F_usable...
+        assert dead in p.classes[0].members   # ...and therefore did not eliminate
+
+    def test_above_threshold_observation_still_eliminates(self):
+        m = process_dead_model("payment")
+        dead = from_observation_model("process:payment", Kind.PROCESS, "payment", m)
+        coord = "payment.serving_throughout_window"
+        obs = [observed(coord, "true", measurement_confidence=0.9)]
+        policy = UsabilityPolicy(tau={coord: 0.8})
+        assert dead in partition([dead], obs, policy).eliminated
+
 
 class TestInvariant5EquivalenceNotScoreProximity:
     def test_same_signature_far_apart_scores_still_one_class(self):

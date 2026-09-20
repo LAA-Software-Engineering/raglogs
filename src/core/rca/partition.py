@@ -28,7 +28,8 @@ from itertools import combinations
 from types import MappingProxyType
 
 from src.core.rca.hypothesis import Hypothesis
-from src.core.rca.observable import Observable, State, usable_observables
+from src.core.rca.observable import Observable, State
+from src.core.rca.observable import usable_observables as _collectable_observed
 
 _EMPTY_TAU: Mapping[str, float] = MappingProxyType({})
 
@@ -53,14 +54,21 @@ class UsabilityPolicy:
 DEFAULT_POLICY = UsabilityPolicy()
 
 
+def usable_observations(
+    observations: Iterable[Observable], policy: UsabilityPolicy = DEFAULT_POLICY
+) -> list[Observable]:
+    """**The** authoritative usable-observation set for a partition: collectable, OBSERVED, and
+    meeting the per-observable confidence threshold ``τ_f``. Every downstream use — signatures,
+    D_missing, *and* hard elimination — consumes this one set, so an observation cannot be too
+    untrustworthy for a signature yet trusted enough to irreversibly kill a hypothesis. Excludes
+    UNKNOWN and uncollectable observables (Invariants 1 & 2) and duplicate coordinates."""
+    return [o for o in _collectable_observed(observations)
+            if o.measurement_confidence >= policy.threshold(o.id)]
+
+
 def usable_ids(observations: Iterable[Observable], policy: UsabilityPolicy = DEFAULT_POLICY) -> tuple[str, ...]:
-    """``F_usable`` — the sorted ids of observables that are collectable, OBSERVED, and meet their
-    per-observable confidence threshold. Excludes UNKNOWN and uncollectable observables (Invariants
-    1 & 2) and duplicate coordinates (rejected by :func:`~src.core.rca.observable.usable_observables`)."""
-    return tuple(sorted(
-        o.id for o in usable_observables(observations)
-        if o.measurement_confidence >= policy.threshold(o.id)
-    ))
+    """``F_usable`` — the sorted ids of :func:`usable_observations`."""
+    return tuple(sorted(o.id for o in usable_observations(observations, policy)))
 
 
 def signature(prediction: Mapping[str, str], f_usable: tuple[str, ...]) -> tuple[tuple[str, str], ...]:
@@ -117,13 +125,16 @@ def partition(
     dropping any hypothesis a usable observation hard-contradicts. **Reads no scores** — the result
     is identical for any ranking (Invariant 6)."""
     observations = list(observations)
-    f_usable = usable_ids(observations, policy)
+    # Derive the ONE usable set and reuse it for signatures, D_missing, AND hard elimination — so a
+    # below-threshold observation that is excluded from F_usable also cannot eliminate a hypothesis.
+    usable = usable_observations(observations, policy)
+    f_usable = tuple(sorted(o.id for o in usable))
     f_usable_set = frozenset(f_usable)
 
     survivors: list[Hypothesis] = []
     eliminated: list[Hypothesis] = []
     for h in hypotheses:
-        (eliminated if h.hard_incompatibility(observations) else survivors).append(h)
+        (eliminated if h.hard_incompatibility(usable) else survivors).append(h)
 
     grouped: dict[tuple[tuple[str, str], ...], list[Hypothesis]] = {}
     for h in survivors:
