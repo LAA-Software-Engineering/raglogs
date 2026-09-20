@@ -49,6 +49,24 @@ class TestValueContracts:
             ObservationModel(contradictions=(Contradiction("f", frozenset({"a"})),
                                              Contradiction("f", frozenset({"b"}))))
 
+    def test_model_rejects_expecting_and_prohibiting_the_same_state(self):
+        # the same observed fact would both support and eliminate — an invalid behavioral model
+        with pytest.raises(ValueError):
+            ObservationModel(
+                expected=(ExpectedObservation("f", "present"),),
+                contradictions=(Contradiction("f", frozenset({"present"})),),
+            )
+
+    def test_model_allows_shared_coordinate_with_disjoint_states(self):
+        # expecting 'present' while a *different* state 'absent' is a hard contradiction is coherent
+        m = ObservationModel(
+            expected=(ExpectedObservation("f", "present"),),
+            contradictions=(Contradiction("f", frozenset({"absent"})),),
+        )
+        assert m.soft_support([observed("f", "present")]) > 0.0
+        assert m.hard_incompatibility([observed("f", "absent")]) is True
+        assert m.hard_incompatibility([observed("f", "present")]) is False
+
 
 class TestInvariant3HardSoftSeparation:
     def test_hard_contradiction_eliminates(self):

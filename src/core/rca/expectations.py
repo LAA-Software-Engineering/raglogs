@@ -130,6 +130,17 @@ class ObservationModel:
             if c.observable_id in seen_c:
                 raise ValueError(f"observation model: duplicate contradiction for {c.observable_id!r}")
             seen_c.add(c.observable_id)
+        # Cross-layer coherence: the SAME observed state must not both support (soft expectation) and
+        # eliminate (hard contradiction) the hypothesis. Sharing a coordinate is fine as long as the
+        # expected state and the contradiction states are disjoint.
+        contra_states = {c.observable_id: c.states for c in self.contradictions}
+        for e in self.expected:
+            states = contra_states.get(e.observable_id)
+            if states is not None and e.expected_state in states:
+                raise ValueError(
+                    f"observation model: {e.observable_id!r} both expects {e.expected_state!r} and "
+                    f"treats it as a hard contradiction — the same fact cannot support and eliminate"
+                )
 
     def predictions(self) -> dict[str, str]:
         """The categorical signature seam: ``{observable_id: expected_state}`` — **strength-free**
