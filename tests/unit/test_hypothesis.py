@@ -6,7 +6,12 @@ the representation is validated and owned; and the Phase C stubs are inert.
 """
 
 import pytest
-from src.core.rca.candidates import RootCauseCandidate, build_candidates, default_scorer
+from src.core.rca.candidates import (
+    ModalityEvidence,
+    RootCauseCandidate,
+    build_candidates,
+    default_scorer,
+)
 from src.core.rca.features import FeatureTable, ServiceFeatures
 from src.core.rca.hypothesis import (
     Hypothesis,
@@ -95,6 +100,32 @@ class TestIdentityIsInvariantUnderRanking:
         assert h.source is not c  # owned snapshot, not an alias
         assert h.source.score == 1.0  # provenance frozen at wrap time
         assert h.localization == "api" and h.to_dict() == before  # no contradiction leaks in
+
+    def test_mutating_source_property_result_cannot_rewrite_the_hypothesis(self):
+        c = RootCauseCandidate("api", 1.0, _sf("api", 1),
+                               evidence=[ModalityEvidence("logs", "d", {"log_err": 1.0})])
+        h = process_hypothesis_from_candidate(c)
+        before = h.to_dict()
+        s = h.source           # copy-on-read: a throwaway snapshot
+        s.service = "db"       # mutate it every way we can reach
+        s.score = 999.0
+        s.evidence[0].signals["log_err"] = 999.0
+        assert h.source.score == 1.0 and h.source.service == "api"
+        assert h.to_dict() == before  # internal provenance untouched
+
+    def test_mutating_to_dict_output_cannot_rewrite_the_hypothesis(self):
+        c = RootCauseCandidate("api", 1.0, _sf("api", 1),
+                               evidence=[ModalityEvidence("logs", "d", {"log_err": 1.0})])
+        h = process_hypothesis_from_candidate(c)
+        before = h.to_dict()
+        d = h.to_dict()
+        d["source"]["score"] = 999.0
+        d["source"]["evidence"][0]["signals"]["log_err"] = 999.0  # the flagged nested-dict leak
+        assert h.to_dict() == before
+
+    def test_source_must_be_a_candidate(self):
+        with pytest.raises(ValueError):
+            Hypothesis(id="p:s", kind=Kind.PROCESS, localization="s", _source="not-a-candidate")  # type: ignore[arg-type]
 
     def test_different_causal_fields_are_distinct(self):
         base = Hypothesis(id="process:api", kind=Kind.PROCESS, localization="api")

@@ -59,17 +59,21 @@ class Hypothesis:
     ``source``. #177/#182 require structural partitioning to be invariant under arbitrary ranking
     scores, so a hypothesis's identity cannot depend on the score the ranker happened to assign.
 
-    ``source`` is optional ranking provenance — the :class:`RootCauseCandidate` a ``process``
-    hypothesis was wrapped from, kept so score/features/evidence stay reachable. It is **owned, not
-    borrowed**: the candidate is defensively deep-copied at construction, so mutating the caller's
-    candidate afterwards cannot rewrite this frozen hypothesis's provenance or serialization.
+    Ranking provenance — the :class:`RootCauseCandidate` a ``process`` hypothesis was wrapped from —
+    is kept so score/features/evidence stay reachable, but it is **owned and never exposed by
+    reference**: the constructor deep-copies it into a *private* snapshot, and the :attr:`source`
+    property returns a fresh defensive copy on every read (copy-on-read). ``RootCauseCandidate`` is a
+    mutable dataclass with nested mutable features/evidence/signal dicts, so handing out the object —
+    or the dicts inside :meth:`to_dict` — would let a caller rewrite a "frozen" hypothesis. Nothing
+    writable ever aliases the internal snapshot.
     """
 
     id: str
     kind: Kind
     localization: str
     predictions: Mapping[str, str] = field(default_factory=lambda: _EMPTY_PREDICTIONS)
-    source: Optional[RootCauseCandidate] = field(default=None, repr=False)
+    # Private, deep-copied provenance snapshot; read only via the copy-on-read `source` property.
+    _source: Optional[RootCauseCandidate] = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         # Validate the runtime representation (frozen dataclass, no static type gate here).
@@ -97,10 +101,22 @@ class Hypothesis:
         # Own the mapping: a read-only view over a defensive copy, so the object cannot be mutated
         # behind a caller's back (matches the Phase A representation-ownership discipline).
         object.__setattr__(self, "predictions", MappingProxyType(dict(self.predictions)))
-        # Own the provenance too: a defensive deep copy severs the alias to the caller's mutable
-        # candidate, so its score/features/service can never change this hypothesis after the fact.
-        if self.source is not None:
-            object.__setattr__(self, "source", copy.deepcopy(self.source))
+        # Own the provenance too: validate its type, then keep a private deep copy. It is never
+        # handed out by reference — `source` and `to_dict` copy on read — so no writable alias to it
+        # can survive construction.
+        if self._source is not None:
+            if not isinstance(self._source, RootCauseCandidate):
+                raise ValueError(
+                    f"hypothesis {self.id!r}: source must be a RootCauseCandidate or None, got "
+                    f"{self._source!r}"
+                )
+            object.__setattr__(self, "_source", copy.deepcopy(self._source))
+
+    @property
+    def source(self) -> Optional[RootCauseCandidate]:
+        """The ranking provenance, as a fresh defensive copy each read (or ``None``). The internal
+        snapshot stays private, so mutating what this returns cannot change the hypothesis."""
+        return copy.deepcopy(self._source) if self._source is not None else None
 
     def _identity(self) -> tuple:
         """The causal identity — everything that defines the hypothesis *except* ranking provenance."""
@@ -131,8 +147,12 @@ class Hypothesis:
             "localization": self.localization,
             "predictions": dict(self.predictions),
         }
-        if self.source is not None:
-            d["source"] = self.source.to_dict()
+        # `self.source` is already a fresh copy-on-read snapshot, so the nested dicts (incl. the
+        # candidate's mutable `signals`) belong to a throwaway copy — mutating the returned dict
+        # cannot reach the internal provenance.
+        snapshot = self.source
+        if snapshot is not None:
+            d["source"] = snapshot.to_dict()
         return d
 
 
@@ -145,7 +165,7 @@ def process_hypothesis_from_candidate(candidate: RootCauseCandidate) -> Hypothes
         id=f"process:{candidate.service}",
         kind=Kind.PROCESS,
         localization=candidate.service,
-        source=candidate,
+        _source=candidate,
     )
 
 
