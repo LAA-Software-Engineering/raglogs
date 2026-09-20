@@ -25,6 +25,7 @@ from types import MappingProxyType
 from typing import Optional
 
 from src.core.rca.candidates import RootCauseCandidate
+from src.core.rca.expectations import ObservationModel
 from src.core.rca.observable import Observable
 
 _EMPTY_PREDICTIONS: Mapping[str, str] = MappingProxyType({})
@@ -54,10 +55,14 @@ class Hypothesis:
     are **stubs in Phase B**, filled by Phase C. ``predictions`` feeds
     :func:`~src.core.rca.observable.hypothesis_signature` unchanged once populated.
 
-    **Identity is the causal object, never the ranking.** Equality and hash are defined over the
-    causal fields (``id``, ``kind``, ``localization``, ``predictions``) and deliberately **exclude**
-    ``source``. #177/#182 require structural partitioning to be invariant under arbitrary ranking
-    scores, so a hypothesis's identity cannot depend on the score the ranker happened to assign.
+    **Identity is the behavioral object, never the ranking.** Equality and hash cover every field
+    that defines behavior — ``id``, ``kind``, ``localization``, ``predictions`` and the
+    ``observation_model`` (its hard-elimination + soft-scoring rules) — and deliberately **exclude**
+    only ``source``. #177/#182 require partitioning to be invariant under arbitrary ranking scores,
+    so identity cannot depend on the score the ranker assigned. Note this is *object* identity, not
+    the structural equivalence class: strength-invariant class membership is defined by
+    :func:`~src.core.rca.observable.hypothesis_signature` over the projected predictions — two
+    hypotheses can share a class yet be unequal objects (e.g. different strengths or hard rules).
 
     Ranking provenance — the :class:`RootCauseCandidate` a ``process`` hypothesis was wrapped from —
     is kept so score/features/evidence stay reachable, but it is **owned and never exposed by
@@ -72,6 +77,12 @@ class Hypothesis:
     kind: Kind
     localization: str
     predictions: Mapping[str, str] = field(default_factory=lambda: _EMPTY_PREDICTIONS)
+    # The Phase C observation model (soft expectations + hard contradictions). Immutable
+    # (frozen tuple/frozenset fields), so it is stored by reference. It is part of object identity:
+    # it defines hard-elimination and soft-scoring behavior, so two hypotheses with divergent models
+    # are genuinely different objects and must not collapse in a set/dict. Strength-invariance of the
+    # *equivalence class* is a separate, Phase-D concern handled by `hypothesis_signature()`.
+    observation_model: Optional[ObservationModel] = None
     # Private, deep-copied provenance snapshot; read only via the copy-on-read `source` property.
     _source: Optional[RootCauseCandidate] = field(default=None, repr=False, compare=False)
 
@@ -92,15 +103,33 @@ class Hypothesis:
                 f"hypothesis {self.id!r}: localization must be a non-empty string, got "
                 f"{self.localization!r}"
             )
-        for k, v in dict(self.predictions).items():
+        supplied = dict(self.predictions)
+        for k, v in supplied.items():
             if not isinstance(k, str) or not isinstance(v, str):
                 raise ValueError(
                     f"hypothesis {self.id!r}: predictions must map observable-id strings to state "
                     f"strings, got {k!r}: {v!r}"
                 )
+        if self.observation_model is not None and not isinstance(self.observation_model, ObservationModel):
+            raise ValueError(
+                f"hypothesis {self.id!r}: observation_model must be an ObservationModel or None, got "
+                f"{self.observation_model!r}"
+            )
+        # ONE authoritative source of expected categorical state. When an observation model is
+        # present it *owns* the expectations, so `predictions` IS `model.predictions()`: a supplied
+        # map that disagrees is a contradiction (two sources of truth) and is rejected, never
+        # silently reconciled. Without a model, the supplied map stands alone (Phase B path).
+        if self.observation_model is not None:
+            derived = self.observation_model.predictions()
+            if supplied and supplied != derived:
+                raise ValueError(
+                    f"hypothesis {self.id!r}: predictions must equal observation_model.predictions() "
+                    f"or be omitted; got {supplied!r} vs {derived!r}"
+                )
+            supplied = derived
         # Own the mapping: a read-only view over a defensive copy, so the object cannot be mutated
         # behind a caller's back (matches the Phase A representation-ownership discipline).
-        object.__setattr__(self, "predictions", MappingProxyType(dict(self.predictions)))
+        object.__setattr__(self, "predictions", MappingProxyType(supplied))
         # Own the provenance too: validate its type, then keep a private deep copy. It is never
         # handed out by reference — `source` and `to_dict` copy on read — so no writable alias to it
         # can survive construction.
@@ -119,8 +148,14 @@ class Hypothesis:
         return copy.deepcopy(self._source) if self._source is not None else None
 
     def _identity(self) -> tuple:
-        """The causal identity — everything that defines the hypothesis *except* ranking provenance."""
-        return (self.id, self.kind, self.localization, tuple(sorted(self.predictions.items())))
+        """Object identity — the complete *behavioral* definition of the hypothesis, excluding only
+        ranking provenance (``_source``). It includes the observation model, so two hypotheses that
+        would hard-eliminate or soft-score differently are not equal and never silently collapse in a
+        set/dict. This is deliberately **not** the structural equivalence class: strength-invariant
+        partitioning is defined by :func:`~src.core.rca.observable.hypothesis_signature` over the
+        projected predictions, not by ``==``."""
+        return (self.id, self.kind, self.localization,
+                tuple(sorted(self.predictions.items())), self.observation_model)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Hypothesis):
@@ -131,10 +166,19 @@ class Hypothesis:
         return hash(self._identity())
 
     def hard_incompatibility(self, observables: Iterable[Observable]) -> bool:
-        """Is this hypothesis hard-incompatible with the observed evidence? **Stub for Phase B** —
-        prediction strengths (PRESENT_HARD / ABSENT_HARD) arrive in Phase C, so nothing is yet known
-        to be hard-incompatible and this is always ``False``. The signature is the Phase C seam."""
-        return False
+        """Does a usable observation *logically contradict* this hypothesis (hard elimination)?
+        Delegates to the Phase C :class:`~src.core.rca.expectations.ObservationModel`; a hypothesis
+        with no model is never hard-incompatible. A missing expected symptom is never a contradiction."""
+        if self.observation_model is None:
+            return False
+        return self.observation_model.hard_incompatibility(observables)
+
+    def soft_support(self, observables: Iterable[Observable]) -> float:
+        """Soft evidence score from the observation model (support only, never elimination). ``0.0``
+        when the hypothesis carries no model."""
+        if self.observation_model is None:
+            return 0.0
+        return self.observation_model.soft_support(observables)
 
     def render(self) -> str:
         """The user-facing projection — just the localization. The ``kind``/structure stay internal."""
@@ -175,3 +219,23 @@ def hypotheses_from_candidates(
     """Map ranked service candidates to ``process`` hypotheses **in the same order**, so wrapping is
     output-neutral: ``[h.localization for h in result] == [c.service for c in candidates]``."""
     return [process_hypothesis_from_candidate(c) for c in candidates]
+
+
+def from_observation_model(
+    id: str,
+    kind: Kind,
+    localization: str,
+    model: ObservationModel,
+    source: Optional[RootCauseCandidate] = None,
+) -> Hypothesis:
+    """Build a hypothesis whose structural ``predictions`` come from its Phase C observation model
+    (strength-free categorical states, Invariant 4), with the model attached so
+    :meth:`Hypothesis.hard_incompatibility` and :meth:`Hypothesis.soft_support` are live."""
+    return Hypothesis(
+        id=id,
+        kind=kind,
+        localization=localization,
+        predictions=model.predictions(),
+        observation_model=model,
+        _source=source,
+    )
