@@ -17,6 +17,7 @@ current ranker output is unchanged — this is plumbing, not a ranking change.
 """
 from __future__ import annotations
 
+import copy
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
@@ -41,7 +42,7 @@ class Kind(str, Enum):
     EXTERNAL = "external"        # an external dependency outside the deployment
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Hypothesis:
     """One causal hypothesis.
 
@@ -53,15 +54,22 @@ class Hypothesis:
     are **stubs in Phase B**, filled by Phase C. ``predictions`` feeds
     :func:`~src.core.rca.observable.hypothesis_signature` unchanged once populated.
 
-    ``source`` is optional provenance: the :class:`RootCauseCandidate` a ``process`` hypothesis was
-    wrapped from, so the ranker's score/features remain reachable without the ontology owning them.
+    **Identity is the causal object, never the ranking.** Equality and hash are defined over the
+    causal fields (``id``, ``kind``, ``localization``, ``predictions``) and deliberately **exclude**
+    ``source``. #177/#182 require structural partitioning to be invariant under arbitrary ranking
+    scores, so a hypothesis's identity cannot depend on the score the ranker happened to assign.
+
+    ``source`` is optional ranking provenance — the :class:`RootCauseCandidate` a ``process``
+    hypothesis was wrapped from, kept so score/features/evidence stay reachable. It is **owned, not
+    borrowed**: the candidate is defensively deep-copied at construction, so mutating the caller's
+    candidate afterwards cannot rewrite this frozen hypothesis's provenance or serialization.
     """
 
     id: str
     kind: Kind
     localization: str
     predictions: Mapping[str, str] = field(default_factory=lambda: _EMPTY_PREDICTIONS)
-    source: Optional[RootCauseCandidate] = None
+    source: Optional[RootCauseCandidate] = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         # Validate the runtime representation (frozen dataclass, no static type gate here).
@@ -89,6 +97,22 @@ class Hypothesis:
         # Own the mapping: a read-only view over a defensive copy, so the object cannot be mutated
         # behind a caller's back (matches the Phase A representation-ownership discipline).
         object.__setattr__(self, "predictions", MappingProxyType(dict(self.predictions)))
+        # Own the provenance too: a defensive deep copy severs the alias to the caller's mutable
+        # candidate, so its score/features/service can never change this hypothesis after the fact.
+        if self.source is not None:
+            object.__setattr__(self, "source", copy.deepcopy(self.source))
+
+    def _identity(self) -> tuple:
+        """The causal identity — everything that defines the hypothesis *except* ranking provenance."""
+        return (self.id, self.kind, self.localization, tuple(sorted(self.predictions.items())))
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Hypothesis):
+            return NotImplemented
+        return self._identity() == other._identity()
+
+    def __hash__(self) -> int:
+        return hash(self._identity())
 
     def hard_incompatibility(self, observables: Iterable[Observable]) -> bool:
         """Is this hypothesis hard-incompatible with the observed evidence? **Stub for Phase B** —
@@ -114,8 +138,9 @@ class Hypothesis:
 
 def process_hypothesis_from_candidate(candidate: RootCauseCandidate) -> Hypothesis:
     """Wrap an existing service candidate as a ``process`` hypothesis, localized to its service and
-    keeping the candidate as provenance (so score/features/evidence stay reachable). No score or
-    ordering is changed — this is the compatibility bridge that keeps current RCA output intact."""
+    keeping an owned (deep-copied) snapshot of the candidate as provenance, so score/features/evidence
+    stay reachable without the ranking leaking into causal identity. No score or ordering is changed —
+    this is the compatibility bridge that keeps current RCA output intact."""
     return Hypothesis(
         id=f"process:{candidate.service}",
         kind=Kind.PROCESS,

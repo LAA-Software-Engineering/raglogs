@@ -53,13 +53,12 @@ class TestOntology:
 
 class TestServiceToProcessMapping:
     def test_candidate_wraps_as_process_hypothesis(self):
-        c = RootCauseCandidate(service="checkout", score=12.0, features=_sf("checkout", 12))
+        c = RootCauseCandidate(service="api", score=12.0, features=_sf("api", 12))
         h = process_hypothesis_from_candidate(c)
         assert h.kind is Kind.PROCESS
-        assert h.localization == "checkout"
-        assert h.id == "process:checkout"
-        assert h.source is c  # provenance retained → score/features stay reachable
-        assert h.source.score == 12.0
+        assert h.localization == "api"
+        assert h.id == "process:api"
+        assert h.source.score == 12.0  # score/features reachable via provenance
 
     def test_mapping_preserves_ranker_order_and_scores(self):
         table = FeatureTable(services=[_sf("api", 3), _sf("db", 30), _sf("cache", 10)])
@@ -74,6 +73,34 @@ class TestServiceToProcessMapping:
 
     def test_empty_candidate_list_maps_to_empty(self):
         assert hypotheses_from_candidates([]) == []
+
+
+class TestIdentityIsInvariantUnderRanking:
+    """#177/#182: structural identity must not depend on the mutable ranker score."""
+
+    def test_same_service_different_score_is_the_same_hypothesis(self):
+        h1 = process_hypothesis_from_candidate(RootCauseCandidate("api", 1.0, _sf("api", 1)))
+        h2 = process_hypothesis_from_candidate(RootCauseCandidate("api", 2.0, _sf("api", 9)))
+        assert h1.id == h2.id
+        assert h1 == h2  # identity is the causal object, not the score
+        assert hash(h1) == hash(h2)
+        assert {h1, h2} == {h1}  # dedupes as one causal hypothesis
+
+    def test_mutating_the_source_candidate_cannot_rewrite_the_hypothesis(self):
+        c = RootCauseCandidate("api", 1.0, _sf("api", 1))
+        h = process_hypothesis_from_candidate(c)
+        before = h.to_dict()
+        c.score = 999.0  # mutate the caller's candidate after wrapping
+        c.service = "db"
+        assert h.source is not c  # owned snapshot, not an alias
+        assert h.source.score == 1.0  # provenance frozen at wrap time
+        assert h.localization == "api" and h.to_dict() == before  # no contradiction leaks in
+
+    def test_different_causal_fields_are_distinct(self):
+        base = Hypothesis(id="process:api", kind=Kind.PROCESS, localization="api")
+        assert base != Hypothesis(id="edge:api", kind=Kind.EDGE, localization="api")
+        assert base != Hypothesis(id="process:api", kind=Kind.PROCESS, localization="api",
+                                  predictions={"f": "present"})
 
 
 class TestPhaseCStubsAreInert:
