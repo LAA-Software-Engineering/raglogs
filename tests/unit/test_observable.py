@@ -69,6 +69,50 @@ class TestAxisAndValueContracts:
         assert Observable.from_dict(o.to_dict()) == o  # round-trips
 
 
+class TestRuntimeRepresentationIsValidated:
+    """No static type gate: dynamic/deserialized input must fail at construction, not in a consumer."""
+
+    def test_from_dict_rejects_non_string_state(self):
+        with pytest.raises(ValueError):
+            Observable.from_dict({"id": "f", "availability": "observed", "state": 7})
+
+    def test_from_dict_rejects_non_string_baseline(self):
+        with pytest.raises(ValueError):
+            Observable.from_dict({"id": "f", "availability": "observed", "state": "present",
+                                  "baseline": 3})
+
+    def test_raw_string_availability_is_normalized_to_the_enum(self):
+        o = Observable(id="f", availability="observed", state=State.PRESENT)  # type: ignore[arg-type]
+        assert o.availability is Availability.OBSERVED
+        assert o.to_dict()["availability"] == "observed"  # would crash if left a raw str
+
+    def test_unknown_availability_string_is_rejected(self):
+        with pytest.raises(ValueError):
+            Observable(id="f", availability="maybe")  # type: ignore[arg-type]
+
+    def test_empty_or_non_string_id_rejected(self):
+        for bad in ("", 7, None):
+            with pytest.raises(ValueError):
+                observed(bad, State.PRESENT)  # type: ignore[arg-type]
+
+    def test_bool_is_not_a_valid_confidence_or_value(self):
+        with pytest.raises(ValueError):
+            observed("f", State.PRESENT, measurement_confidence=True)  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            observed("f", State.PRESENT, value=True)  # type: ignore[arg-type]
+
+
+class TestConstructorsDoNotAlias:
+    def test_unknown_is_always_collectable(self):
+        # `unknown` must not be able to manufacture the uncollectable state via a flag.
+        assert unknown("f").collectable is True
+        with pytest.raises(TypeError):
+            unknown("f", collectable=False)  # type: ignore[call-arg]
+
+    def test_unknown_and_uncollectable_are_distinct_states(self):
+        assert unknown("f") != uncollectable("f")
+
+
 class TestCoordinateIsASet:
     def test_duplicate_ids_are_rejected(self):
         dup = [observed("a", State.PRESENT), observed("a", State.PRESENT)]
@@ -144,3 +188,18 @@ class TestObservableSet:
     def test_confidence_weights_the_score_and_is_bounded(self):
         assert evidence_score({"a": State.PRESENT},
                               [observed("a", State.PRESENT, measurement_confidence=0.5)]) == 0.5
+
+    def test_uniqueness_survives_caller_mutation(self):
+        items = [observed("a", State.PRESENT)]
+        s = ObservableSet(items)
+        items.append(observed("a", State.ABSENT))  # would create a contradictory duplicate
+        assert s.usable_ids() == ("a",)  # the set defended its own representation
+        assert s.score({"a": State.PRESENT}) == 1.0
+
+    def test_representation_is_immutable(self):
+        s = ObservableSet([observed("a", State.PRESENT)])
+        assert isinstance(s.observables, tuple)
+        with pytest.raises((AttributeError, TypeError)):
+            s.observables = []  # type: ignore[misc]  # frozen: field cannot be reassigned
+        with pytest.raises(AttributeError):
+            s.observables.append(observed("b", State.PRESENT))  # type: ignore[attr-defined]

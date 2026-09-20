@@ -23,8 +23,8 @@ or contradictory coordinates.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
@@ -69,6 +69,29 @@ class Observable:
     measurement_confidence: float = 1.0
 
     def __post_init__(self) -> None:
+        # Normalize + validate the *runtime* representation, not just the annotations: this is a
+        # frozen dataclass with no static type gate, so `from_dict` (or any dynamic caller) can pass
+        # a raw string or a non-string state, and downstream phases must be able to trust the object.
+        if not isinstance(self.id, str) or not self.id:
+            raise ValueError(f"observable id must be a non-empty string, got {self.id!r}")
+        if not isinstance(self.collectable, bool):
+            raise ValueError(f"observable {self.id!r}: collectable must be a bool, got {self.collectable!r}")
+        # Coerce a raw availability (e.g. the string from from_dict) into the closed enum, or fail.
+        if not isinstance(self.availability, Availability):
+            try:
+                object.__setattr__(self, "availability", Availability(self.availability))
+            except ValueError:
+                raise ValueError(
+                    f"observable {self.id!r}: availability must be one of "
+                    f"{[a.value for a in Availability]}, got {self.availability!r}"
+                ) from None
+        for attr in ("state", "baseline"):
+            v = getattr(self, attr)
+            if v is not None and not isinstance(v, str):
+                raise ValueError(f"observable {self.id!r}: {attr} must be a string or None, got {v!r}")
+        if self.value is not None and (not isinstance(self.value, (int, float)) or isinstance(self.value, bool)):
+            raise ValueError(f"observable {self.id!r}: value must be a number or None, got {self.value!r}")
+
         if self.availability == Availability.OBSERVED and self.state is None:
             raise ValueError(f"observable {self.id!r}: OBSERVED requires a concrete state")
         if self.availability == Availability.UNKNOWN and self.state is not None:
@@ -82,7 +105,7 @@ class Observable:
                 "that can never produce this evidence cannot have measured it"
             )
         c = self.measurement_confidence
-        if not isinstance(c, (int, float)) or math.isnan(c) or math.isinf(c) or not (0.0 <= c <= 1.0):
+        if isinstance(c, bool) or not isinstance(c, (int, float)) or math.isnan(c) or math.isinf(c) or not (0.0 <= c <= 1.0):
             raise ValueError(
                 f"observable {self.id!r}: measurement_confidence must be a finite number in [0, 1], "
                 f"got {c!r}"
@@ -120,9 +143,11 @@ class Observable:
 
 
 # Convenience constructors that make the three non-collapsing states impossible to mix up.
-def unknown(id: str, *, collectable: bool = True, measurement_confidence: float = 1.0) -> Observable:
-    """collectable-but-not-measured (or not trustworthy) this incident."""
-    return Observable(id=id, collectable=collectable, availability=Availability.UNKNOWN,
+def unknown(id: str, *, measurement_confidence: float = 1.0) -> Observable:
+    """collectable-but-not-measured (or not trustworthy) this incident. Always collectable — the
+    *uncollectable* state has its own constructor (:func:`uncollectable`); this one cannot manufacture
+    it, so the three states stay impossible to mix up."""
+    return Observable(id=id, collectable=True, availability=Availability.UNKNOWN,
                       measurement_confidence=measurement_confidence)
 
 
@@ -138,7 +163,7 @@ def uncollectable(id: str) -> Observable:
     return Observable(id=id, collectable=False, availability=Availability.UNKNOWN)
 
 
-def _by_id(observables: list[Observable]) -> dict[str, Observable]:
+def _by_id(observables: Iterable[Observable]) -> dict[str, Observable]:
     """Index observables by their coordinate id, rejecting duplicates. A set of observables carries
     at most one entry per id — two entries for the same id (identical or, worse, contradictory like
     a=PRESENT and a=ABSENT) would corrupt evidence and signatures, so it is an error, not silently
@@ -151,20 +176,20 @@ def _by_id(observables: list[Observable]) -> dict[str, Observable]:
     return by_id
 
 
-def usable_observables(observables: list[Observable]) -> list[Observable]:
+def usable_observables(observables: Iterable[Observable]) -> list[Observable]:
     """The observables that carry incident evidence: collectable AND OBSERVED. Excludes both
     UNKNOWN (Invariant 1) and uncollectable (Invariant 2). Rejects duplicate ids."""
     return [o for o in _by_id(observables).values() if o.is_usable]
 
 
-def usable_ids(observables: list[Observable]) -> tuple[str, ...]:
+def usable_ids(observables: Iterable[Observable]) -> tuple[str, ...]:
     """``F_usable`` — the sorted ids of usable observables. This is the domain a hypothesis
     signature is projected over; uncollectable and UNKNOWN ids never appear here (Invariant 2)."""
     return tuple(sorted(o.id for o in usable_observables(observables)))
 
 
 def hypothesis_signature(
-    prediction: Mapping[str, str], observables: list[Observable]
+    prediction: Mapping[str, str], observables: Iterable[Observable]
 ) -> tuple[tuple[str, str], ...]:
     """``S_O(C) = {(f, prediction(C, f)) : f in F_usable}`` — the hypothesis's *predicted* state at
     each usable observable id, sorted by id. The state in the signature is the **prediction**, not
@@ -176,7 +201,7 @@ def hypothesis_signature(
     return tuple((f, prediction[f]) for f in ids if f in prediction)
 
 
-def evidence_score(expectations: Mapping[str, str], observables: list[Observable]) -> float:
+def evidence_score(expectations: Mapping[str, str], observables: Iterable[Observable]) -> float:
     """A minimal, monotone evidence score for a hypothesis given its expected states per observable
     id: the confidence-weighted count of **usable** observables whose measured state matches the
     expectation. UNKNOWN and uncollectable observables contribute nothing (Invariants 1 and 2), and
@@ -190,20 +215,26 @@ def evidence_score(expectations: Mapping[str, str], observables: list[Observable
     return total
 
 
-def integration_gaps(observables: list[Observable]) -> list[str]:
+def integration_gaps(observables: Iterable[Observable]) -> list[str]:
     """Ids of uncollectable observables — never incident evidence, but the basis for an
     *integration-gap* recommendation ("wire up this signal to disambiguate future incidents")."""
     return sorted(o.id for o in _by_id(observables).values() if not o.collectable)
 
 
-@dataclass
+@dataclass(frozen=True)
 class ObservableSet:
-    """A set of observables keyed by id (at most one entry per coordinate). Construction rejects
-    duplicate ids; the methods delegate to the invariant-preserving free functions above."""
+    """A set of observables keyed by id (at most one entry per coordinate). It **owns** its
+    representation: the input is defensively copied into an immutable tuple and the dataclass is
+    frozen, so the one-coordinate-per-id invariant checked at construction holds for the object's
+    whole lifetime — a caller mutating the list it passed in, appending to ``.observables``, or
+    reassigning the field cannot make a constructed set contradict itself. The methods delegate to
+    the invariant-preserving free functions above."""
 
-    observables: list[Observable] = field(default_factory=list)
+    observables: tuple[Observable, ...] = ()
 
     def __post_init__(self) -> None:
+        # Defensive copy into an immutable tuple: severs any alias to the caller's mutable input.
+        object.__setattr__(self, "observables", tuple(self.observables))
         _by_id(self.observables)  # reject duplicate coordinate ids up front
 
     def usable(self) -> list[Observable]:
