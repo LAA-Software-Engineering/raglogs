@@ -93,19 +93,13 @@ def usable_ids(observations: Iterable[Observable], policy: UsabilityPolicy = DEF
     return tuple(sorted(o.id for o in usable_observations(observations, policy)))
 
 
-def signature(prediction: Mapping[str, str], f_usable: tuple[str, ...]) -> tuple[tuple[str, str], ...]:
-    """``S_O(C)`` — the hypothesis's categorical predictions projected over ``f_usable``, sorted by
-    id; ids the hypothesis does not predict are omitted. This alone decides class membership."""
-    return tuple((f, prediction[f]) for f in f_usable if f in prediction)
-
-
 @dataclass(frozen=True)
 class EquivalenceClass:
     """One ``~_O`` class: the shared usable ``signature``, the ``members`` (sorted by id), and
     ``d_missing`` — the coordinates that *would* separate the members but were not usable this
     incident (uncollectable, UNKNOWN, or below threshold). ``d_missing`` is empty for a singleton."""
 
-    signature: tuple[tuple[str, str], ...]
+    signature: tuple[tuple[str, tuple], ...]
     members: tuple[Hypothesis, ...]
     d_missing: frozenset[str]
 
@@ -143,6 +137,17 @@ def _behavior(h: Hypothesis) -> tuple:
     """A hypothesis's complete, id/localization-free behavioral fingerprint (predictions + hard rules).
     Two hypotheses with the same fingerprint are indistinguishable under *every* observation."""
     return tuple(sorted(_coord_behavior(h).items()))
+
+
+def structural_signature(h: Hypothesis, f_usable: tuple[str, ...]) -> tuple[tuple[str, tuple], ...]:
+    """``S_O(C)`` — the hypothesis's full structural behavior ``(predicted_state, hard_states)``
+    projected over ``F_usable``, sorted by id. This is the **single** equivalence relation: it drives
+    class membership, and its complement over non-usable coordinates is :func:`_d_missing`. Using the
+    full behavior (not predictions alone) means a *usable* hard-rule difference creates distinct
+    classes, while an *unavailable* one becomes a missing distinguisher — so a multi-member class can
+    never have an empty ``D_missing``."""
+    behavior = _coord_behavior(h)
+    return tuple((f, behavior[f]) for f in f_usable if f in behavior)
 
 
 def _distinct(hypotheses: Iterable[Hypothesis]) -> list[Hypothesis]:
@@ -209,9 +214,9 @@ def partition(
     for h in _distinct(hypotheses):
         (eliminated if h.hard_incompatibility(usable) else survivors).append(h)
 
-    grouped: dict[tuple[tuple[str, str], ...], list[Hypothesis]] = {}
+    grouped: dict[tuple[tuple[str, tuple], ...], list[Hypothesis]] = {}
     for h in survivors:
-        grouped.setdefault(signature(h.predictions, f_usable), []).append(h)
+        grouped.setdefault(structural_signature(h, f_usable), []).append(h)
 
     classes = tuple(
         EquivalenceClass(
@@ -219,7 +224,9 @@ def partition(
             members=(members := tuple(sorted(hs, key=lambda h: h.id))),
             d_missing=_d_missing(members, f_usable_set),
         )
-        for sig, hs in sorted(grouped.items())
+        # sort by repr: a signature value may contain None (an unpredicted but hard-ruled coordinate),
+        # which is not orderable against a str, but its repr is a stable deterministic key.
+        for sig, hs in sorted(grouped.items(), key=lambda kv: repr(kv[0]))
     )
     # Sort eliminated by (now-unique) id too, so the entire Partition is permutation-invariant.
     eliminated_sorted = tuple(sorted(eliminated, key=lambda h: h.id))

@@ -25,7 +25,7 @@ from src.core.rca.partition import (
     discretize_ratio,
     discretize_rate,
     partition,
-    signature,
+    structural_signature,
     usable_ids,
 )
 
@@ -47,10 +47,10 @@ class TestFUsable:
         assert usable_ids(obs, UsabilityPolicy(default_tau=0.5)) == ("a",)
         assert usable_ids(obs, UsabilityPolicy(tau={"a": 0.95})) == ("d",)
 
-    def test_signature_projects_categorical_predictions_over_f_usable(self):
-        f = ("a", "d")
-        assert signature({"a": "present", "d": "high", "z": "absent"}, f) == (
-            ("a", "present"), ("d", "high"),
+    def test_structural_signature_projects_full_behavior_over_f_usable(self):
+        h = _h("h", {"a": "present", "d": "high", "z": "absent"})  # z not usable -> omitted
+        assert structural_signature(h, ("a", "d")) == (
+            ("a", ("present", ())), ("d", ("high", ())),
         )
 
 
@@ -246,6 +246,20 @@ class TestDMissing:
         p = partition([h1, h2], obs)
         assert len(p.classes) == 1
         assert p.classes[0].d_missing == frozenset({"g"})
+
+    def test_usable_hard_rule_difference_creates_distinct_classes(self):
+        # same predictions, but only h1 hard-contradicts g=true, and g is USABLE (observed false).
+        # one equivalence relation: the usable hard-rule difference must split them into two classes,
+        # never a multi-member class with empty D_missing.
+        m1 = ObservationModel(expected=(ExpectedObservation("f", "present"),),
+                              contradictions=(Contradiction("g", frozenset({"true"})),))
+        m2 = ObservationModel(expected=(ExpectedObservation("f", "present"),))
+        h1 = from_observation_model("h1", Kind.PROCESS, "h1", m1)
+        h2 = from_observation_model("h2", Kind.PROCESS, "h2", m2)
+        obs = [observed("f", "present"), observed("g", "false")]  # g usable, neither eliminated
+        p = partition([h1, h2], obs)
+        assert len(p.classes) == 2
+        assert all(c.is_singleton for c in p.classes)
 
     def test_singleton_class_has_empty_d_missing(self):
         obs = [observed("a", "present")]
