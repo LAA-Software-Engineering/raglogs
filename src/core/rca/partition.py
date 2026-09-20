@@ -125,11 +125,33 @@ class Partition:
     eliminated: tuple[Hypothesis, ...] = ()
 
 
+def _coord_behavior(h: Hypothesis) -> dict[str, tuple]:
+    """The hypothesis's full structural behavior per coordinate: ``{f: (predicted_state, hard_states)}``
+    where ``predicted_state`` is its categorical prediction (or ``None``) and ``hard_states`` is the
+    sorted tuple of states of ``f`` that would hard-eliminate it. Both halves of the Phase C model
+    matter for distinguishability — measuring a coordinate can separate two hypotheses either because
+    they predict it differently *or* because it eliminates one and not the other."""
+    contra = {
+        c.observable_id: tuple(sorted(c.states))
+        for c in (h.observation_model.contradictions if h.observation_model else ())
+    }
+    coords = set(h.predictions) | set(contra)
+    return {f: (h.predictions.get(f), contra.get(f, ())) for f in coords}
+
+
+def _behavior(h: Hypothesis) -> tuple:
+    """A hypothesis's complete, id/localization-free behavioral fingerprint (predictions + hard rules).
+    Two hypotheses with the same fingerprint are indistinguishable under *every* observation."""
+    return tuple(sorted(_coord_behavior(h).items()))
+
+
 def _distinct(hypotheses: Iterable[Hypothesis]) -> list[Hypothesis]:
-    """Materialize the hypothesis *set* ``H`` at the boundary: exact duplicates are canonicalized to
-    one, and two entries that share a causal ``id`` but define different behavior are rejected as
-    conflicting. Input multiplicity must not become causal cardinality — otherwise ``[h, h]`` would
-    turn an IDENTIFIED result into NON_IDENTIFIABLE (with an empty, invalid D_missing) in Phase E."""
+    """Materialize the hypothesis *set* ``H`` at the boundary. Exact duplicates are canonicalized to
+    one; two entries that share a causal ``id`` but define different behavior are rejected as
+    conflicting; and two *distinct* ids with an identical full behavioral model are rejected as
+    degenerate — no observation could ever separate them, so they would form a multi-member class
+    with an empty D_missing, the invalid state #183 forbids. Input multiplicity must not become
+    causal cardinality (otherwise ``[h, h]`` would fabricate a NON_IDENTIFIABLE in Phase E)."""
     by_id: dict[str, Hypothesis] = {}
     for h in hypotheses:
         prev = by_id.get(h.id)
@@ -140,18 +162,29 @@ def _distinct(hypotheses: Iterable[Hypothesis]) -> list[Hypothesis]:
                 f"partition: conflicting hypotheses share id {h.id!r} — a causal id must have one "
                 "definition"
             )
+    seen: dict[tuple, str] = {}
+    for h in by_id.values():
+        fingerprint = _behavior(h)
+        if fingerprint in seen:
+            raise ValueError(
+                f"partition: hypotheses {seen[fingerprint]!r} and {h.id!r} have identical behavioral "
+                "models — no observation could distinguish them (a degenerate hypothesis set)"
+            )
+        seen[fingerprint] = h.id
     return list(by_id.values())
 
 
 def _d_missing(members: tuple[Hypothesis, ...], f_usable: frozenset[str]) -> frozenset[str]:
-    """Coordinates on which some pair of members' categorical predictions differ and which are NOT
-    usable — i.e. exactly the distinguishers that were not collected. Members already agree on every
-    usable coordinate (that is why they share a class), so any disagreement is on a non-usable one."""
+    """Coordinates on which some pair of members' full structural behavior — categorical prediction
+    *or* hard-elimination rule — differs and which are NOT usable: exactly the distinguishers that
+    were not collected. Members already agree over every usable coordinate (that is why they share a
+    class), so any behavioral disagreement is on a non-usable one."""
     missing: set[str] = set()
-    for a, b in combinations(members, 2):
-        pa, pb = a.predictions, b.predictions
-        for f in set(pa) | set(pb):
-            if f not in f_usable and pa.get(f) != pb.get(f):
+    behaviors = [_coord_behavior(m) for m in members]
+    default = (None, ())
+    for ba, bb in combinations(behaviors, 2):
+        for f in set(ba) | set(bb):
+            if f not in f_usable and ba.get(f, default) != bb.get(f, default):
                 missing.add(f)
     return frozenset(missing)
 
@@ -188,7 +221,9 @@ def partition(
         )
         for sig, hs in sorted(grouped.items())
     )
-    return Partition(classes=classes, f_usable=f_usable, eliminated=tuple(eliminated))
+    # Sort eliminated by (now-unique) id too, so the entire Partition is permutation-invariant.
+    eliminated_sorted = tuple(sorted(eliminated, key=lambda h: h.id))
+    return Partition(classes=classes, f_usable=f_usable, eliminated=eliminated_sorted)
 
 
 # --- Discretization (pre-D spike policy): continuous magnitude -> categorical band -----------------

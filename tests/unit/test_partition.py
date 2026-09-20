@@ -10,7 +10,12 @@ import random
 
 import pytest
 from src.core.rca.candidates import RootCauseCandidate
-from src.core.rca.expectations import process_dead_model
+from src.core.rca.expectations import (
+    Contradiction,
+    ExpectedObservation,
+    ObservationModel,
+    process_dead_model,
+)
 from src.core.rca.features import ServiceFeatures
 from src.core.rca.hypothesis import Hypothesis, Kind, from_observation_model
 from src.core.rca.observable import State, observed, uncollectable, unknown
@@ -52,8 +57,9 @@ class TestFUsable:
 class TestPartitionBasics:
     def test_equal_usable_signatures_share_a_class(self):
         obs = [observed("a", "present"), observed("b", "present")]
-        h1 = _h("h1", {"a": "present", "b": "present"})
-        h2 = _h("h2", {"a": "present", "b": "present"})
+        # h1/h2 agree on the usable signature but differ on the unobserved 'hidden' (non-degenerate)
+        h1 = _h("h1", {"a": "present", "b": "present", "hidden": "present"})
+        h2 = _h("h2", {"a": "present", "b": "present", "hidden": "absent"})
         h3 = _h("h3", {"a": "absent"}, kind=Kind.EDGE)
         p = partition([h1, h2, h3], obs)
         assert len(p.classes) == 2
@@ -63,7 +69,8 @@ class TestPartitionBasics:
 
     def test_deterministic_ordering(self):
         obs = [observed("a", "present")]
-        hs = [_h("z", {"a": "absent"}), _h("a", {"a": "present"}), _h("m", {"a": "present"})]
+        hs = [_h("z", {"a": "absent"}), _h("a", {"a": "present", "hidden": "p"}),
+              _h("m", {"a": "present", "hidden": "q"})]
         p = partition(hs, obs)
         assert [c.signature for c in p.classes] == sorted(c.signature for c in p.classes)
 
@@ -116,8 +123,24 @@ class TestInputBoundaryIsASet:
 
     def test_partition_is_permutation_invariant(self):
         obs = [observed("a", "present")]
-        hs = [_h("h1", {"a": "present"}), _h("h2", {"a": "absent"}), _h("h3", {"a": "present"})]
+        hs = [_h("h1", {"a": "present", "hid": "p"}), _h("h2", {"a": "absent"}),
+              _h("h3", {"a": "present", "hid": "q"})]
         assert partition(hs, obs) == partition(list(reversed(hs)), obs)
+
+    def test_permutation_invariant_including_eliminated(self):
+        a = from_observation_model("process:a", Kind.PROCESS, "a", process_dead_model("svca"))
+        b = from_observation_model("process:b", Kind.PROCESS, "b", process_dead_model("svcb"))
+        obs = [observed("svca.serving_throughout_window", "true"),
+               observed("svcb.serving_throughout_window", "true")]
+        assert partition([a, b], obs) == partition([b, a], obs)
+        assert [h.id for h in partition([b, a], obs).eliminated] == ["process:a", "process:b"]
+
+    def test_distinct_ids_with_identical_full_model_are_rejected(self):
+        m = ObservationModel(expected=(ExpectedObservation("f", "present"),))
+        a = from_observation_model("h1", Kind.PROCESS, "a", m)
+        b = from_observation_model("h2", Kind.PROCESS, "b", m)  # different id, identical behavior
+        with pytest.raises(ValueError):
+            partition([a, b], [observed("f", "present")])
 
 
 class TestNonFiniteInputsRejected:
@@ -160,8 +183,8 @@ class TestPolicyValidation:
 class TestInvariant5EquivalenceNotScoreProximity:
     def test_same_signature_far_apart_scores_still_one_class(self):
         obs = [observed("a", "present")]
-        p = partition([_h("h1", {"a": "present"}, score=0.01),
-                       _h("h2", {"a": "present"}, score=999.0)], obs)
+        p = partition([_h("h1", {"a": "present", "hid": "p"}, score=0.01),
+                       _h("h2", {"a": "present", "hid": "q"}, score=999.0)], obs)
         assert len(p.classes) == 1 and len(p.classes[0].members) == 2
 
     def test_different_signature_identical_scores_stay_separate(self):
@@ -192,10 +215,13 @@ class TestInvariant7ContinuousDifferencesDoNotSplit:
 
     def test_close_expected_rates_land_in_one_class(self):
         obs = [observed("err", "present")]
-        h1 = _h("h1", {"err": discretize_rate(0.11)})
-        h2 = _h("h2", {"err": discretize_rate(0.13)})
+        # the only usable coordinate 'err' discretizes to the same band from 0.11 and 0.13, so it
+        # does not split the two into distinct classes; they differ only on the unobserved 'hid'.
+        h1 = _h("h1", {"err": discretize_rate(0.11), "hid": "p"})
+        h2 = _h("h2", {"err": discretize_rate(0.13), "hid": "q"})
         p = partition([h1, h2], obs)
         assert len(p.classes) == 1 and len(p.classes[0].members) == 2
+        assert "err" not in p.classes[0].d_missing  # the rate coordinate was not a distinguisher
 
 
 class TestDMissing:
@@ -207,6 +233,19 @@ class TestDMissing:
         p = partition([h1, h2], obs)
         assert len(p.classes) == 1
         assert p.classes[0].d_missing == frozenset({"b"})
+
+    def test_hard_rule_difference_on_unusable_coordinate_is_missing(self):
+        # same predictions -> same class; only h1 hard-contradicts on the UNKNOWN coordinate 'g'.
+        # measuring g=true would eliminate h1 and retain h2, so g is a missing distinguisher.
+        m1 = ObservationModel(expected=(ExpectedObservation("f", "present"),),
+                              contradictions=(Contradiction("g", frozenset({"true"})),))
+        m2 = ObservationModel(expected=(ExpectedObservation("f", "present"),))
+        h1 = from_observation_model("h1", Kind.PROCESS, "h1", m1)
+        h2 = from_observation_model("h2", Kind.PROCESS, "h2", m2)
+        obs = [observed("f", "present"), unknown("g")]
+        p = partition([h1, h2], obs)
+        assert len(p.classes) == 1
+        assert p.classes[0].d_missing == frozenset({"g"})
 
     def test_singleton_class_has_empty_d_missing(self):
         obs = [observed("a", "present")]
