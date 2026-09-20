@@ -25,6 +25,7 @@ from types import MappingProxyType
 from typing import Optional
 
 from src.core.rca.candidates import RootCauseCandidate
+from src.core.rca.expectations import ObservationModel
 from src.core.rca.observable import Observable
 
 _EMPTY_PREDICTIONS: Mapping[str, str] = MappingProxyType({})
@@ -72,6 +73,10 @@ class Hypothesis:
     kind: Kind
     localization: str
     predictions: Mapping[str, str] = field(default_factory=lambda: _EMPTY_PREDICTIONS)
+    # The Phase C observation model (soft expectations + hard contradictions). Immutable
+    # (frozen tuple/frozenset fields), so it is stored by reference. Excluded from identity: it
+    # carries strength, and strength must never move a hypothesis between equivalence classes.
+    observation_model: Optional[ObservationModel] = None
     # Private, deep-copied provenance snapshot; read only via the copy-on-read `source` property.
     _source: Optional[RootCauseCandidate] = field(default=None, repr=False, compare=False)
 
@@ -111,6 +116,11 @@ class Hypothesis:
                     f"{self._source!r}"
                 )
             object.__setattr__(self, "_source", copy.deepcopy(self._source))
+        if self.observation_model is not None and not isinstance(self.observation_model, ObservationModel):
+            raise ValueError(
+                f"hypothesis {self.id!r}: observation_model must be an ObservationModel or None, got "
+                f"{self.observation_model!r}"
+            )
 
     @property
     def source(self) -> Optional[RootCauseCandidate]:
@@ -131,10 +141,19 @@ class Hypothesis:
         return hash(self._identity())
 
     def hard_incompatibility(self, observables: Iterable[Observable]) -> bool:
-        """Is this hypothesis hard-incompatible with the observed evidence? **Stub for Phase B** —
-        prediction strengths (PRESENT_HARD / ABSENT_HARD) arrive in Phase C, so nothing is yet known
-        to be hard-incompatible and this is always ``False``. The signature is the Phase C seam."""
-        return False
+        """Does a usable observation *logically contradict* this hypothesis (hard elimination)?
+        Delegates to the Phase C :class:`~src.core.rca.expectations.ObservationModel`; a hypothesis
+        with no model is never hard-incompatible. A missing expected symptom is never a contradiction."""
+        if self.observation_model is None:
+            return False
+        return self.observation_model.hard_incompatibility(observables)
+
+    def soft_support(self, observables: Iterable[Observable]) -> float:
+        """Soft evidence score from the observation model (support only, never elimination). ``0.0``
+        when the hypothesis carries no model."""
+        if self.observation_model is None:
+            return 0.0
+        return self.observation_model.soft_support(observables)
 
     def render(self) -> str:
         """The user-facing projection — just the localization. The ``kind``/structure stay internal."""
@@ -175,3 +194,23 @@ def hypotheses_from_candidates(
     """Map ranked service candidates to ``process`` hypotheses **in the same order**, so wrapping is
     output-neutral: ``[h.localization for h in result] == [c.service for c in candidates]``."""
     return [process_hypothesis_from_candidate(c) for c in candidates]
+
+
+def from_observation_model(
+    id: str,
+    kind: Kind,
+    localization: str,
+    model: ObservationModel,
+    source: Optional[RootCauseCandidate] = None,
+) -> Hypothesis:
+    """Build a hypothesis whose structural ``predictions`` come from its Phase C observation model
+    (strength-free categorical states, Invariant 4), with the model attached so
+    :meth:`Hypothesis.hard_incompatibility` and :meth:`Hypothesis.soft_support` are live."""
+    return Hypothesis(
+        id=id,
+        kind=kind,
+        localization=localization,
+        predictions=model.predictions(),
+        observation_model=model,
+        _source=source,
+    )
