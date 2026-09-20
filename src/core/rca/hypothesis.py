@@ -97,15 +97,33 @@ class Hypothesis:
                 f"hypothesis {self.id!r}: localization must be a non-empty string, got "
                 f"{self.localization!r}"
             )
-        for k, v in dict(self.predictions).items():
+        supplied = dict(self.predictions)
+        for k, v in supplied.items():
             if not isinstance(k, str) or not isinstance(v, str):
                 raise ValueError(
                     f"hypothesis {self.id!r}: predictions must map observable-id strings to state "
                     f"strings, got {k!r}: {v!r}"
                 )
+        if self.observation_model is not None and not isinstance(self.observation_model, ObservationModel):
+            raise ValueError(
+                f"hypothesis {self.id!r}: observation_model must be an ObservationModel or None, got "
+                f"{self.observation_model!r}"
+            )
+        # ONE authoritative source of expected categorical state. When an observation model is
+        # present it *owns* the expectations, so `predictions` IS `model.predictions()`: a supplied
+        # map that disagrees is a contradiction (two sources of truth) and is rejected, never
+        # silently reconciled. Without a model, the supplied map stands alone (Phase B path).
+        if self.observation_model is not None:
+            derived = self.observation_model.predictions()
+            if supplied and supplied != derived:
+                raise ValueError(
+                    f"hypothesis {self.id!r}: predictions must equal observation_model.predictions() "
+                    f"or be omitted; got {supplied!r} vs {derived!r}"
+                )
+            supplied = derived
         # Own the mapping: a read-only view over a defensive copy, so the object cannot be mutated
         # behind a caller's back (matches the Phase A representation-ownership discipline).
-        object.__setattr__(self, "predictions", MappingProxyType(dict(self.predictions)))
+        object.__setattr__(self, "predictions", MappingProxyType(supplied))
         # Own the provenance too: validate its type, then keep a private deep copy. It is never
         # handed out by reference — `source` and `to_dict` copy on read — so no writable alias to it
         # can survive construction.
@@ -116,11 +134,6 @@ class Hypothesis:
                     f"{self._source!r}"
                 )
             object.__setattr__(self, "_source", copy.deepcopy(self._source))
-        if self.observation_model is not None and not isinstance(self.observation_model, ObservationModel):
-            raise ValueError(
-                f"hypothesis {self.id!r}: observation_model must be an ObservationModel or None, got "
-                f"{self.observation_model!r}"
-            )
 
     @property
     def source(self) -> Optional[RootCauseCandidate]:

@@ -161,10 +161,24 @@ class ObservationModel:
 # --- Hand-authored starter templates for the currently-evaluated failure families ----------------
 # Parameterised by service / edge name so core stays source-agnostic (#81). Not full causal coverage.
 
+# A hard contradiction must be a *proof*, not a sample. A single ``health=serving`` reading does not
+# refute "process dead": the instance can be healthy at the start and crash mid-window, one replica
+# can stay healthy while the failing one dies, and an intermittent edge can report ``connected`` once
+# and still be the modeled failure. So the templates hard-eliminate ONLY on a dedicated observable
+# whose *semantics* encode the required proof — same-instance continuity across the whole window with
+# adequate coverage — signalled by the state ``"true"``. A collector that cannot establish that fact
+# simply never emits the coordinate (it stays UNKNOWN), and nothing is eliminated. Transient
+# point-in-time health is at most soft evidence and never appears as a contradiction here.
+_CONTINUOUS = "true"
+
+
 def process_dead_model(service: str) -> ObservationModel:
-    """A ``process``-death hypothesis for ``service``. The death is **hard-contradicted** only by the
-    process being positively confirmed up (healthy/serving/alive); the OOM and restart symptoms are
-    *soft* — their absence weakens but never eliminates (the observation-model regression, Invariant 3)."""
+    """A ``process``-death hypothesis for ``service``. Death is **hard-contradicted only** by proof
+    that the *same instance served continuously throughout the incident window* — the dedicated
+    ``{service}.serving_throughout_window == "true"`` fact — which genuinely cannot coexist with a
+    dead process. A transient ``health`` sample is not such a proof and is not a contradiction here.
+    The OOM/restart/error symptoms are *soft*: their absence weakens but never eliminates (the
+    observation-model regression, Invariant 3)."""
     return ObservationModel(
         expected=(
             ExpectedObservation(f"{service}.error_log", "present", Strength.USUALLY),
@@ -172,14 +186,16 @@ def process_dead_model(service: str) -> ObservationModel:
             ExpectedObservation(f"{service}.oom", "present", Strength.MAYBE),
         ),
         contradictions=(
-            Contradiction(f"{service}.health", frozenset({"healthy", "serving", "alive"})),
+            Contradiction(f"{service}.serving_throughout_window", frozenset({_CONTINUOUS})),
         ),
     )
 
 
 def edge_network_failure_model(caller: str, callee: str) -> ObservationModel:
-    """A ``edge`` network-failure hypothesis for the ``caller``→``callee`` dependency. Hard-contradicted
-    only by the edge being confirmed connected/healthy; connection errors and timeouts are soft."""
+    """An ``edge`` network-failure hypothesis for the ``caller``→``callee`` dependency. Hard-contradicted
+    **only** by proof of continuous connectivity across the window
+    (``{edge}.connected_throughout_window == "true"``) — one ``connected`` sample does not refute an
+    intermittent network failure. Connection errors and timeouts are soft."""
     edge = f"{caller}->{callee}"
     return ObservationModel(
         expected=(
@@ -188,6 +204,6 @@ def edge_network_failure_model(caller: str, callee: str) -> ObservationModel:
             ExpectedObservation(f"{callee}.error_log", "absent", Strength.MAYBE),
         ),
         contradictions=(
-            Contradiction(f"{edge}.connectivity", frozenset({"healthy", "connected"})),
+            Contradiction(f"{edge}.connected_throughout_window", frozenset({_CONTINUOUS})),
         ),
     )

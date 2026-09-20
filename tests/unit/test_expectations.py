@@ -53,8 +53,9 @@ class TestValueContracts:
 class TestInvariant3HardSoftSeparation:
     def test_hard_contradiction_eliminates(self):
         m = process_dead_model("payment")
-        # the process is positively confirmed serving — logically incompatible with "process dead"
-        assert m.hard_incompatibility([observed("payment.health", "serving")]) is True
+        # proof the same instance served continuously through the window — logically incompatible
+        # with "process dead"
+        assert m.hard_incompatibility([observed("payment.serving_throughout_window", "true")]) is True
 
     def test_soft_mismatch_only_changes_score_never_eliminates(self):
         m = process_dead_model("payment")
@@ -66,9 +67,32 @@ class TestInvariant3HardSoftSeparation:
 
     def test_unknown_and_uncollectable_neither_contradict_nor_score(self):
         m = process_dead_model("payment")
-        obs = [unknown("payment.health"), uncollectable("payment.error_log")]
+        obs = [unknown("payment.serving_throughout_window"), uncollectable("payment.error_log")]
         assert m.hard_incompatibility(obs) is False
         assert m.soft_support(obs) == 0.0
+
+
+class TestHardRulesRequireProofNotSamples:
+    """A hard contradiction must PROVE logical incompatibility, not promote a noisy sample to
+    irreversible elimination (#180 review)."""
+
+    def test_transient_health_sample_does_not_eliminate(self):
+        m = process_dead_model("payment")
+        # a point-in-time healthy/serving reading is not proof of continuous same-instance health:
+        # the process could be healthy at the start and crash mid-window.
+        for sample in ("healthy", "serving", "alive"):
+            assert m.hard_incompatibility([observed("payment.health", sample)]) is False
+
+    def test_partial_coverage_does_not_eliminate(self):
+        m = process_dead_model("payment")
+        # the continuity fact is explicitly false / not established -> not a contradiction
+        assert m.hard_incompatibility([observed("payment.serving_throughout_window", "false")]) is False
+
+    def test_edge_single_connected_sample_does_not_eliminate(self):
+        m = edge_network_failure_model("web", "payment")
+        # one `connected` reading coexists with an intermittent network failure
+        assert m.hard_incompatibility([observed("web->payment.connectivity", "connected")]) is False
+        assert m.hard_incompatibility([observed("web->payment.connected_throughout_window", "true")]) is True
 
 
 class TestInvariant4StrengthDoesNotAlterIdentity:
@@ -106,12 +130,14 @@ class TestTemplates:
     def test_process_dead_model_shape(self):
         m = process_dead_model("payment")
         assert m.predictions()["payment.error_log"] == "present"
-        assert any(c.observable_id == "payment.health" for c in m.contradictions)
+        assert any(c.observable_id == "payment.serving_throughout_window" for c in m.contradictions)
 
     def test_edge_network_failure_model_shape(self):
         m = edge_network_failure_model("web", "payment")
         assert "web->payment.conn_error" in m.predictions()
-        assert m.hard_incompatibility([observed("web->payment.connectivity", "healthy")]) is True
+        assert m.hard_incompatibility(
+            [observed("web->payment.connected_throughout_window", "true")]
+        ) is True
 
 
 class TestHypothesisIntegration:
@@ -120,7 +146,7 @@ class TestHypothesisIntegration:
         h = from_observation_model("process:payment", Kind.PROCESS, "payment", m)
         assert h.predictions == m.predictions()
         assert h.observation_model is m
-        assert h.hard_incompatibility([observed("payment.health", "healthy")]) is True
+        assert h.hard_incompatibility([observed("payment.serving_throughout_window", "true")]) is True
         assert h.soft_support([observed("payment.error_log", "present")]) > 0.0
 
     def test_bare_hypothesis_has_inert_phase_c_behaviour(self):
@@ -133,3 +159,28 @@ class TestHypothesisIntegration:
         with pytest.raises(ValueError):
             Hypothesis(id="p", kind=Kind.PROCESS, localization="p",
                        observation_model="not-a-model")  # type: ignore[arg-type]
+
+
+class TestSingleSourceOfTruth:
+    """With a model present, `predictions` IS `model.predictions()` on every construction path —
+    no second, independently-set expectation map can contradict it (#180 review)."""
+
+    def test_opposite_predictions_map_is_rejected(self):
+        from src.core.rca.hypothesis import Hypothesis
+        model = ObservationModel(expected=(ExpectedObservation("f", "absent"),))
+        with pytest.raises(ValueError):
+            Hypothesis(id="process:p", kind=Kind.PROCESS, localization="p",
+                       predictions={"f": "present"}, observation_model=model)
+
+    def test_omitted_predictions_are_derived_from_the_model(self):
+        from src.core.rca.hypothesis import Hypothesis
+        model = ObservationModel(expected=(ExpectedObservation("f", "absent"),))
+        h = Hypothesis(id="process:p", kind=Kind.PROCESS, localization="p", observation_model=model)
+        assert dict(h.predictions) == {"f": "absent"}  # not left empty while the model scores 'absent'
+
+    def test_matching_predictions_map_is_accepted(self):
+        from src.core.rca.hypothesis import Hypothesis
+        model = ObservationModel(expected=(ExpectedObservation("f", "absent"),))
+        h = Hypothesis(id="process:p", kind=Kind.PROCESS, localization="p",
+                       predictions={"f": "absent"}, observation_model=model)
+        assert dict(h.predictions) == {"f": "absent"}
