@@ -95,13 +95,16 @@ class TestHardRulesRequireProofNotSamples:
         assert m.hard_incompatibility([observed("web->payment.connected_throughout_window", "true")]) is True
 
 
-class TestInvariant4StrengthDoesNotAlterIdentity:
+class TestInvariant4StrengthDoesNotAlterEquivalenceClass:
+    """Strength-invariance is a property of the projected *signature* (the Phase-D equivalence
+    class), NOT of Python object equality — behaviorally different objects must not be equal."""
+
     def test_predictions_are_strength_free(self):
         usually = ObservationModel(expected=(ExpectedObservation("f", "absent", Strength.USUALLY),))
         maybe = ObservationModel(expected=(ExpectedObservation("f", "absent", Strength.MAYBE),))
         assert usually.predictions() == maybe.predictions() == {"f": "absent"}
 
-    def test_signature_and_equivalence_class_are_strength_invariant(self):
+    def test_signature_is_strength_invariant_but_objects_differ(self):
         obs = [observed("f", "absent")]
         h1 = from_observation_model("process:p", Kind.PROCESS, "p",
                                     ObservationModel(expected=(ExpectedObservation("f", "absent", Strength.USUALLY),)))
@@ -109,7 +112,30 @@ class TestInvariant4StrengthDoesNotAlterIdentity:
                                     ObservationModel(expected=(ExpectedObservation("f", "absent", Strength.MAYBE),)))
         # same categorical signature -> same equivalence class, despite different strength
         assert hypothesis_signature(h1.predictions, obs) == hypothesis_signature(h2.predictions, obs)
-        assert h1 == h2 and hash(h1) == hash(h2)
+        # ...but the objects are NOT equal: strength changes soft-scoring behavior
+        assert h1 != h2 and len({h1, h2}) == 2
+
+
+class TestObjectEqualityIncludesBehavior:
+    """Object equality must include the full behavioral model, so a set/dict can never silently pick
+    which hard-elimination contract survives (#180 review)."""
+
+    def test_divergent_hard_rules_make_unequal_objects(self):
+        expected = (ExpectedObservation("f", "absent"),)
+        with_rule = ObservationModel(expected=expected,
+                                     contradictions=(Contradiction("g", frozenset({"true"})),))
+        without_rule = ObservationModel(expected=expected)
+        h1 = from_observation_model("process:p", Kind.PROCESS, "p", with_rule)
+        h2 = from_observation_model("process:p", Kind.PROCESS, "p", without_rule)
+        probe = [observed("g", "true")]
+        # the two disagree on hard elimination...
+        assert h1.hard_incompatibility(probe) is True
+        assert h2.hard_incompatibility(probe) is False
+        # ...so they must be unequal and both survive a set (no order-dependent contract)
+        assert h1 != h2 and len({h1, h2}) == 2
+        # yet they remain structurally equivalent for partitioning (same projected signature)
+        obs = [observed("f", "absent")]
+        assert hypothesis_signature(h1.predictions, obs) == hypothesis_signature(h2.predictions, obs)
 
 
 class TestProcessDeathRegression:

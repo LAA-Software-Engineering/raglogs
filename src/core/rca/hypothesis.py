@@ -55,10 +55,14 @@ class Hypothesis:
     are **stubs in Phase B**, filled by Phase C. ``predictions`` feeds
     :func:`~src.core.rca.observable.hypothesis_signature` unchanged once populated.
 
-    **Identity is the causal object, never the ranking.** Equality and hash are defined over the
-    causal fields (``id``, ``kind``, ``localization``, ``predictions``) and deliberately **exclude**
-    ``source``. #177/#182 require structural partitioning to be invariant under arbitrary ranking
-    scores, so a hypothesis's identity cannot depend on the score the ranker happened to assign.
+    **Identity is the behavioral object, never the ranking.** Equality and hash cover every field
+    that defines behavior — ``id``, ``kind``, ``localization``, ``predictions`` and the
+    ``observation_model`` (its hard-elimination + soft-scoring rules) — and deliberately **exclude**
+    only ``source``. #177/#182 require partitioning to be invariant under arbitrary ranking scores,
+    so identity cannot depend on the score the ranker assigned. Note this is *object* identity, not
+    the structural equivalence class: strength-invariant class membership is defined by
+    :func:`~src.core.rca.observable.hypothesis_signature` over the projected predictions — two
+    hypotheses can share a class yet be unequal objects (e.g. different strengths or hard rules).
 
     Ranking provenance — the :class:`RootCauseCandidate` a ``process`` hypothesis was wrapped from —
     is kept so score/features/evidence stay reachable, but it is **owned and never exposed by
@@ -74,8 +78,10 @@ class Hypothesis:
     localization: str
     predictions: Mapping[str, str] = field(default_factory=lambda: _EMPTY_PREDICTIONS)
     # The Phase C observation model (soft expectations + hard contradictions). Immutable
-    # (frozen tuple/frozenset fields), so it is stored by reference. Excluded from identity: it
-    # carries strength, and strength must never move a hypothesis between equivalence classes.
+    # (frozen tuple/frozenset fields), so it is stored by reference. It is part of object identity:
+    # it defines hard-elimination and soft-scoring behavior, so two hypotheses with divergent models
+    # are genuinely different objects and must not collapse in a set/dict. Strength-invariance of the
+    # *equivalence class* is a separate, Phase-D concern handled by `hypothesis_signature()`.
     observation_model: Optional[ObservationModel] = None
     # Private, deep-copied provenance snapshot; read only via the copy-on-read `source` property.
     _source: Optional[RootCauseCandidate] = field(default=None, repr=False, compare=False)
@@ -142,8 +148,14 @@ class Hypothesis:
         return copy.deepcopy(self._source) if self._source is not None else None
 
     def _identity(self) -> tuple:
-        """The causal identity — everything that defines the hypothesis *except* ranking provenance."""
-        return (self.id, self.kind, self.localization, tuple(sorted(self.predictions.items())))
+        """Object identity — the complete *behavioral* definition of the hypothesis, excluding only
+        ranking provenance (``_source``). It includes the observation model, so two hypotheses that
+        would hard-eliminate or soft-score differently are not equal and never silently collapse in a
+        set/dict. This is deliberately **not** the structural equivalence class: strength-invariant
+        partitioning is defined by :func:`~src.core.rca.observable.hypothesis_signature` over the
+        projected predictions, not by ``==``."""
+        return (self.id, self.kind, self.localization,
+                tuple(sorted(self.predictions.items())), self.observation_model)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Hypothesis):
