@@ -112,11 +112,24 @@ class EquivalenceClass:
 class Partition:
     """The full structural result: the surviving ``classes`` (deterministically ordered by
     signature) and the ``f_usable`` set they were computed over. ``eliminated`` are the hypotheses
-    a usable observation hard-contradicted."""
+    a usable observation hard-contradicted.
+
+    **Zero classes is an explicit, defined state**, not an accident: :func:`partition` requires a
+    non-empty hypothesis set, so ``classes == ()`` can only mean *every* hypothesis was hard-eliminated
+    — no candidate is compatible with the observations (:attr:`no_surviving_hypothesis`). This is the
+    fourth structural outcome (alongside the singleton / one-multi-member / many-class cases that map
+    to IDENTIFIED / NON_IDENTIFIABLE / UNCERTAIN): Phase E maps it to its no-compatible-hypothesis
+    outcome (coverage/model failure), never to one of the three positive results."""
 
     classes: tuple[EquivalenceClass, ...]
     f_usable: tuple[str, ...]
     eliminated: tuple[Hypothesis, ...] = ()
+
+    @property
+    def no_surviving_hypothesis(self) -> bool:
+        """True when no hypothesis survived hard-incompatibility filtering (``classes`` is empty and
+        everything is in ``eliminated``) — the explicit no-compatible-hypothesis state."""
+        return not self.classes
 
 
 def _coord_behavior(h: Hypothesis) -> dict[str, tuple]:
@@ -151,22 +164,33 @@ def structural_signature(h: Hypothesis, f_usable: tuple[str, ...]) -> tuple[tupl
 
 
 def _distinct(hypotheses: Iterable[Hypothesis]) -> list[Hypothesis]:
-    """Materialize the hypothesis *set* ``H`` at the boundary. Exact duplicates are canonicalized to
-    one; two entries that share a causal ``id`` but define different behavior are rejected as
-    conflicting; and two *distinct* ids with an identical full behavioral model are rejected as
-    degenerate — no observation could ever separate them, so they would form a multi-member class
-    with an empty D_missing, the invalid state #183 forbids. Input multiplicity must not become
-    causal cardinality (otherwise ``[h, h]`` would fabricate a NON_IDENTIFIABLE in Phase E)."""
+    """Materialize the hypothesis *set* ``H`` at the boundary, deterministically. A causal ``id`` may
+    appear more than once only as the *same* hypothesis: a literal repeat, or a distinct object with
+    identical behavior **and** identical ranking provenance, is canonicalized to one; anything else
+    sharing an id is rejected — differing behavior is a conflicting definition, and differing
+    ``source`` is ambiguous provenance (``Hypothesis.__eq__`` ignores ``source``, so silently keeping
+    the first copy would make which score reaches Phase G input-order-dependent). Two *distinct* ids
+    with an identical full behavioral model are rejected as degenerate — no observation could ever
+    separate them, so they would form a multi-member class with an empty D_missing, the invalid
+    state #183 forbids. Input multiplicity must not become causal cardinality."""
     by_id: dict[str, Hypothesis] = {}
     for h in hypotheses:
         prev = by_id.get(h.id)
         if prev is None:
             by_id[h.id] = h
+        elif prev is h:
+            continue  # literal repeated object — canonicalize
         elif prev != h:
             raise ValueError(
                 f"partition: conflicting hypotheses share id {h.id!r} — a causal id must have one "
                 "definition"
             )
+        elif prev.source != h.source:
+            raise ValueError(
+                f"partition: hypotheses share id {h.id!r} but carry different ranking provenance — "
+                "provenance cannot be silently discarded"
+            )
+        # else: a distinct object with identical behavior AND provenance — a harmless duplicate.
     seen: dict[tuple, str] = {}
     for h in by_id.values():
         fingerprint = _behavior(h)
@@ -199,9 +223,11 @@ def partition(
     observations: Iterable[Observable],
     policy: UsabilityPolicy = DEFAULT_POLICY,
 ) -> Partition:
-    """Partition ``hypotheses`` into ``~_O`` equivalence classes over the usable observations, after
-    dropping any hypothesis a usable observation hard-contradicts. **Reads no scores** — the result
-    is identical for any ranking (Invariant 6)."""
+    """Partition ``hypotheses`` (a non-empty set) into ``~_O`` equivalence classes over the usable
+    observations, after dropping any hypothesis a usable observation hard-contradicts. **Reads no
+    scores** — the result is identical for any ranking (Invariant 6). Raises if the set is empty or
+    carries conflicting/degenerate definitions; a zero-class result means every hypothesis was
+    hard-eliminated (:attr:`Partition.no_surviving_hypothesis`)."""
     observations = list(observations)
     # Derive the ONE usable set and reuse it for signatures, D_missing, AND hard elimination — so a
     # below-threshold observation that is excluded from F_usable also cannot eliminate a hypothesis.
@@ -209,9 +235,15 @@ def partition(
     f_usable = tuple(sorted(o.id for o in usable))
     f_usable_set = frozenset(f_usable)
 
+    distinct = _distinct(hypotheses)
+    if not distinct:
+        # An empty hypothesis set is a caller error, not a structural outcome: reject it so that a
+        # zero-class Partition can only ever mean "all hypotheses were hard-eliminated".
+        raise ValueError("partition requires at least one hypothesis")
+
     survivors: list[Hypothesis] = []
     eliminated: list[Hypothesis] = []
-    for h in _distinct(hypotheses):
+    for h in distinct:
         (eliminated if h.hard_incompatibility(usable) else survivors).append(h)
 
     grouped: dict[tuple[tuple[str, tuple], ...], list[Hypothesis]] = {}

@@ -142,6 +142,29 @@ class TestInputBoundaryIsASet:
         with pytest.raises(ValueError):
             partition([a, b], [observed("f", "present")])
 
+    def test_same_id_divergent_provenance_is_rejected(self):
+        # Hypothesis.__eq__ ignores source, so silently keeping the first copy would make the score
+        # reaching Phase G input-order-dependent. Reject instead.
+        obs = [observed("a", "present")]
+        h_lo = _h("dup", {"a": "present"}, score=0.1)
+        h_hi = _h("dup", {"a": "present"}, score=0.9)
+        with pytest.raises(ValueError):
+            partition([h_lo, h_hi], obs)
+
+    def test_empty_hypothesis_set_is_rejected(self):
+        with pytest.raises(ValueError):
+            partition([], [observed("a", "present")])
+
+    def test_all_eliminated_is_the_explicit_no_survivor_state(self):
+        a = from_observation_model("process:a", Kind.PROCESS, "a", process_dead_model("svca"))
+        b = from_observation_model("process:b", Kind.PROCESS, "b", process_dead_model("svcb"))
+        obs = [observed("svca.serving_throughout_window", "true"),
+               observed("svcb.serving_throughout_window", "true")]
+        p = partition([a, b], obs)
+        assert p.classes == ()
+        assert p.no_surviving_hypothesis is True
+        assert [h.id for h in p.eliminated] == ["process:a", "process:b"]
+
 
 class TestNonFiniteInputsRejected:
     @pytest.mark.parametrize("bad", [float("nan"), float("inf"), -0.1])
