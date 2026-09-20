@@ -57,6 +57,11 @@ class Observable:
     measurement this time). ``state`` (a free-form str) is meaningful only when
     ``availability == OBSERVED``; for an UNKNOWN observable it is ``None``.
 
+    The *expected normal* baseline (#178) comes in two honest forms rather than one guess-the-type
+    field: ``baseline_state`` for a categorical baseline (e.g. ``NORMAL``) and ``baseline_value`` for
+    a numeric one (e.g. ``0.35`` for a CPU-utilization observable whose ``value`` is ``0.92``).
+    Either, both, or neither may be set; consumers never have to sniff which representation they got.
+
     Contradictions are rejected at construction so no downstream code has to defend against them.
     """
 
@@ -65,7 +70,8 @@ class Observable:
     availability: Availability = Availability.UNKNOWN
     state: Optional[str] = None
     value: Optional[float] = None
-    baseline: Optional[str] = None
+    baseline_state: Optional[str] = None
+    baseline_value: Optional[float] = None
     measurement_confidence: float = 1.0
 
     def __post_init__(self) -> None:
@@ -85,12 +91,14 @@ class Observable:
                     f"observable {self.id!r}: availability must be one of "
                     f"{[a.value for a in Availability]}, got {self.availability!r}"
                 ) from None
-        for attr in ("state", "baseline"):
+        for attr in ("state", "baseline_state"):
             v = getattr(self, attr)
             if v is not None and not isinstance(v, str):
                 raise ValueError(f"observable {self.id!r}: {attr} must be a string or None, got {v!r}")
-        if self.value is not None and (not isinstance(self.value, (int, float)) or isinstance(self.value, bool)):
-            raise ValueError(f"observable {self.id!r}: value must be a number or None, got {self.value!r}")
+        for attr in ("value", "baseline_value"):
+            v = getattr(self, attr)
+            if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float))):
+                raise ValueError(f"observable {self.id!r}: {attr} must be a number or None, got {v!r}")
 
         if self.availability == Availability.OBSERVED and self.state is None:
             raise ValueError(f"observable {self.id!r}: OBSERVED requires a concrete state")
@@ -125,7 +133,8 @@ class Observable:
             "availability": self.availability.value,
             "state": self.state,
             "value": self.value,
-            "baseline": self.baseline,
+            "baseline_state": self.baseline_state,
+            "baseline_value": self.baseline_value,
             "measurement_confidence": self.measurement_confidence,
         }
 
@@ -134,10 +143,11 @@ class Observable:
         return cls(
             id=d["id"],
             collectable=d.get("collectable", True),
-            availability=Availability(d.get("availability", "unknown")),
+            availability=d.get("availability", "unknown"),
             state=d.get("state"),
             value=d.get("value"),
-            baseline=d.get("baseline"),
+            baseline_state=d.get("baseline_state"),
+            baseline_value=d.get("baseline_value"),
             measurement_confidence=d.get("measurement_confidence", 1.0),
         )
 
@@ -152,10 +162,13 @@ def unknown(id: str, *, measurement_confidence: float = 1.0) -> Observable:
 
 
 def observed(id: str, state: str, *, value: Optional[float] = None,
-             baseline: Optional[str] = None, measurement_confidence: float = 1.0) -> Observable:
-    """measured this incident; ``state`` (including ABSENT) is evidence."""
+             baseline_state: Optional[str] = None, baseline_value: Optional[float] = None,
+             measurement_confidence: float = 1.0) -> Observable:
+    """measured this incident; ``state`` (including ABSENT) is evidence. ``baseline_state`` /
+    ``baseline_value`` carry the expected-normal categorical / numeric baseline (#178)."""
     return Observable(id=id, collectable=True, availability=Availability.OBSERVED, state=state,
-                      value=value, baseline=baseline, measurement_confidence=measurement_confidence)
+                      value=value, baseline_state=baseline_state, baseline_value=baseline_value,
+                      measurement_confidence=measurement_confidence)
 
 
 def uncollectable(id: str) -> Observable:

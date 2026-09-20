@@ -39,8 +39,40 @@ class TestThreeStatesNeverCollapse:
 
     def test_round_trip_preserves_the_distinction(self):
         for o in (uncollectable("f"), unknown("f"),
-                  observed("f", State.PRESENT, value=1.0, baseline=State.ABSENT)):
+                  observed("f", State.PRESENT, value=1.0, baseline_state=State.NORMAL)):
             assert Observable.from_dict(o.to_dict()) == o
+
+
+class TestBaselineRepresentation:
+    """#178 baseline is 'expected normal state/value' — both categorical and numeric are honest."""
+
+    def test_numeric_baseline_is_representable(self):
+        o = observed("cpu.utilization", State.HIGH, value=0.92, baseline_value=0.35)
+        assert o.value == 0.92
+        assert o.baseline_value == 0.35
+        assert o.baseline_state is None
+
+    def test_numeric_baseline_round_trips(self):
+        o = observed("cpu.utilization", State.HIGH, value=0.92, baseline_value=0.35)
+        assert Observable.from_dict(o.to_dict()) == o
+
+    def test_categorical_baseline_round_trips(self):
+        o = observed("errors", State.PRESENT, baseline_state=State.ABSENT)
+        assert o.baseline_state == State.ABSENT and o.baseline_value is None
+        assert Observable.from_dict(o.to_dict()) == o
+
+    def test_both_baseline_forms_coexist(self):
+        o = observed("lat", State.HIGH, value=900.0, baseline_state=State.NORMAL, baseline_value=120.0)
+        assert (o.baseline_state, o.baseline_value) == (State.NORMAL, 120.0)
+        assert Observable.from_dict(o.to_dict()) == o
+
+    def test_baseline_state_must_be_string_and_value_must_be_number(self):
+        with pytest.raises(ValueError):
+            observed("f", State.HIGH, baseline_state=0.35)  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            observed("f", State.HIGH, baseline_value="0.35")  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            observed("f", State.HIGH, baseline_value=True)  # type: ignore[arg-type]
 
 
 class TestAxisAndValueContracts:
@@ -76,10 +108,13 @@ class TestRuntimeRepresentationIsValidated:
         with pytest.raises(ValueError):
             Observable.from_dict({"id": "f", "availability": "observed", "state": 7})
 
-    def test_from_dict_rejects_non_string_baseline(self):
-        with pytest.raises(ValueError):
+    def test_from_dict_rejects_malformed_baselines(self):
+        with pytest.raises(ValueError):  # baseline_state must be a string
             Observable.from_dict({"id": "f", "availability": "observed", "state": "present",
-                                  "baseline": 3})
+                                  "baseline_state": 3})
+        with pytest.raises(ValueError):  # baseline_value must be a number
+            Observable.from_dict({"id": "f", "availability": "observed", "state": "present",
+                                  "baseline_value": "warm"})
 
     def test_raw_string_availability_is_normalized_to_the_enum(self):
         o = Observable(id="f", availability="observed", state=State.PRESENT)  # type: ignore[arg-type]
