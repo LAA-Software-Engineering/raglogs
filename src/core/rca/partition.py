@@ -114,21 +114,31 @@ class Partition:
     signature) and the ``f_usable`` set they were computed over. ``eliminated`` are the hypotheses
     a usable observation hard-contradicted.
 
-    **Zero classes is an explicit, defined state**, not an accident: :func:`partition` requires a
-    non-empty hypothesis set, so ``classes == ()`` can only mean *every* hypothesis was hard-eliminated
-    — no candidate is compatible with the observations (:attr:`no_surviving_hypothesis`). This is the
-    fourth structural outcome (alongside the singleton / one-multi-member / many-class cases that map
-    to IDENTIFIED / NON_IDENTIFIABLE / UNCERTAIN): Phase E maps it to its no-compatible-hypothesis
-    outcome (coverage/model failure), never to one of the three positive results."""
+    The outcome the partition maps to (IDENTIFIED / NON_IDENTIFIABLE / UNCERTAIN /
+    NO_COMPATIBLE_HYPOTHESIS) is defined by the cross-phase contract in
+    ``docs/rca-structural-outcomes.md``, not here — Phase E (#183) reads the outcome off this value.
+
+    The value type **enforces its own invariant**: a partition describes at least one hypothesis, so
+    an empty ``classes`` is only valid alongside a non-empty ``eliminated``. That makes
+    :attr:`no_surviving_hypothesis` mean exactly "every hypothesis was hard-eliminated" on any
+    construction path — a hollow ``Partition(classes=(), eliminated=())`` cannot masquerade as it."""
 
     classes: tuple[EquivalenceClass, ...]
     f_usable: tuple[str, ...]
     eliminated: tuple[Hypothesis, ...] = ()
 
+    def __post_init__(self) -> None:
+        if not self.classes and not self.eliminated:
+            raise ValueError(
+                "Partition describes no hypotheses: an empty `classes` is valid only when `eliminated` "
+                "is non-empty (the no-compatible-hypothesis state)"
+            )
+
     @property
     def no_surviving_hypothesis(self) -> bool:
-        """True when no hypothesis survived hard-incompatibility filtering (``classes`` is empty and
-        everything is in ``eliminated``) — the explicit no-compatible-hypothesis state."""
+        """True when no hypothesis survived hard-incompatibility filtering (``classes`` is empty, so
+        by the type invariant everything is in ``eliminated``) — the NO_COMPATIBLE_HYPOTHESIS state
+        defined in ``docs/rca-structural-outcomes.md``."""
         return not self.classes
 
 
@@ -227,7 +237,8 @@ def partition(
     observations, after dropping any hypothesis a usable observation hard-contradicts. **Reads no
     scores** — the result is identical for any ranking (Invariant 6). Raises if the set is empty or
     carries conflicting/degenerate definitions; a zero-class result means every hypothesis was
-    hard-eliminated (:attr:`Partition.no_surviving_hypothesis`)."""
+    hard-eliminated (:attr:`Partition.no_surviving_hypothesis`), the NO_COMPATIBLE_HYPOTHESIS state in
+    ``docs/rca-structural-outcomes.md``."""
     observations = list(observations)
     # Derive the ONE usable set and reuse it for signatures, D_missing, AND hard elimination — so a
     # below-threshold observation that is excluded from F_usable also cannot eliminate a hypothesis.

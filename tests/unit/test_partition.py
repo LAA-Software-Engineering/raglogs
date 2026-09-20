@@ -165,6 +165,12 @@ class TestInputBoundaryIsASet:
         assert p.no_surviving_hypothesis is True
         assert [h.id for h in p.eliminated] == ["process:a", "process:b"]
 
+    def test_hollow_partition_cannot_masquerade_as_no_survivor(self):
+        from src.core.rca.partition import Partition
+        # the value type enforces its own invariant, independent of the factory
+        with pytest.raises(ValueError):
+            Partition(classes=(), f_usable=(), eliminated=())
+
 
 class TestNonFiniteInputsRejected:
     @pytest.mark.parametrize("bad", [float("nan"), float("inf"), -0.1])
