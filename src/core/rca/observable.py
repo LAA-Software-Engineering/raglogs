@@ -15,24 +15,31 @@ This module introduces only the model and the invariant-preserving primitives th
 (C observation expectations, D structural partitioning, G class scoring) consume. **No ranking
 behaviour changes and nothing in the explain path calls this yet** — the milestone is the two
 invariants below, enforced by unit tests, not any accuracy change.
+
+The observable **id** is the coordinate identity: a set of observables carries at most one entry
+per id (:func:`_by_id` enforces this), so evidence and signatures cannot be corrupted by duplicate
+or contradictory coordinates.
 """
 from __future__ import annotations
 
+import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
 
 class Availability(str, Enum):
-    """Was a trustworthy measurement of this observable available for this incident?"""
+    """Was a trustworthy measurement of this observable available for this incident? (Closed set.)"""
 
     UNKNOWN = "unknown"   # not measured / not trustworthy — carries no incident evidence
     OBSERVED = "observed"  # measured — its state (including ABSENT) is evidence
 
 
-class State(str, Enum):
-    """The measured (or expected) categorical state. Open-ended by design; the common values are
-    named, and callers may add deployment-specific ones — equality is what the model relies on."""
+class State:
+    """Categorical observable states. **Open-ended by design**: ``state`` is a plain ``str`` so a
+    deployment may use its own values (e.g. ``"saturated"``); these named constants are just the
+    common ones. Equality of the string is all the model relies on, and any string round-trips."""
 
     PRESENT = "present"
     ABSENT = "absent"
@@ -45,18 +52,20 @@ class State(str, Enum):
 class Observable:
     """One availability-aware observable coordinate.
 
-    The two axes are independent and must stay independent: ``collectable`` is a *deployment*
-    property (can this integration ever emit it), ``availability`` is a *per-incident* property
-    (did we get a trustworthy measurement this time). ``state`` is only meaningful when
+    The two axes are independent: ``collectable`` is a *deployment* property (can this integration
+    ever emit it), ``availability`` is a *per-incident* property (did we get a trustworthy
+    measurement this time). ``state`` (a free-form str) is meaningful only when
     ``availability == OBSERVED``; for an UNKNOWN observable it is ``None``.
+
+    Contradictions are rejected at construction so no downstream code has to defend against them.
     """
 
     id: str
     collectable: bool = True
     availability: Availability = Availability.UNKNOWN
-    state: Optional[State] = None
+    state: Optional[str] = None
     value: Optional[float] = None
-    baseline: Optional[State] = None
+    baseline: Optional[str] = None
     measurement_confidence: float = 1.0
 
     def __post_init__(self) -> None:
@@ -67,11 +76,22 @@ class Observable:
                 f"observable {self.id!r}: UNKNOWN must not carry a state "
                 "(that would collapse 'not measured' into an observed value)"
             )
+        if not self.collectable and self.availability == Availability.OBSERVED:
+            raise ValueError(
+                f"observable {self.id!r}: collectable=False cannot be OBSERVED — an integration "
+                "that can never produce this evidence cannot have measured it"
+            )
+        c = self.measurement_confidence
+        if not isinstance(c, (int, float)) or math.isnan(c) or math.isinf(c) or not (0.0 <= c <= 1.0):
+            raise ValueError(
+                f"observable {self.id!r}: measurement_confidence must be a finite number in [0, 1], "
+                f"got {c!r}"
+            )
 
     @property
     def is_usable(self) -> bool:
         """Usable = collectable here AND actually measured this incident. Only usable observables
-        carry incident evidence, enter usable signatures, or act as distinguishers. UNKNOWN and
+        carry incident evidence, define usable IDs, or act as distinguishers. UNKNOWN and
         uncollectable observables are *not* usable (Invariants 1 and 2)."""
         return self.collectable and self.availability == Availability.OBSERVED
 
@@ -80,9 +100,9 @@ class Observable:
             "id": self.id,
             "collectable": self.collectable,
             "availability": self.availability.value,
-            "state": self.state.value if self.state is not None else None,
+            "state": self.state,
             "value": self.value,
-            "baseline": self.baseline.value if self.baseline is not None else None,
+            "baseline": self.baseline,
             "measurement_confidence": self.measurement_confidence,
         }
 
@@ -92,9 +112,9 @@ class Observable:
             id=d["id"],
             collectable=d.get("collectable", True),
             availability=Availability(d.get("availability", "unknown")),
-            state=State(d["state"]) if d.get("state") is not None else None,
+            state=d.get("state"),
             value=d.get("value"),
-            baseline=State(d["baseline"]) if d.get("baseline") is not None else None,
+            baseline=d.get("baseline"),
             measurement_confidence=d.get("measurement_confidence", 1.0),
         )
 
@@ -106,8 +126,8 @@ def unknown(id: str, *, collectable: bool = True, measurement_confidence: float 
                       measurement_confidence=measurement_confidence)
 
 
-def observed(id: str, state: State, *, value: Optional[float] = None,
-             baseline: Optional[State] = None, measurement_confidence: float = 1.0) -> Observable:
+def observed(id: str, state: str, *, value: Optional[float] = None,
+             baseline: Optional[str] = None, measurement_confidence: float = 1.0) -> Observable:
     """measured this incident; ``state`` (including ABSENT) is evidence."""
     return Observable(id=id, collectable=True, availability=Availability.OBSERVED, state=state,
                       value=value, baseline=baseline, measurement_confidence=measurement_confidence)
@@ -118,25 +138,50 @@ def uncollectable(id: str) -> Observable:
     return Observable(id=id, collectable=False, availability=Availability.UNKNOWN)
 
 
+def _by_id(observables: list[Observable]) -> dict[str, Observable]:
+    """Index observables by their coordinate id, rejecting duplicates. A set of observables carries
+    at most one entry per id — two entries for the same id (identical or, worse, contradictory like
+    a=PRESENT and a=ABSENT) would corrupt evidence and signatures, so it is an error, not silently
+    summed."""
+    by_id: dict[str, Observable] = {}
+    for o in observables:
+        if o.id in by_id:
+            raise ValueError(f"duplicate observable id {o.id!r}: a coordinate must appear at most once")
+        by_id[o.id] = o
+    return by_id
+
+
 def usable_observables(observables: list[Observable]) -> list[Observable]:
     """The observables that carry incident evidence: collectable AND OBSERVED. Excludes both
-    UNKNOWN (Invariant 1) and uncollectable (Invariant 2)."""
-    return [o for o in observables if o.is_usable]
+    UNKNOWN (Invariant 1) and uncollectable (Invariant 2). Rejects duplicate ids."""
+    return [o for o in _by_id(observables).values() if o.is_usable]
 
 
-def usable_signature(observables: list[Observable]) -> tuple[tuple[str, str], ...]:
-    """The (id, state) signature over usable observables, sorted by id. Uncollectable and UNKNOWN
-    observables never appear here (Invariant 2), so a signature can never depend on evidence this
-    deployment cannot produce or did not measure."""
-    return tuple(sorted((o.id, o.state.value) for o in usable_observables(observables)))
+def usable_ids(observables: list[Observable]) -> tuple[str, ...]:
+    """``F_usable`` — the sorted ids of usable observables. This is the domain a hypothesis
+    signature is projected over; uncollectable and UNKNOWN ids never appear here (Invariant 2)."""
+    return tuple(sorted(o.id for o in usable_observables(observables)))
 
 
-def evidence_score(expectations: dict[str, State], observables: list[Observable]) -> float:
+def hypothesis_signature(
+    prediction: Mapping[str, str], observables: list[Observable]
+) -> tuple[tuple[str, str], ...]:
+    """``S_O(C) = {(f, prediction(C, f)) : f in F_usable}`` — the hypothesis's *predicted* state at
+    each usable observable id, sorted by id. The state in the signature is the **prediction**, not
+    the incident observation; ids the hypothesis does not predict are omitted. Uncollectable and
+    UNKNOWN ids are excluded because they are not in ``F_usable`` (Invariant 2), so a signature can
+    never depend on evidence this deployment cannot produce or did not measure. (This is the Phase D
+    contract; Phase A provides the primitive — real predictions come from Phases B/C.)"""
+    ids = usable_ids(observables)
+    return tuple((f, prediction[f]) for f in ids if f in prediction)
+
+
+def evidence_score(expectations: Mapping[str, str], observables: list[Observable]) -> float:
     """A minimal, monotone evidence score for a hypothesis given its expected states per observable
     id: the confidence-weighted count of **usable** observables whose measured state matches the
-    expectation. UNKNOWN and uncollectable observables contribute nothing, which is exactly what
-    makes Invariants 1 and 2 hold — this primitive is what later phases' scoring must preserve.
-    (Phase A only: not wired into the ranker; no accuracy claim.)"""
+    expectation. UNKNOWN and uncollectable observables contribute nothing (Invariants 1 and 2), and
+    ``measurement_confidence`` is validated to ``[0, 1]`` at construction, so the score is monotone
+    and bounded. (Phase A only: not wired into the ranker; no accuracy claim.)"""
     total = 0.0
     for o in usable_observables(observables):
         expected = expectations.get(o.id)
@@ -148,23 +193,29 @@ def evidence_score(expectations: dict[str, State], observables: list[Observable]
 def integration_gaps(observables: list[Observable]) -> list[str]:
     """Ids of uncollectable observables — never incident evidence, but the basis for an
     *integration-gap* recommendation ("wire up this signal to disambiguate future incidents")."""
-    return sorted(o.id for o in observables if not o.collectable)
+    return sorted(o.id for o in _by_id(observables).values() if not o.collectable)
 
 
 @dataclass
 class ObservableSet:
-    """A small container so callers can pass observables around as one object; the invariants are
-    on the free functions above (and re-exposed here for convenience)."""
+    """A set of observables keyed by id (at most one entry per coordinate). Construction rejects
+    duplicate ids; the methods delegate to the invariant-preserving free functions above."""
 
     observables: list[Observable] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        _by_id(self.observables)  # reject duplicate coordinate ids up front
 
     def usable(self) -> list[Observable]:
         return usable_observables(self.observables)
 
-    def signature(self) -> tuple[tuple[str, str], ...]:
-        return usable_signature(self.observables)
+    def usable_ids(self) -> tuple[str, ...]:
+        return usable_ids(self.observables)
 
-    def score(self, expectations: dict[str, State]) -> float:
+    def signature(self, prediction: Mapping[str, str]) -> tuple[tuple[str, str], ...]:
+        return hypothesis_signature(prediction, self.observables)
+
+    def score(self, expectations: Mapping[str, str]) -> float:
         return evidence_score(expectations, self.observables)
 
     def integration_gaps(self) -> list[str]:
