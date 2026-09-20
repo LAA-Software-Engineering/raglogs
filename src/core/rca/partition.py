@@ -22,6 +22,7 @@ values (rate ``0.11`` vs ``0.13``) never fall into different classes (Invariant 
 """
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from itertools import combinations
@@ -32,6 +33,18 @@ from src.core.rca.observable import Observable, State
 from src.core.rca.observable import usable_observables as _collectable_observed
 
 _EMPTY_TAU: Mapping[str, float] = MappingProxyType({})
+
+
+def _finite_in_range(name: str, value: float, lo: float, hi: float) -> None:
+    """Reject non-real, non-finite, or out-of-range numbers (booleans are not numbers here) so a
+    malformed input can never acquire a structural category or silently erase evidence."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a real number, got {value!r}")
+    if not math.isfinite(value):
+        raise ValueError(f"{name} must be finite, got {value!r}")
+    if not (lo <= value <= hi):
+        hi_s = "inf" if hi == math.inf else hi
+        raise ValueError(f"{name} must be in [{lo}, {hi_s}], got {value!r}")
 
 
 @dataclass(frozen=True)
@@ -45,7 +58,16 @@ class UsabilityPolicy:
     tau: Mapping[str, float] = field(default_factory=lambda: _EMPTY_TAU)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "tau", MappingProxyType(dict(self.tau)))
+        # A frozen invalid policy is still invalid: validate every threshold as a real confidence in
+        # [0, 1] (consistent with Observable.measurement_confidence) so a malformed policy fails at the
+        # boundary rather than silently erasing all evidence via a NaN/out-of-range comparison.
+        _finite_in_range("default_tau", self.default_tau, 0.0, 1.0)
+        tau = dict(self.tau)
+        for k, v in tau.items():
+            if not isinstance(k, str) or not k:
+                raise ValueError(f"UsabilityPolicy: threshold id must be a non-empty string, got {k!r}")
+            _finite_in_range(f"tau[{k!r}]", v, 0.0, 1.0)
+        object.__setattr__(self, "tau", MappingProxyType(tau))
 
     def threshold(self, observable_id: str) -> float:
         return self.tau.get(observable_id, self.default_tau)
@@ -103,6 +125,24 @@ class Partition:
     eliminated: tuple[Hypothesis, ...] = ()
 
 
+def _distinct(hypotheses: Iterable[Hypothesis]) -> list[Hypothesis]:
+    """Materialize the hypothesis *set* ``H`` at the boundary: exact duplicates are canonicalized to
+    one, and two entries that share a causal ``id`` but define different behavior are rejected as
+    conflicting. Input multiplicity must not become causal cardinality — otherwise ``[h, h]`` would
+    turn an IDENTIFIED result into NON_IDENTIFIABLE (with an empty, invalid D_missing) in Phase E."""
+    by_id: dict[str, Hypothesis] = {}
+    for h in hypotheses:
+        prev = by_id.get(h.id)
+        if prev is None:
+            by_id[h.id] = h
+        elif prev != h:
+            raise ValueError(
+                f"partition: conflicting hypotheses share id {h.id!r} — a causal id must have one "
+                "definition"
+            )
+    return list(by_id.values())
+
+
 def _d_missing(members: tuple[Hypothesis, ...], f_usable: frozenset[str]) -> frozenset[str]:
     """Coordinates on which some pair of members' categorical predictions differ and which are NOT
     usable — i.e. exactly the distinguishers that were not collected. Members already agree on every
@@ -133,7 +173,7 @@ def partition(
 
     survivors: list[Hypothesis] = []
     eliminated: list[Hypothesis] = []
-    for h in hypotheses:
+    for h in _distinct(hypotheses):
         (eliminated if h.hard_incompatibility(usable) else survivors).append(h)
 
     grouped: dict[tuple[tuple[str, str], ...], list[Hypothesis]] = {}
@@ -156,7 +196,16 @@ def partition(
 def discretize_ratio(ratio: float, *, high: float = 2.0, low: float = 0.5) -> str:
     """Discretize an incident/baseline **multiplier** into a categorical band. The ``high=2.0`` gate
     is the spike's load-bearing latency threshold (stable at ``≥2×``, degenerate below); below-``low``
-    is a symmetric drop. Nearby values land in the same band, so they never split a class (Invariant 7)."""
+    is a symmetric drop. Nearby values land in the same band, so they never split a class (Invariant 7).
+
+    A ratio must be finite and non-negative and the thresholds coherent (``0 ≤ low ≤ high``): a
+    non-finite/invalid magnitude must never acquire a category (that is the collapse this epic
+    prevents), so it raises instead of silently reading ``NORMAL``."""
+    _finite_in_range("ratio", ratio, 0.0, math.inf)
+    _finite_in_range("high", high, 0.0, math.inf)
+    _finite_in_range("low", low, 0.0, math.inf)
+    if low > high:
+        raise ValueError(f"discretize_ratio: low ({low}) must not exceed high ({high})")
     if ratio >= high:
         return State.HIGH
     if ratio <= low:
@@ -167,5 +216,10 @@ def discretize_ratio(ratio: float, *, high: float = 2.0, low: float = 0.5) -> st
 def discretize_rate(rate: float, *, cutoff: float = 0.05) -> str:
     """Discretize an error **rate** to presence. The spike found the error-rate cutoff is not a
     sensitive knob (error identification keys on span/log presence), so this is a simple threshold:
-    ``0.11`` and ``0.13`` both read ``PRESENT`` and cannot form distinct classes (Invariant 7)."""
+    ``0.11`` and ``0.13`` both read ``PRESENT`` and cannot form distinct classes (Invariant 7).
+
+    A rate and its cutoff must be finite and in ``[0, 1]``: a non-finite/out-of-range value raises
+    rather than being read as ``ABSENT`` (which would fabricate observed absence from missing data)."""
+    _finite_in_range("rate", rate, 0.0, 1.0)
+    _finite_in_range("cutoff", cutoff, 0.0, 1.0)
     return State.PRESENT if rate >= cutoff else State.ABSENT

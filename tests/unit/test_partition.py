@@ -98,6 +98,65 @@ class TestPartitionBasics:
         assert dead in partition([dead], obs, policy).eliminated
 
 
+class TestInputBoundaryIsASet:
+    def test_exact_duplicates_do_not_change_cardinality(self):
+        obs = [observed("a", "present")]
+        h = _h("h1", {"a": "present"})
+        single = partition([h], obs)
+        dup = partition([h, h], obs)
+        assert dup == single
+        assert dup.classes[0].is_singleton and dup.classes[0].d_missing == frozenset()
+
+    def test_conflicting_definitions_for_one_id_are_rejected(self):
+        obs = [observed("a", "present")]
+        h1 = _h("dup", {"a": "present"})
+        h2 = _h("dup", {"a": "absent"})  # same id, different behavior
+        with pytest.raises(ValueError):
+            partition([h1, h2], obs)
+
+    def test_partition_is_permutation_invariant(self):
+        obs = [observed("a", "present")]
+        hs = [_h("h1", {"a": "present"}), _h("h2", {"a": "absent"}), _h("h3", {"a": "present"})]
+        assert partition(hs, obs) == partition(list(reversed(hs)), obs)
+
+
+class TestNonFiniteInputsRejected:
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), -0.1])
+    def test_ratio_rejects_non_finite_and_negative(self, bad):
+        with pytest.raises(ValueError):
+            discretize_ratio(bad)
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), -0.1, 1.5])
+    def test_rate_rejects_non_finite_and_out_of_range(self, bad):
+        with pytest.raises(ValueError):
+            discretize_rate(bad)
+
+    def test_ratio_rejects_incoherent_thresholds(self):
+        with pytest.raises(ValueError):
+            discretize_ratio(1.0, high=0.5, low=2.0)
+
+    def test_booleans_are_not_valid_magnitudes(self):
+        with pytest.raises(ValueError):
+            discretize_rate(True)  # type: ignore[arg-type]
+
+
+class TestPolicyValidation:
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), 1.5, -0.1])
+    def test_default_tau_must_be_a_confidence(self, bad):
+        with pytest.raises(ValueError):
+            UsabilityPolicy(default_tau=bad)
+
+    def test_override_thresholds_are_validated(self):
+        with pytest.raises(ValueError):
+            UsabilityPolicy(tau={"a": float("nan")})
+        with pytest.raises(ValueError):
+            UsabilityPolicy(tau={"a": 2.0})
+
+    def test_override_ids_must_be_non_empty_strings(self):
+        with pytest.raises(ValueError):
+            UsabilityPolicy(tau={"": 0.5})
+
+
 class TestInvariant5EquivalenceNotScoreProximity:
     def test_same_signature_far_apart_scores_still_one_class(self):
         obs = [observed("a", "present")]
