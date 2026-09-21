@@ -97,6 +97,22 @@ class TestAvailability:
                    _M("db", "latency_ms", 11.0, _T0 + timedelta(minutes=1))]
         assert summarize_metrics(samples, _T0)["db"].sig_state == State.ABSENT
 
+    def test_malformed_latency_cannot_produce_observed_absent(self):
+        # negative incident latency is malformed telemetry, not proof of normal; the latency branch
+        # is UNKNOWN, so with a measured-normal error branch the combined sig is UNKNOWN, not ABSENT.
+        samples = [_M("db", "error_rate", 0.01, _T0 + timedelta(minutes=1)),
+                   _M("db", "latency_ms", 10.0, _T0 - timedelta(minutes=1)),   # baseline
+                   _M("db", "latency_ms", -10.0, _T0 + timedelta(minutes=1))]  # malformed incident
+        sig = summarize_metrics(samples, _T0)["db"]
+        assert sig.latency_measured is False and sig.sig_state is None
+        assert build_observables({"db": sig}) == []                  # no fabricated ABSENT in F_usable
+
+    def test_out_of_range_error_branch_is_unmeasured(self):
+        # error_rate > 1 is not a valid rate -> the error branch is UNKNOWN, not clamped to a category
+        samples = [_M("db", "error_rate", 5.0, _T0 + timedelta(minutes=1))]
+        sig = summarize_metrics(samples, _T0)["db"]
+        assert sig.error_measured is False and sig.sig_state is None
+
     def test_zero_latency_baseline_is_unknown_not_absent(self):
         # baseline latency 0 makes 30/0 undefined; with a measured-normal error branch the OR must
         # NOT be declared ABSENT — the latency branch is unavailable, so sig is UNKNOWN.

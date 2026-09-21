@@ -29,6 +29,7 @@ measured).
 """
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
@@ -89,16 +90,19 @@ def summarize_metrics(samples: list, window_start: datetime) -> dict[str, Servic
         inc_err = inc[svc].get("error_rate", [])
         inc_lat = inc[svc].get("latency_ms", [])
         base_lat_mean = mean(base[svc].get("latency_ms", []))
-
-        error_measured = bool(inc_err)
-        # A ratio needs an incident sample AND a *positive* baseline — a zero/absent baseline makes
-        # 30/0 undefined (UNKNOWN), not a normal ratio, so the latency branch is not measured then.
-        latency_measured = bool(inc_lat) and base_lat_mean > 0
         err = mean(inc_err)
-        ratio = mean(inc_lat) / base_lat_mean if latency_measured else 1.0
+        # A ratio needs an incident sample AND a *positive* baseline (30/0 is UNKNOWN, not normal).
+        ratio = mean(inc_lat) / base_lat_mean if inc_lat and base_lat_mean > 0 else 1.0
 
-        error_present = error_measured and discretize_rate(min(err, 1.0)) == State.PRESENT
-        latency_high = latency_measured and discretize_ratio(max(ratio, 0.0)) == State.HIGH
+        # Validate each branch against the core's numeric contract instead of clamping malformed
+        # telemetry into a category: an out-of-range/non-finite value leaves that branch UNKNOWN
+        # (unmeasured), never a fabricated OBSERVED-normal. A rate must be finite in [0,1]; a latency
+        # ratio finite and non-negative.
+        error_measured = bool(inc_err) and math.isfinite(err) and 0.0 <= err <= 1.0
+        latency_measured = bool(inc_lat) and base_lat_mean > 0 and math.isfinite(ratio) and ratio >= 0.0
+
+        error_present = error_measured and discretize_rate(err) == State.PRESENT
+        latency_high = latency_measured and discretize_ratio(ratio) == State.HIGH
         if error_present or latency_high:          # a measured branch proves the anomaly
             sig_state: Optional[str] = State.PRESENT
         elif error_measured and latency_measured:  # both measured and normal -> proven absent
