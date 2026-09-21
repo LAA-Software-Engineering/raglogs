@@ -25,7 +25,7 @@ from src.core.rca.partition import (
     discretize_ratio,
     discretize_rate,
     partition,
-    structural_signature,
+    signature,
     usable_ids,
 )
 
@@ -47,10 +47,10 @@ class TestFUsable:
         assert usable_ids(obs, UsabilityPolicy(default_tau=0.5)) == ("a",)
         assert usable_ids(obs, UsabilityPolicy(tau={"a": 0.95})) == ("d",)
 
-    def test_structural_signature_projects_full_behavior_over_f_usable(self):
-        h = _h("h", {"a": "present", "d": "high", "z": "absent"})  # z not usable -> omitted
-        assert structural_signature(h, ("a", "d")) == (
-            ("a", ("present", ())), ("d", ("high", ())),
+    def test_signature_projects_categorical_predictions_over_f_usable(self):
+        # predictions only, over F_usable; ids not predicted or not usable are omitted
+        assert signature({"a": "present", "d": "high", "z": "absent"}, ("a", "d")) == (
+            ("a", "present"), ("d", "high"),
         )
 
 
@@ -135,12 +135,16 @@ class TestInputBoundaryIsASet:
         assert partition([a, b], obs) == partition([b, a], obs)
         assert [h.id for h in partition([b, a], obs).eliminated] == ["process:a", "process:b"]
 
-    def test_distinct_ids_with_identical_full_model_are_rejected(self):
+    def test_distinct_ids_with_equal_predictions_are_grouped_not_rejected(self):
+        # an equivalence relation groups distinct-but-equivalent elements — this is the honest
+        # non-identifiability the partition represents, not a malformed input.
         m = ObservationModel(expected=(ExpectedObservation("f", "present"),))
         a = from_observation_model("h1", Kind.PROCESS, "a", m)
-        b = from_observation_model("h2", Kind.PROCESS, "b", m)  # different id, identical behavior
-        with pytest.raises(ValueError):
-            partition([a, b], [observed("f", "present")])
+        b = from_observation_model("h2", Kind.PROCESS, "b", m)  # distinct id, identical predictions
+        p = partition([a, b], [observed("f", "present")])
+        assert len(p.classes) == 1
+        assert len(p.classes[0].members) == 2
+        assert p.classes[0].d_missing == frozenset()  # irreducible: no prediction distinguisher
 
     def test_same_id_divergent_provenance_is_rejected(self):
         # Hypothesis.__eq__ ignores source, so silently keeping the first copy would make the score
@@ -263,32 +267,21 @@ class TestDMissing:
         assert len(p.classes) == 1
         assert p.classes[0].d_missing == frozenset({"b"})
 
-    def test_hard_rule_difference_on_unusable_coordinate_is_missing(self):
-        # same predictions -> same class; only h1 hard-contradicts on the UNKNOWN coordinate 'g'.
-        # measuring g=true would eliminate h1 and retain h2, so g is a missing distinguisher.
+    def test_hard_rules_do_not_enter_the_relation_or_d_missing(self):
+        # #182 keeps ~_O prediction-only: a hard-rule difference (only h1 contradicts g) is NOT a
+        # prediction distinguisher. Same predictions -> one class; g is absent from d_missing whether
+        # g is UNKNOWN or usable. (Hard-rule discriminators are surfaced separately by Phase E.)
         m1 = ObservationModel(expected=(ExpectedObservation("f", "present"),),
                               contradictions=(Contradiction("g", frozenset({"true"})),))
         m2 = ObservationModel(expected=(ExpectedObservation("f", "present"),))
         h1 = from_observation_model("h1", Kind.PROCESS, "h1", m1)
         h2 = from_observation_model("h2", Kind.PROCESS, "h2", m2)
-        obs = [observed("f", "present"), unknown("g")]
-        p = partition([h1, h2], obs)
-        assert len(p.classes) == 1
-        assert p.classes[0].d_missing == frozenset({"g"})
-
-    def test_usable_hard_rule_difference_creates_distinct_classes(self):
-        # same predictions, but only h1 hard-contradicts g=true, and g is USABLE (observed false).
-        # one equivalence relation: the usable hard-rule difference must split them into two classes,
-        # never a multi-member class with empty D_missing.
-        m1 = ObservationModel(expected=(ExpectedObservation("f", "present"),),
-                              contradictions=(Contradiction("g", frozenset({"true"})),))
-        m2 = ObservationModel(expected=(ExpectedObservation("f", "present"),))
-        h1 = from_observation_model("h1", Kind.PROCESS, "h1", m1)
-        h2 = from_observation_model("h2", Kind.PROCESS, "h2", m2)
-        obs = [observed("f", "present"), observed("g", "false")]  # g usable, neither eliminated
-        p = partition([h1, h2], obs)
-        assert len(p.classes) == 2
-        assert all(c.is_singleton for c in p.classes)
+        for gobs in (unknown("g"), observed("g", "false")):  # g unavailable, or usable-but-false
+            p = partition([h1, h2], [observed("f", "present"), gobs])
+            assert len(p.classes) == 1
+            assert len(p.classes[0].members) == 2
+            assert "g" not in p.classes[0].d_missing
+            assert p.classes[0].d_missing == frozenset()  # irreducible under the prediction model
 
     def test_singleton_class_has_empty_d_missing(self):
         obs = [observed("a", "present")]

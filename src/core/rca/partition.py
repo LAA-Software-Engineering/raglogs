@@ -95,11 +95,18 @@ def usable_ids(observations: Iterable[Observable], policy: UsabilityPolicy = DEF
 
 @dataclass(frozen=True)
 class EquivalenceClass:
-    """One ``~_O`` class: the shared usable ``signature``, the ``members`` (sorted by id), and
-    ``d_missing`` — the coordinates that *would* separate the members but were not usable this
-    incident (uncollectable, UNKNOWN, or below threshold). ``d_missing`` is empty for a singleton."""
+    """One ``~_O`` class: the shared usable prediction ``signature``, the ``members`` (sorted by id),
+    and ``d_missing`` — the coordinates whose *predictions* would separate the members but were not
+    usable this incident (uncollectable, UNKNOWN, or below threshold).
 
-    signature: tuple[tuple[str, tuple], ...]
+    ``d_missing`` may be empty even for a **multi-member** class: two hypotheses can predict identically
+    over every coordinate yet be distinct causes (no prediction distinguisher exists outside
+    ``F_usable``). Phase E reads that as its ``IRREDUCIBLE`` outcome — it is a legitimate class, not an
+    invalid one, so this type imposes no "multi-member ⇒ non-empty d_missing" rule (such a class can
+    also sit inside a larger ``UNCERTAIN`` partition). Hard-rule discriminators are deliberately **not**
+    part of ``~_O`` or ``d_missing``; #182 keeps the relation prediction-only."""
+
+    signature: tuple[tuple[str, str], ...]
     members: tuple[Hypothesis, ...]
     d_missing: frozenset[str]
 
@@ -142,35 +149,12 @@ class Partition:
         return not self.classes
 
 
-def _coord_behavior(h: Hypothesis) -> dict[str, tuple]:
-    """The hypothesis's full structural behavior per coordinate: ``{f: (predicted_state, hard_states)}``
-    where ``predicted_state`` is its categorical prediction (or ``None``) and ``hard_states`` is the
-    sorted tuple of states of ``f`` that would hard-eliminate it. Both halves of the Phase C model
-    matter for distinguishability — measuring a coordinate can separate two hypotheses either because
-    they predict it differently *or* because it eliminates one and not the other."""
-    contra = {
-        c.observable_id: tuple(sorted(c.states))
-        for c in (h.observation_model.contradictions if h.observation_model else ())
-    }
-    coords = set(h.predictions) | set(contra)
-    return {f: (h.predictions.get(f), contra.get(f, ())) for f in coords}
-
-
-def _behavior(h: Hypothesis) -> tuple:
-    """A hypothesis's complete, id/localization-free behavioral fingerprint (predictions + hard rules).
-    Two hypotheses with the same fingerprint are indistinguishable under *every* observation."""
-    return tuple(sorted(_coord_behavior(h).items()))
-
-
-def structural_signature(h: Hypothesis, f_usable: tuple[str, ...]) -> tuple[tuple[str, tuple], ...]:
-    """``S_O(C)`` — the hypothesis's full structural behavior ``(predicted_state, hard_states)``
-    projected over ``F_usable``, sorted by id. This is the **single** equivalence relation: it drives
-    class membership, and its complement over non-usable coordinates is :func:`_d_missing`. Using the
-    full behavior (not predictions alone) means a *usable* hard-rule difference creates distinct
-    classes, while an *unavailable* one becomes a missing distinguisher — so a multi-member class can
-    never have an empty ``D_missing``."""
-    behavior = _coord_behavior(h)
-    return tuple((f, behavior[f]) for f in f_usable if f in behavior)
+def signature(prediction: Mapping[str, str], f_usable: tuple[str, ...]) -> tuple[tuple[str, str], ...]:
+    """``S_O(C) = { (f, prediction(C, f)) : f ∈ F_usable }`` — the hypothesis's **categorical
+    predictions only**, projected over ``F_usable`` and sorted by id; ids it does not predict are
+    omitted. This alone decides class membership (#182). Hard-contradiction rules are deliberately
+    excluded — they act only in the earlier filtering step, never in ``~_O``."""
+    return tuple((f, prediction[f]) for f in f_usable if f in prediction)
 
 
 def _distinct(hypotheses: Iterable[Hypothesis]) -> list[Hypothesis]:
@@ -179,10 +163,12 @@ def _distinct(hypotheses: Iterable[Hypothesis]) -> list[Hypothesis]:
     identical behavior **and** identical ranking provenance, is canonicalized to one; anything else
     sharing an id is rejected — differing behavior is a conflicting definition, and differing
     ``source`` is ambiguous provenance (``Hypothesis.__eq__`` ignores ``source``, so silently keeping
-    the first copy would make which score reaches Phase G input-order-dependent). Two *distinct* ids
-    with an identical full behavioral model are rejected as degenerate — no observation could ever
-    separate them, so they would form a multi-member class with an empty D_missing, the invalid
-    state #183 forbids. Input multiplicity must not become causal cardinality."""
+    the first copy would make which score reaches Phase G input-order-dependent).
+
+    Distinct ids that happen to be *equivalent* (equal signatures — even identical full models) are
+    **not** rejected: an equivalence relation exists precisely to group distinct-but-equivalent
+    elements, and that grouping is the honest non-identifiability the partition is meant to represent.
+    Input multiplicity must not become causal cardinality, but genuine distinct hypotheses always do."""
     by_id: dict[str, Hypothesis] = {}
     for h in hypotheses:
         prev = by_id.get(h.id)
@@ -201,29 +187,20 @@ def _distinct(hypotheses: Iterable[Hypothesis]) -> list[Hypothesis]:
                 "provenance cannot be silently discarded"
             )
         # else: a distinct object with identical behavior AND provenance — a harmless duplicate.
-    seen: dict[tuple, str] = {}
-    for h in by_id.values():
-        fingerprint = _behavior(h)
-        if fingerprint in seen:
-            raise ValueError(
-                f"partition: hypotheses {seen[fingerprint]!r} and {h.id!r} have identical behavioral "
-                "models — no observation could distinguish them (a degenerate hypothesis set)"
-            )
-        seen[fingerprint] = h.id
     return list(by_id.values())
 
 
 def _d_missing(members: tuple[Hypothesis, ...], f_usable: frozenset[str]) -> frozenset[str]:
-    """Coordinates on which some pair of members' full structural behavior — categorical prediction
-    *or* hard-elimination rule — differs and which are NOT usable: exactly the distinguishers that
-    were not collected. Members already agree over every usable coordinate (that is why they share a
-    class), so any behavioral disagreement is on a non-usable one."""
+    """Coordinates on which some pair of members' categorical **predictions** differ and which are NOT
+    usable — the prediction distinguishers that were not collected. Members already agree on every
+    usable predicted coordinate (that is why they share a class), so any prediction disagreement is on
+    a non-usable one. May be empty for a multi-member class (members predict identically everywhere):
+    that is the ``IRREDUCIBLE`` case, not an error. Hard-rule discriminators are not counted here."""
     missing: set[str] = set()
-    behaviors = [_coord_behavior(m) for m in members]
-    default = (None, ())
-    for ba, bb in combinations(behaviors, 2):
-        for f in set(ba) | set(bb):
-            if f not in f_usable and ba.get(f, default) != bb.get(f, default):
+    for a, b in combinations(members, 2):
+        pa, pb = a.predictions, b.predictions
+        for f in set(pa) | set(pb):
+            if f not in f_usable and pa.get(f) != pb.get(f):
                 missing.add(f)
     return frozenset(missing)
 
@@ -235,10 +212,11 @@ def partition(
 ) -> Partition:
     """Partition ``hypotheses`` (a non-empty set) into ``~_O`` equivalence classes over the usable
     observations, after dropping any hypothesis a usable observation hard-contradicts. **Reads no
-    scores** — the result is identical for any ranking (Invariant 6). Raises if the set is empty or
-    carries conflicting/degenerate definitions; a zero-class result means every hypothesis was
-    hard-eliminated (:attr:`Partition.no_surviving_hypothesis`). Assigning an outcome to the partition
-    is Phase E's responsibility (#183), not this function's."""
+    scores** — the result is identical for any ranking (Invariant 6). Raises if the set is empty or an
+    id carries a conflicting definition / divergent provenance; distinct-but-equivalent hypotheses are
+    grouped, not rejected. A zero-class result means every hypothesis was hard-eliminated
+    (:attr:`Partition.no_surviving_hypothesis`). Assigning an outcome to the partition is Phase E's
+    responsibility (#183), not this function's."""
     observations = list(observations)
     # Derive the ONE usable set and reuse it for signatures, D_missing, AND hard elimination — so a
     # below-threshold observation that is excluded from F_usable also cannot eliminate a hypothesis.
@@ -257,9 +235,9 @@ def partition(
     for h in distinct:
         (eliminated if h.hard_incompatibility(usable) else survivors).append(h)
 
-    grouped: dict[tuple[tuple[str, tuple], ...], list[Hypothesis]] = {}
+    grouped: dict[tuple[tuple[str, str], ...], list[Hypothesis]] = {}
     for h in survivors:
-        grouped.setdefault(structural_signature(h, f_usable), []).append(h)
+        grouped.setdefault(signature(h.predictions, f_usable), []).append(h)
 
     classes = tuple(
         EquivalenceClass(
@@ -267,9 +245,7 @@ def partition(
             members=(members := tuple(sorted(hs, key=lambda h: h.id))),
             d_missing=_d_missing(members, f_usable_set),
         )
-        # sort by repr: a signature value may contain None (an unpredicted but hard-ruled coordinate),
-        # which is not orderable against a str, but its repr is a stable deterministic key.
-        for sig, hs in sorted(grouped.items(), key=lambda kv: repr(kv[0]))
+        for sig, hs in sorted(grouped.items())
     )
     # Sort eliminated by (now-unique) id too, so the entire Partition is permutation-invariant.
     eliminated_sorted = tuple(sorted(eliminated, key=lambda h: h.id))
