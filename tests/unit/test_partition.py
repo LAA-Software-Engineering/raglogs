@@ -175,6 +175,15 @@ class TestInputBoundaryIsASet:
         with pytest.raises(ValueError):
             Partition(classes=(), f_usable=(), eliminated=())
 
+    def test_empty_equivalence_class_is_rejected(self):
+        from src.core.rca.partition import EquivalenceClass, Partition
+        with pytest.raises(ValueError):
+            EquivalenceClass(signature=(), members=(), d_missing=frozenset())
+        # ...so the nested hollow partition the reviewer flagged cannot be built either
+        with pytest.raises(ValueError):
+            Partition(classes=(EquivalenceClass(signature=(), members=(), d_missing=frozenset()),),
+                      f_usable=(), eliminated=())
+
 
 class TestNonFiniteInputsRejected:
     @pytest.mark.parametrize("bad", [float("nan"), float("inf"), -0.1])

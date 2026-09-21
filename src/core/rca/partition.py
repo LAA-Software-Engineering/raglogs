@@ -110,6 +110,13 @@ class EquivalenceClass:
     members: tuple[Hypothesis, ...]
     d_missing: frozenset[str]
 
+    def __post_init__(self) -> None:
+        # A class is an equivalence class of *hypotheses*: it must contain at least one. An empty
+        # class is neither a singleton nor a multi-member class, so it would fall outside the outcome
+        # function entirely — reject it at construction, on every path, not just in the factory.
+        if not self.members:
+            raise ValueError("EquivalenceClass must contain at least one member")
+
     @property
     def is_singleton(self) -> bool:
         return len(self.members) == 1
