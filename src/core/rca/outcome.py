@@ -175,18 +175,56 @@ class StructuralResult:
         object.__setattr__(self, "potential_elimination_checks", tuple(self.potential_elimination_checks))
         object.__setattr__(self, "eliminated", tuple(self.eliminated))
         object.__setattr__(self, "integration_gaps", tuple(self.integration_gaps))
-        if self.outcome == Outcome.NO_COMPATIBLE_HYPOTHESIS and self.localization:
-            raise ValueError("NO_COMPATIBLE_HYPOTHESIS must not claim a localization")
+        # The packet cannot contradict its own outcome algebra: the outcome must match the class
+        # structure, and the top-level summaries must be exactly their class-derived values, so a
+        # downstream consumer can trust the object without re-deriving the inference.
+        if self.outcome != _expected_outcome(self.classes):
+            raise ValueError(
+                f"outcome {self.outcome.value!r} does not match the class structure "
+                f"(expected {_expected_outcome(self.classes).value!r})"
+            )
+        if self.localization != _summary_localization(self.classes):
+            raise ValueError("localization must be the distinct member localizations of the classes")
+        if self.d_missing != _union_d_missing(self.classes):
+            raise ValueError("d_missing must be the union of the classes' d_missing")
+        if self.potential_elimination_checks != _union_checks(self.classes):
+            raise ValueError("potential_elimination_checks must be the union of the classes' checks")
+        if self.outcome == Outcome.NO_COMPATIBLE_HYPOTHESIS:
+            if not self.eliminated or any(not e.evidence for e in self.eliminated):
+                raise ValueError(
+                    "NO_COMPATIBLE_HYPOTHESIS requires eliminated hypotheses, each with the "
+                    "observation that eliminated it"
+                )
+
+
+def _expected_outcome(classes: tuple[ClassView, ...]) -> Outcome:
+    if not classes:
+        return Outcome.NO_COMPATIBLE_HYPOTHESIS
+    if len(classes) > 1:
+        return Outcome.UNCERTAIN
+    (cls,) = classes
+    if cls.is_singleton:
+        return Outcome.IDENTIFIED
+    return Outcome.NON_IDENTIFIABLE if cls.d_missing else Outcome.IRREDUCIBLE
+
+
+def _summary_localization(classes: tuple[ClassView, ...]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(m.localization for v in classes for m in v.members))
+
+
+def _union_d_missing(classes: tuple[ClassView, ...]) -> frozenset[str]:
+    return frozenset().union(*(v.d_missing for v in classes)) if classes else frozenset()
+
+
+def _union_checks(classes: tuple[ClassView, ...]) -> tuple[EliminationCheck, ...]:
+    return tuple(sorted(
+        {chk for v in classes for chk in v.elimination_checks},
+        key=lambda e: (e.hypothesis_id, e.observable_id),
+    ))
 
 
 def _member_view(h) -> MemberView:
     return MemberView(id=h.id, kind=h.kind.value, localization=h.localization)
-
-
-def _observed_states(observations: list[Observable], f_usable: frozenset[str]) -> dict[str, str]:
-    """The observed state of each usable coordinate (from the same observations the partition used)."""
-    return {o.id: o.state for o in observations
-            if o.id in f_usable and o.state is not None}
 
 
 def _elimination_checks(cls: EquivalenceClass, f_usable: frozenset[str]) -> tuple[EliminationCheck, ...]:
@@ -237,30 +275,22 @@ def _class_view(cls: EquivalenceClass, f_usable: frozenset[str], observed: dict[
 
 
 def resolve(partition: Partition, observations: Iterable[Observable] = ()) -> StructuralResult:
-    """Assemble the deterministic evidence packet for ``partition``. Pass the **same observations** the
-    partition was built from: they supply the observed states behind each class's supporting evidence,
-    the eliminating fact for each ruled-out hypothesis, and the ``integration_gaps``. They never affect
-    the outcome, which is a pure function of the partition."""
-    observations = list(observations)
+    """Assemble the deterministic evidence packet for ``partition``. The supporting evidence and each
+    elimination fact are derived from the partition's **own** authoritative usable snapshot
+    (:attr:`~src.core.rca.partition.Partition.usable_states`), so a caller cannot rewrite the facts
+    behind the partition. ``observations`` is optional and used **only** for ``integration_gaps``
+    (uncollectable coordinates — a wire-this-up recommendation); it never affects the outcome or the
+    evidence."""
     outcome = classify(partition)
     f_usable = frozenset(partition.f_usable)
-    observed = _observed_states(observations, f_usable)
+    observed = partition.usable_states  # authoritative — the facts that produced this partition
     views = tuple(_class_view(c, f_usable, observed) for c in partition.classes)
-
-    localization: tuple[str, ...] = tuple(
-        dict.fromkeys(m.localization for v in views for m in v.members)
-    )
-    d_missing = frozenset().union(*(v.d_missing for v in views)) if views else frozenset()
-    checks = tuple(sorted(
-        {chk for v in views for chk in v.elimination_checks},
-        key=lambda e: (e.hypothesis_id, e.observable_id),
-    ))
     return StructuralResult(
         outcome=outcome,
-        localization=localization,
+        localization=_summary_localization(views),
         classes=views,
-        d_missing=d_missing,
-        potential_elimination_checks=checks,
+        d_missing=_union_d_missing(views),
+        potential_elimination_checks=_union_checks(views),
         eliminated=tuple(_eliminated_view(h, observed) for h in partition.eliminated),
-        integration_gaps=tuple(integration_gaps(observations)),
+        integration_gaps=tuple(integration_gaps(list(observations))),
     )

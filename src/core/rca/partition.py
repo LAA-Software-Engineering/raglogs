@@ -141,23 +141,39 @@ class Partition:
     The value type **enforces its own invariant**: a partition describes at least one hypothesis, so
     an empty ``classes`` is only valid alongside a non-empty ``eliminated``. That makes
     :attr:`no_surviving_hypothesis` mean exactly "every hypothesis was hard-eliminated" on any
-    construction path — a hollow ``Partition(classes=(), eliminated=())`` cannot masquerade as it."""
+    construction path — a hollow ``Partition(classes=(), eliminated=())`` cannot masquerade as it.
+
+    ``usable`` is the **authoritative snapshot** of the usable observations the partition was built
+    from (the confidence-gated collectable∧OBSERVED set). It is retained so Phase E derives its
+    supporting evidence from the very facts that produced the partition, not from a separately-passed
+    observation list that might disagree. ``f_usable`` (the sorted usable ids) and ``usable_states``
+    (id → observed state) are derived from it."""
 
     classes: tuple[EquivalenceClass, ...]
-    f_usable: tuple[str, ...]
+    usable: tuple[Observable, ...] = ()
     eliminated: tuple[Hypothesis, ...] = ()
 
     def __post_init__(self) -> None:
         # Own the representation before validating (see EquivalenceClass): snapshot into tuples so a
         # caller's aliased list cannot later empty `classes`/`eliminated` and bypass the invariant.
         object.__setattr__(self, "classes", tuple(self.classes))
-        object.__setattr__(self, "f_usable", tuple(self.f_usable))
+        object.__setattr__(self, "usable", tuple(self.usable))
         object.__setattr__(self, "eliminated", tuple(self.eliminated))
         if not self.classes and not self.eliminated:
             raise ValueError(
                 "Partition describes no hypotheses: an empty `classes` is valid only when `eliminated` "
                 "is non-empty (every hypothesis was hard-eliminated)"
             )
+
+    @property
+    def f_usable(self) -> tuple[str, ...]:
+        """``F_usable`` — the sorted ids of the usable observations (derived from :attr:`usable`)."""
+        return tuple(sorted(o.id for o in self.usable))
+
+    @property
+    def usable_states(self) -> dict[str, str]:
+        """The authoritative id → observed-state map for the usable observations."""
+        return {o.id: o.state for o in self.usable if o.state is not None}
 
     @property
     def no_surviving_hypothesis(self) -> bool:
@@ -267,7 +283,10 @@ def partition(
     )
     # Sort eliminated by (now-unique) id too, so the entire Partition is permutation-invariant.
     eliminated_sorted = tuple(sorted(eliminated, key=lambda h: h.id))
-    return Partition(classes=classes, f_usable=f_usable, eliminated=eliminated_sorted)
+    # Retain the usable observations (sorted by id, deterministic) as the authoritative evidence
+    # snapshot Phase E reads — f_usable is derived from it.
+    usable_snapshot = tuple(sorted(usable, key=lambda o: o.id))
+    return Partition(classes=classes, usable=usable_snapshot, eliminated=eliminated_sorted)
 
 
 # --- Discretization (pre-D spike policy): continuous magnitude -> categorical band -----------------

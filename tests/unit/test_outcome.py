@@ -160,21 +160,64 @@ class TestSupportingEvidenceSurvives:
         assert res.integration_gaps == ("gap",)
 
 
-class TestPacketOwnsContainers:
-    def test_no_compatible_hypothesis_with_localization_is_rejected(self):
-        from src.core.rca.outcome import StructuralResult
-        with pytest.raises(ValueError):
-            StructuralResult(outcome=Outcome.NO_COMPATIBLE_HYPOTHESIS, localization=("x",),
-                             classes=(), d_missing=frozenset(), potential_elimination_checks=())
+class TestEvidenceIsBoundToThePartition:
+    def test_passed_observations_cannot_rewrite_the_evidence(self):
+        used = [observed("a", "present")]
+        p = partition([_h("h1", {"a": "present"})], used)
+        base = resolve(p)                                   # evidence from the partition's snapshot
+        lie = resolve(p, observations=[observed("a", "absent")])  # contradictory extra observation
+        # the extra observation cannot rewrite the facts behind the partition
+        assert base.classes[0].evidence == lie.classes[0].evidence
+        assert base.classes[0].evidence == (
+            EvidenceItem("a", "present", "present", Relation.SUPPORTS),
+        )
 
-    def test_result_snapshots_its_containers(self):
+    def test_evidence_present_even_without_passed_observations(self):
+        p = partition([_h("h1", {"a": "present"})], [observed("a", "present")])
+        res = resolve(p)  # no observations argument at all
+        assert res.classes[0].evidence == (
+            EvidenceItem("a", "present", "present", Relation.SUPPORTS),
+        )
+
+
+class TestPacketSelfConsistency:
+    def _class(self, ids_kinds, d_missing=frozenset()):
+        from src.core.rca.outcome import ClassView, MemberView
+        members = tuple(MemberView(i, k, i) for i, k in ids_kinds)
+        return ClassView(members=members, signature=(("a", "present"),), d_missing=d_missing,
+                         evidence=(), elimination_checks=())
+
+    def test_outcome_must_match_class_structure(self):
         from src.core.rca.outcome import StructuralResult
-        loc = ["a"]
-        res = StructuralResult(outcome=Outcome.IDENTIFIED, localization=loc, classes=(),
+        with pytest.raises(ValueError):  # IDENTIFIED with no classes
+            StructuralResult(outcome=Outcome.IDENTIFIED, localization=(), classes=(),
+                             d_missing=frozenset(), potential_elimination_checks=())
+        cls = self._class([("h1", "process"), ("h2", "edge")])  # multi-member, empty d_missing
+        with pytest.raises(ValueError):  # that shape is IRREDUCIBLE, not NON_IDENTIFIABLE
+            StructuralResult(outcome=Outcome.NON_IDENTIFIABLE, localization=("h1", "h2"),
+                             classes=(cls,), d_missing=frozenset(), potential_elimination_checks=())
+
+    def test_localization_must_be_class_derived(self):
+        from src.core.rca.outcome import StructuralResult
+        cls = self._class([("h1", "process")])
+        with pytest.raises(ValueError):
+            StructuralResult(outcome=Outcome.IDENTIFIED, localization=("wrong",), classes=(cls,),
+                             d_missing=frozenset(), potential_elimination_checks=())
+
+    def test_no_compatible_requires_eliminated_evidence(self):
+        from src.core.rca.outcome import StructuralResult
+        with pytest.raises(ValueError):  # zero classes but no eliminated evidence
+            StructuralResult(outcome=Outcome.NO_COMPATIBLE_HYPOTHESIS, localization=(), classes=(),
+                             d_missing=frozenset(), potential_elimination_checks=(), eliminated=())
+
+    def test_valid_packet_snapshots_its_containers(self):
+        from src.core.rca.outcome import StructuralResult
+        cls = self._class([("h", "process")])
+        loc = ["h"]
+        res = StructuralResult(outcome=Outcome.IDENTIFIED, localization=loc, classes=[cls],
                                d_missing=frozenset(), potential_elimination_checks=())
         loc.clear()
-        assert res.localization == ("a",)
-        assert isinstance(res.localization, tuple)
+        assert res.localization == ("h",) and isinstance(res.localization, tuple)
 
     def test_empty_class_view_rejected(self):
         from src.core.rca.outcome import ClassView
