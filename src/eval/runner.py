@@ -48,6 +48,18 @@ def prediction_from_result(result: ExplainResult) -> Prediction:
         predicted = ranked
         produced = True
 
+    # Phase F (#184): absence-derived candidates are appended to the actual candidate list — they are
+    # real, selectable candidates (root_cause_hit and the taxonomy read `predicted_services`), just
+    # unranked (a vanished service has no error volume to rank it; that is Phase G's job). They never
+    # displace the top-1 pick. A purely-silent incident (no clusters, no ranker) is now an explanation
+    # whose only candidates are the disappeared services.
+    absence = list(getattr(result, "absence_candidates", []))
+    if absence:
+        produced = True
+        predicted = predicted + [a for a in absence if a not in predicted]
+        if root_cause is None:
+            root_cause = absence[0]
+
     top_trigger_ts = None
     for cand in result.trigger_candidates:
         ts = cand.get("timestamp")

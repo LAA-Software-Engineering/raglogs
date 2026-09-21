@@ -118,6 +118,7 @@ def detect_absence(
     incident_end: datetime,
     *,
     min_baseline_spans: int = 5,
+    min_expected_incident: float = 5.0,
     collapse_fraction: float = 0.2,
 ) -> dict[str, float]:
     """Absence-derived candidates (#184, Phase F): services whose span traffic was **established in the
@@ -125,10 +126,18 @@ def detect_absence(
     incident-window features can't see (``trace_features`` only entries services present in the
     incident). Returns ``{service: collapse_strength in (0, 1]}``.
 
-    An absence is evidence **only when** the signal was baselined (Invariant 2): a service needs at
-    least ``min_baseline_spans`` baseline spans to count as "expected", so a service that was never
-    seen — missing telemetry — can never become a disappearance signal. A service is a candidate only
-    when its incident span-rate drops to ``≤ collapse_fraction`` of its baseline rate."""
+    An absence is evidence only under all three of #184's gates, else the observation stays UNKNOWN
+    (empty):
+
+    1. **Baselined** (Invariant 2): a service needs ≥ ``min_baseline_spans`` baseline spans, so a
+       service that was *never seen* — missing telemetry — can never become a disappearance signal.
+    2. **Available in the incident**: if the scope emitted **no** incident spans at all, the trace
+       collector was down — a collection outage, not per-service disappearance — so nothing is
+       diagnosed (every silent service would otherwise look vanished).
+    3. **Expected**: the baseline rate must predict a meaningful incident count
+       (``base_rate × incident_seconds ≥ min_expected_incident``). Five spans spread over a 24h
+       baseline predict ~zero spans in a 5-minute incident, so zero is the ordinary outcome, not a
+       collapse. Only then is a drop to ``≤ collapse_fraction`` of the baseline rate a candidate."""
     pre = _seconds(baseline_start, incident_start)
     post = _seconds(incident_start, incident_end)
     bc: Counter = Counter()
@@ -142,13 +151,17 @@ def detect_absence(
             bc[s] += 1
         elif incident_start <= ts <= incident_end:
             ic[s] += 1
+    if sum(ic.values()) == 0:  # (2) no incident traces at all -> collector unavailable, not evidence
+        return {}
     absent: dict[str, float] = {}
     for s, base in bc.items():
-        if base < min_baseline_spans:  # not enough baseline to establish the signal was expected
+        if base < min_baseline_spans:  # (1) not baselined enough to be "expected"
             continue
         base_rate = base / pre
+        if base_rate * post < min_expected_incident:  # (3) too sparse to expect incident traffic
+            continue
         inc_rate = ic.get(s, 0) / post
-        if base_rate > 0 and inc_rate <= collapse_fraction * base_rate:
+        if inc_rate <= collapse_fraction * base_rate:
             absent[s] = round(1.0 - inc_rate / base_rate, 4)
     return absent
 
