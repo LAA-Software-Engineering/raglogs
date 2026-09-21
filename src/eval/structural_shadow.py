@@ -1,32 +1,31 @@
 """Structural shadow evaluation — the minimal A–E bridge (#186, Phase H2 of the #177 epic).
 
-Phase H1 (#201) bucketed the *existing* pipeline's failures. This is the follow-up the decision
-checkpoint on #177 calls for: run the A–E structural core (#178–#183) on **real** eval telemetry,
-**offline / in shadow**, and score the five outcomes against ground truth alongside the baseline —
-does the structural machinery retain (and sometimes uniquely pin) the causes the log-cluster pipeline
-misses as coverage/inference? It changes **nothing** in the product explain path.
+Phase H1 (#201) bucketed the *existing* pipeline's failures. This runs the A–E structural core
+(#178–#183) on **real** eval telemetry, **offline / in shadow**, and measures **candidate recall** —
+does a propagation-aware hypothesis generator, fed availability-honest observables, produce a small
+hypothesis set that *retains the true cause*? It changes **nothing** in the product explain path.
 
-The causal model here is a deliberately **minimal v1**, its only job to exercise A–E on real traces:
+**Scope, honestly.** This measures *truth retention / candidate recall*, **not** structural
+correctness. #186's ``struct_ok`` additionally requires the partition (classes, signatures,
+``D_missing``, no false collapse) to be correct under the modeled relation; that needs a faithful
+symptom-propagation observation model and per-observable availability ground truth, and is **not
+measured here**. The full structural packet is preserved on each result so a future scorer can check
+it. This bridge deliberately makes two *sound* choices the first cut got wrong:
 
-- **Observables** — one per service that has metrics: ``sig:{service}`` = ``PRESENT`` when the service
-  is anomalous this incident (error-rate present *or* latency ≥2× baseline, discretized via the
-  Phase D policy), else ``ABSENT``; ``OBSERVED`` because we measured it. A service with no metrics is
-  simply absent (its coordinate stays UNKNOWN), which is exactly how A–E wants missing telemetry.
-- **Hypotheses** — one ``process`` hypothesis per candidate service. Candidates are the anomalous
-  services **plus their callees** (propagation-aware, so a *silent* downstream root is still
-  generated — the coverage gap H1 measured). Each hypothesis ``R`` predicts ``sig:{R}=PRESENT`` and is
-  **hard-contradicted** by ``sig:{callee}=PRESENT`` for any callee of ``R`` — a failing callee means
-  ``R`` is not the root, the callee is deeper.
+- **Availability is honest**: a ``sig:{service}`` observable is emitted only when an incident
+  error/latency signal was actually measured; a service with no incident measurement (baseline-only,
+  or only unrelated OTLP counters) stays **UNKNOWN**, never a synthesized OBSERVED ABSENT.
+- **No unsound hard rule**: an anomalous callee does **not** logically exclude its caller as the root
+  (a caller can overload/misuse a callee, or a multi-fault incident). Dependency direction is *not*
+  fed into the hard-contradiction channel; it is left to soft ranking (Phase G). So each hypothesis
+  predicts only its own ``sig`` — the partition here largely enumerates candidates rather than doing
+  strong structural elimination, which is exactly why the honest metric is recall, not ``struct_ok``.
 
-What that yields, and why it is the honest structural answer:
-
-- ``callee_fail`` (the root emits its own error): the caller-as-root hypotheses are hard-eliminated up
-  the path, leaving the deepest failing node → ``IDENTIFIED`` (unique). The existing pipeline scored
-  these as ``INFERENCE`` (the loud caller outranks the root).
-- ``symptom_only`` (the root is silent): nothing eliminates the caller, and the silent root's own
-  coordinate can't separate it from the symptom service → ``UNCERTAIN`` with the truth **retained**
-  (``struct_ok``, not unique). The existing pipeline scored these as ``COVERAGE`` (the root was never
-  generated at all).
+The model: ``sig:{service}`` = ``PRESENT`` when the service is anomalous (error present or latency ≥2×
+baseline, Phase D discretization) else ``ABSENT``, OBSERVED only when measured. Candidate hypotheses
+are the anomalous services plus, when a service's fault is not already explained by a visible
+anomalous callee, its callees — so a silent downstream root is still generated (the coverage gap H1
+measured).
 """
 from __future__ import annotations
 
@@ -35,7 +34,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from src.core.rca.expectations import Contradiction, ExpectedObservation, ObservationModel
+from src.core.rca.expectations import ExpectedObservation, ObservationModel
 from src.core.rca.hypothesis import Kind, from_observation_model
 from src.core.rca.observable import Observable, State, observed
 from src.core.rca.outcome import Outcome, resolve
@@ -45,18 +44,22 @@ from src.eval.case import EvalCase
 
 @dataclass(frozen=True)
 class ServiceSignal:
-    """A service's incident-vs-baseline summary and whether it reads as anomalous."""
+    """A service's incident-vs-baseline summary. ``measured`` is whether a sig-relevant incident
+    signal (error rate or latency) was actually sampled — the availability gate; ``anomalous`` implies
+    ``measured``."""
 
     service: str
-    error_rate: float      # mean incident error rate
-    latency_ratio: float   # mean incident latency / mean baseline latency (1.0 if no baseline)
+    error_rate: float
+    latency_ratio: float
+    measured: bool
     anomalous: bool
 
 
 def summarize_metrics(samples: list, window_start: datetime) -> dict[str, ServiceSignal]:
     """Summarize ``ParsedMetricSample`` records into a per-service signal. Samples at/after
-    ``window_start`` are the incident; earlier ones are the baseline. Anomalous = error rate present
-    (Phase D ``discretize_rate``) or latency ≥2× baseline (``discretize_ratio``)."""
+    ``window_start`` are the incident; earlier ones the baseline. A service is ``measured`` only if it
+    has an incident ``error_rate`` or ``latency_ms`` sample; ``anomalous`` = measured and (error
+    present, Phase D ``discretize_rate``, or latency ≥2×, ``discretize_ratio``)."""
     inc: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
     base: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
     for s in samples:
@@ -70,13 +73,17 @@ def summarize_metrics(samples: list, window_start: datetime) -> dict[str, Servic
 
     signals: dict[str, ServiceSignal] = {}
     for svc in sorted(set(inc) | set(base)):
-        err = mean(inc[svc].get("error_rate", []))
-        inc_lat = mean(inc[svc].get("latency_ms", []))
+        inc_err = inc[svc].get("error_rate", [])
+        inc_lat = inc[svc].get("latency_ms", [])
+        measured = bool(inc_err or inc_lat)  # a sig-relevant incident measurement exists
+        err = mean(inc_err)
         base_lat = mean(base[svc].get("latency_ms", []))
-        ratio = inc_lat / base_lat if base_lat > 0 else 1.0
-        anomalous = (discretize_rate(min(err, 1.0)) == State.PRESENT
-                     or discretize_ratio(max(ratio, 0.0)) == State.HIGH)
-        signals[svc] = ServiceSignal(svc, err, ratio, anomalous)
+        ratio = mean(inc_lat) / base_lat if inc_lat and base_lat > 0 else 1.0
+        anomalous = measured and (
+            discretize_rate(min(err, 1.0)) == State.PRESENT
+            or discretize_ratio(max(ratio, 0.0)) == State.HIGH
+        )
+        signals[svc] = ServiceSignal(svc, err, ratio, measured, anomalous)
     return signals
 
 
@@ -92,10 +99,12 @@ def call_edges(spans: list) -> set[tuple[str, str]]:
 
 
 def build_observables(signals: dict[str, ServiceSignal]) -> list[Observable]:
-    """One ``sig:{service}`` observable per measured service (OBSERVED PRESENT/ABSENT)."""
+    """One ``sig:{service}`` observable per **measured** service (OBSERVED PRESENT/ABSENT). Unmeasured
+    services are omitted — their coordinate stays UNKNOWN, never a fabricated OBSERVED ABSENT."""
     return [
         observed(f"sig:{svc}", State.PRESENT if sig.anomalous else State.ABSENT)
         for svc, sig in sorted(signals.items())
+        if sig.measured
     ]
 
 
@@ -104,75 +113,90 @@ def _callees(service: str, edges: set[tuple[str, str]]) -> set[str]:
 
 
 def build_hypotheses(signals: dict[str, ServiceSignal], edges: set[tuple[str, str]]):
-    """Candidate ``process`` hypotheses. Each anomalous service is a candidate; a service's **silent**
-    callees are added as candidates only when *no* callee is already anomalous — i.e. the fault is not
-    yet explained by a visible downstream failure, so a silent callee could be the (unobserved) root.
-    That is what lets a silent root be generated (the coverage gap) without a healthy sibling callee
-    polluting a case whose root does emit its own error. Each candidate predicts its own ``sig``
-    present and is hard-contradicted by a failing callee (a failing callee means it is not the root)."""
+    """Candidate ``process`` hypotheses: anomalous services, plus a service's callees when its fault
+    is not already explained by a visible (anomalous) callee — so a silent downstream root is still
+    generated. Each predicts only its own ``sig`` present; dependency direction is **not** a hard rule
+    (an anomalous callee doesn't exclude its caller as root — that stays soft ranking, Phase G)."""
     anomalous = {s for s, sig in signals.items() if sig.anomalous}
     candidates = set(anomalous)
     for s in anomalous:
         callee_set = _callees(s, edges)
         if not any(c in anomalous for c in callee_set):  # fault unexplained by a visible callee
             candidates |= callee_set
-    hypotheses = []
-    for svc in sorted(candidates):
-        model = ObservationModel(
-            expected=(ExpectedObservation(f"sig:{svc}", State.PRESENT),),
-            contradictions=tuple(
-                Contradiction(f"sig:{c}", frozenset({State.PRESENT})) for c in sorted(_callees(svc, edges))
-            ),
+    return [
+        from_observation_model(
+            f"process:{svc}", Kind.PROCESS, svc,
+            ObservationModel(expected=(ExpectedObservation(f"sig:{svc}", State.PRESENT),)),
         )
-        hypotheses.append(from_observation_model(f"process:{svc}", Kind.PROCESS, svc, model))
-    return hypotheses
+        for svc in sorted(candidates)
+    ]
+
+
+@dataclass(frozen=True)
+class ClassInfo:
+    """A surviving class projected for later scoring: member localizations, the prediction signature,
+    and the missing distinguishers. Preserved so a future real ``struct_ok`` can check the partition."""
+
+    localizations: tuple[str, ...]
+    signature: tuple[tuple[str, str], ...]
+    d_missing: frozenset[str]
 
 
 @dataclass(frozen=True)
 class ShadowResult:
-    """One case's structural shadow outcome, scored against the labeled root cause."""
+    """One case's structural shadow outcome. The metrics scored here are **recall**, not structural
+    correctness: ``truth_retained`` is whether the true cause is in the generated hypothesis set;
+    ``unique`` is a *structural* IDENTIFIED at the truth (no ranking). The full ``classes`` packet is
+    preserved for a future ``struct_ok`` scorer."""
 
     case_id: str
     truth: str
-    outcome: str            # Outcome value, or "no_candidates" when nothing was generated
+    outcome: str            # Outcome value, or "no_candidates"/"no_telemetry"
+    classes: tuple[ClassInfo, ...]
     localizations: tuple[str, ...]
-    struct_ok: bool         # the labeled cause is retained in a surviving class
-    unique: bool            # IDENTIFIED and the sole localization is the labeled cause
-    abstained: bool         # NO_COMPATIBLE_HYPOTHESIS (everything hard-eliminated)
+    truth_retained: bool
+    unique: bool
+    abstained: bool
 
 
 def shadow_result(case: EvalCase) -> ShadowResult:
-    """Build observables + hypotheses from the case's own telemetry, partition, resolve, and score.
-    Requires a labeled positive case with metric + span sidecars."""
+    """Build availability-honest observables + hypotheses from the case's own telemetry, partition,
+    resolve, and measure candidate recall. Requires a labeled positive case with metric + span
+    sidecars."""
     from src.eval.rcaeval import load_metrics_jsonl, load_spans_jsonl
 
     truth = case.root_cause.service if case.root_cause else ""
     if case.metrics_path is None or case.spans_path is None:
-        return ShadowResult(case.id, truth, "no_telemetry", (), False, False, False)
+        return ShadowResult(case.id, truth, "no_telemetry", (), (), False, False, False)
 
     signals = summarize_metrics(load_metrics_jsonl(case.metrics_path), case.window_start)
     edges = call_edges(load_spans_jsonl(case.spans_path))
     hypotheses = build_hypotheses(signals, edges)
     if not hypotheses:
-        return ShadowResult(case.id, truth, "no_candidates", (), False, False, False)
+        return ShadowResult(case.id, truth, "no_candidates", (), (), False, False, False)
 
     result = resolve(partition(hypotheses, build_observables(signals)))
+    classes = tuple(ClassInfo(c.localizations, c.signature, c.d_missing) for c in result.classes)
     localizations = result.localization
-    struct_ok = truth in localizations
-    unique = result.outcome is Outcome.IDENTIFIED and localizations == (truth,)
     return ShadowResult(
         case_id=case.id, truth=truth, outcome=result.outcome.value,
-        localizations=localizations, struct_ok=struct_ok, unique=unique,
+        classes=classes, localizations=localizations,
+        truth_retained=truth in localizations,
+        unique=result.outcome is Outcome.IDENTIFIED and localizations == (truth,),
         abstained=result.outcome is Outcome.NO_COMPATIBLE_HYPOTHESIS,
     )
 
 
 @dataclass
 class ShadowScore:
-    """Aggregate structural shadow metrics over a corpus (labeled positive cases only)."""
+    """Aggregate structural shadow metrics over a corpus (labeled positive cases only).
+
+    ``candidate_recall`` is the headline — the fraction of cases whose true cause the generator
+    retained. ``unique_rate`` is the *structural* identification rate (no ranking). Neither is
+    ``struct_ok`` (full structural correctness per #186), which is not measured here."""
 
     n: int
-    struct_ok_rate: float
+    candidate_recall: float
     unique_rate: float
     abstention_rate: float
     outcome_counts: dict[str, int]
@@ -187,7 +211,7 @@ def score_shadow(results: list[ShadowResult]) -> ShadowScore:
     ratio = lambda k: (k / n if n else 0.0)  # noqa: E731
     return ShadowScore(
         n=n,
-        struct_ok_rate=ratio(sum(r.struct_ok for r in scored)),
+        candidate_recall=ratio(sum(r.truth_retained for r in scored)),
         unique_rate=ratio(sum(r.unique for r in scored)),
         abstention_rate=ratio(sum(r.abstained for r in scored)),
         outcome_counts=dict(sorted(counts.items())),

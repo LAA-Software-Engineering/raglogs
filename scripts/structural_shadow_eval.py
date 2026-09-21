@@ -19,8 +19,8 @@ from src.eval.structural_shadow import load_and_run
 
 def main(cases_dir: str) -> None:
     results, score = load_and_run(cases_dir)
-    print(f"Structural shadow eval — {cases_dir}")
-    print(f"  n={score.n}  struct_ok={score.struct_ok_rate:.1%}  "
+    print(f"Structural shadow eval — {cases_dir}  (candidate recall, NOT structural correctness)")
+    print(f"  n={score.n}  candidate_recall={score.candidate_recall:.1%}  "
           f"unique={score.unique_rate:.1%}  abstain={score.abstention_rate:.1%}")
     print(f"  outcomes: {score.outcome_counts}")
 
@@ -31,12 +31,12 @@ def main(cases_dir: str) -> None:
         ft = "_".join(parts[2:-1]) if len(parts) >= 4 and parts[-1].isdigit() else ""
         if ft:
             by_ft[ft][0] += 1
-            by_ft[ft][1] += int(r.struct_ok)
+            by_ft[ft][1] += int(r.truth_retained)
             by_ft[ft][2] += int(r.unique)
     if by_ft:
-        print("  by fault-type (struct_ok / unique):")
+        print("  by fault-type (truth_retained / unique):")
         for ft, (n, ok, u) in sorted(by_ft.items()):
-            print(f"    {ft:14} n={n}  struct_ok={ok}/{n}  unique={u}/{n}")
+            print(f"    {ft:14} n={n}  truth_retained={ok}/{n}  unique={u}/{n}")
 
 
 if __name__ == "__main__":
