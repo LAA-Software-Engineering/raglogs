@@ -173,7 +173,7 @@ class TestInputBoundaryIsASet:
         from src.core.rca.partition import Partition
         # the value type enforces its own invariant, independent of the factory
         with pytest.raises(ValueError):
-            Partition(classes=(), f_usable=(), eliminated=())
+            Partition(classes=(), usable=(), eliminated=())
 
     def test_empty_equivalence_class_is_rejected(self):
         from src.core.rca.partition import EquivalenceClass, Partition
@@ -182,7 +182,7 @@ class TestInputBoundaryIsASet:
         # ...so the nested hollow partition the reviewer flagged cannot be built either
         with pytest.raises(ValueError):
             Partition(classes=(EquivalenceClass(signature=(), members=(), d_missing=frozenset()),),
-                      f_usable=(), eliminated=())
+                      usable=(), eliminated=())
 
     def test_value_types_own_their_containers(self):
         from src.core.rca.partition import EquivalenceClass, Partition
@@ -196,11 +196,12 @@ class TestInputBoundaryIsASet:
         assert isinstance(ec.signature, tuple) and isinstance(ec.members, tuple)
 
         classes = [ec]
-        elim: list = []
-        p = Partition(classes=classes, f_usable=["a"], eliminated=elim)
+        usable = [observed("a", "present")]
+        p = Partition(classes=classes, usable=usable, eliminated=[])
         classes.clear()   # must not zero out the partition
-        assert len(p.classes) == 1
-        assert isinstance(p.classes, tuple) and isinstance(p.f_usable, tuple)
+        usable.clear()    # must not empty the usable snapshot
+        assert len(p.classes) == 1 and p.f_usable == ("a",)
+        assert isinstance(p.classes, tuple) and isinstance(p.usable, tuple)
 
 
 class TestNonFiniteInputsRejected:
