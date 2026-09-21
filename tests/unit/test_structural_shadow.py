@@ -97,6 +97,16 @@ class TestAvailability:
                    _M("db", "latency_ms", 11.0, _T0 + timedelta(minutes=1))]
         assert summarize_metrics(samples, _T0)["db"].sig_state == State.ABSENT
 
+    def test_zero_latency_baseline_is_unknown_not_absent(self):
+        # baseline latency 0 makes 30/0 undefined; with a measured-normal error branch the OR must
+        # NOT be declared ABSENT — the latency branch is unavailable, so sig is UNKNOWN.
+        samples = [_M("db", "error_rate", 0.01, _T0 + timedelta(minutes=1)),
+                   _M("db", "latency_ms", 0.0, _T0 - timedelta(minutes=1)),   # zero baseline
+                   _M("db", "latency_ms", 30.0, _T0 + timedelta(minutes=1))]
+        sig = summarize_metrics(samples, _T0)["db"]
+        assert sig.sig_state is None                              # UNKNOWN, not ABSENT
+        assert build_observables({"db": sig}) == []              # no fabricated coordinate in F_usable
+
 
 class TestCallEdges:
     def test_parent_child_service_edges(self):
@@ -137,6 +147,18 @@ class TestCandidateRecall:
         res = _run(_signals({"media"}))
         # edge/api are healthy and not callees of the anomalous media -> never generated
         assert "edge" not in res.localization and "api" not in res.localization
+
+    def test_metricless_callee_is_in_the_service_universe(self):
+        from src.eval.structural_shadow import service_universe
+        # metrics mention only 'api' (anomalous); spans add a metricless callee 'db'
+        signals = {"api": _sig("api", anomalous=True)}
+        edges = {("api", "db")}
+        hyps = build_hypotheses(signals, edges)
+        localizations = {h.localization for h in hyps}
+        assert "db" in localizations                                   # silent-root candidate generated
+        universe = service_universe(signals, edges)
+        assert universe == {"api", "db"}                               # span-only 'db' counted
+        assert len(localizations) <= len(universe)                     # candidate_ratio <= 1.0
 
 
 class TestScoring:

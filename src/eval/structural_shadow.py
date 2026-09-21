@@ -88,12 +88,14 @@ def summarize_metrics(samples: list, window_start: datetime) -> dict[str, Servic
     for svc in sorted(set(inc) | set(base)):
         inc_err = inc[svc].get("error_rate", [])
         inc_lat = inc[svc].get("latency_ms", [])
-        base_lat = base[svc].get("latency_ms", [])
+        base_lat_mean = mean(base[svc].get("latency_ms", []))
 
         error_measured = bool(inc_err)
-        latency_measured = bool(inc_lat and base_lat)  # a ratio needs both windows
+        # A ratio needs an incident sample AND a *positive* baseline — a zero/absent baseline makes
+        # 30/0 undefined (UNKNOWN), not a normal ratio, so the latency branch is not measured then.
+        latency_measured = bool(inc_lat) and base_lat_mean > 0
         err = mean(inc_err)
-        ratio = mean(inc_lat) / mean(base_lat) if latency_measured and mean(base_lat) > 0 else 1.0
+        ratio = mean(inc_lat) / base_lat_mean if latency_measured else 1.0
 
         error_present = error_measured and discretize_rate(min(err, 1.0)) == State.PRESENT
         latency_high = latency_measured and discretize_ratio(max(ratio, 0.0)) == State.HIGH
@@ -141,6 +143,13 @@ def build_observables(signals: dict[str, ServiceSignal]) -> list[Observable]:
 
 def _callees(service: str, edges: set[tuple[str, str]]) -> set[str]:
     return {callee for caller, callee in edges if caller == service}
+
+
+def service_universe(signals: dict[str, ServiceSignal], edges: set[tuple[str, str]]) -> set[str]:
+    """Every service the generator could return — metric-bearing services **and** span-only services
+    (metricless callees can become silent-root candidates). This is the denominator for
+    ``candidate_ratio`` so "enumerate everything" is exactly 1.0."""
+    return set(signals) | {svc for edge in edges for svc in edge}
 
 
 def build_hypotheses(signals: dict[str, ServiceSignal], edges: set[tuple[str, str]]):
@@ -210,7 +219,9 @@ def shadow_result(case: EvalCase) -> ShadowResult:
 
     signals = summarize_metrics(load_metrics_jsonl(case.metrics_path), case.window_start)
     edges = call_edges(load_spans_jsonl(case.spans_path))
-    n_services = len(signals)
+    # The service universe must include span-only services (the generator adds metricless callees as
+    # silent-root candidates), else candidate_ratio can exceed 1.0 and "1.0 = enumerate all" is false.
+    n_services = len(service_universe(signals, edges))
     hypotheses = build_hypotheses(signals, edges)
     if not hypotheses:
         return ShadowResult(case.id, truth, "no_candidates", (), (), False, False, False,
