@@ -22,6 +22,8 @@ def main(cases_dir: str) -> None:
     print(f"Structural shadow eval — {cases_dir}  (candidate recall, NOT structural correctness)")
     print(f"  n={score.n}  candidate_recall={score.candidate_recall:.1%}  "
           f"unique={score.unique_rate:.1%}  abstain={score.abstention_rate:.1%}")
+    print(f"  selectivity: mean_candidates={score.mean_candidates:.1f}  "
+          f"mean_candidate_ratio={score.mean_candidate_ratio:.1%} of services (1.0 = enumerate all)")
     print(f"  outcomes: {score.outcome_counts}")
 
     # Per fault-type breakdown when the case ids encode it (…_<fault_type>_<n>), e.g. trace-loc.

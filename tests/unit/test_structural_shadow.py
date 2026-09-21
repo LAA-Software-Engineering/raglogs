@@ -7,6 +7,7 @@ docstring). They also pin the two sound choices the first cut got wrong: honest 
 
 from datetime import datetime, timedelta
 
+from src.core.rca.observable import State
 from src.core.rca.outcome import Outcome, resolve
 from src.core.rca.partition import partition
 from src.eval.structural_shadow import (
@@ -28,8 +29,9 @@ class _M:  # minimal ParsedMetricSample stand-in
 
 
 class _S:  # minimal ParsedSpan stand-in
-    def __init__(self, span_id, parent_span_id, service):
+    def __init__(self, span_id, parent_span_id, service, trace_id="t"):
         self.span_id, self.parent_span_id, self.service = span_id, parent_span_id, service
+        self.trace_id = trace_id
 
 
 # edge -> api -> media -> {storage, transcoder}
@@ -37,7 +39,8 @@ _EDGES = {("edge", "api"), ("api", "media"), ("media", "storage"), ("media", "tr
 
 
 def _sig(service, *, measured=True, anomalous=False) -> ServiceSignal:
-    return ServiceSignal(service, 0.4 if anomalous else 0.01, 1.0, measured, anomalous)
+    state = None if not measured else (State.PRESENT if anomalous else State.ABSENT)
+    return ServiceSignal(service, 0.4 if anomalous else 0.01, 1.0, measured, measured, state)
 
 
 def _signals(anomalous: set[str], svcs=("edge", "api", "media", "storage", "transcoder")):
@@ -74,11 +77,39 @@ class TestAvailability:
         sig = summarize_metrics(samples, _T0)["web"]
         assert sig.measured is True and sig.anomalous is True
 
+    def test_incident_latency_without_baseline_is_unknown(self):
+        # only an incident latency sample, no baseline (ratio unknowable), no error -> UNKNOWN
+        samples = [_M("web", "latency_ms", 30.0, _T0 + timedelta(minutes=1))]
+        sig = summarize_metrics(samples, _T0)["web"]
+        assert sig.sig_state is None and sig.measured is False
+        assert build_observables({"web": sig}) == []  # not fabricated as OBSERVED ABSENT
+
+    def test_low_error_with_missing_latency_is_unknown_not_absent(self):
+        # error branch measured-and-low, but latency branch unmeasured -> the OR can't be proven ABSENT
+        samples = [_M("db", "error_rate", 0.01, _T0 + timedelta(minutes=1))]
+        sig = summarize_metrics(samples, _T0)["db"]
+        assert sig.sig_state is None  # UNKNOWN, not ABSENT
+        assert "sig:db" not in {o.id for o in build_observables({"db": sig})}
+
+    def test_both_branches_measured_and_normal_is_absent(self):
+        samples = [_M("db", "error_rate", 0.01, _T0 + timedelta(minutes=1)),
+                   _M("db", "latency_ms", 10.0, _T0 - timedelta(minutes=1)),
+                   _M("db", "latency_ms", 11.0, _T0 + timedelta(minutes=1))]
+        assert summarize_metrics(samples, _T0)["db"].sig_state == State.ABSENT
+
 
 class TestCallEdges:
     def test_parent_child_service_edges(self):
         spans = [_S("s1", None, "edge"), _S("s2", "s1", "api"), _S("s3", "s2", "media")]
         assert call_edges(spans) == {("edge", "api"), ("api", "media")}
+
+    def test_edges_do_not_cross_trace_boundaries(self):
+        # both traces reuse local span id "1"; keying by span_id alone would invent other->db
+        spans = [
+            _S("1", None, "api", trace_id="A"), _S("2", "1", "db", trace_id="A"),
+            _S("1", None, "other", trace_id="B"),
+        ]
+        assert call_edges(spans) == {("api", "db")}  # not {("other", "db")}
 
 
 class TestCandidateRecall:
@@ -109,18 +140,31 @@ class TestCandidateRecall:
 
 
 class TestScoring:
-    def test_shadow_score_reports_recall_not_struct_ok(self):
+    def test_shadow_score_reports_recall_and_selectivity(self):
         results = [
-            ShadowResult("c1", "storage", "uncertain", (), ("storage", "media"), True, False, False),
-            ShadowResult("c2", "storage", "identified", (), ("storage",), True, True, False),
-            ShadowResult("c3", "storage", "uncertain", (), ("media", "api"), False, False, False),
+            ShadowResult("c1", "storage", "uncertain", (), ("storage", "media"), True, False, False,
+                         n_candidates=2, n_services=4),
+            ShadowResult("c2", "storage", "identified", (), ("storage",), True, True, False,
+                         n_candidates=1, n_services=4),
+            ShadowResult("c3", "storage", "uncertain", (), ("media", "api"), False, False, False,
+                         n_candidates=2, n_services=4),
         ]
         s = score_shadow(results)
         assert s.n == 3
         assert round(s.candidate_recall, 3) == round(2 / 3, 3)   # c1,c2 retained truth; c3 did not
         assert round(s.unique_rate, 3) == round(1 / 3, 3)
+        assert round(s.mean_candidate_ratio, 3) == round((0.5 + 0.25 + 0.5) / 3, 3)
+        assert round(s.mean_candidates, 3) == round(5 / 3, 3)
         assert s.outcome_counts["uncertain"] == 2
 
+    def test_return_everything_is_visible_as_full_ratio(self):
+        # a generator that returns every service gets recall 1.0 but candidate_ratio 1.0 — not narrowing
+        results = [ShadowResult("c", "storage", "uncertain", (), ("a", "b", "storage"), True, False,
+                                False, n_candidates=3, n_services=3)]
+        s = score_shadow(results)
+        assert s.candidate_recall == 1.0 and s.mean_candidate_ratio == 1.0
+
     def test_truth_not_retained_is_not_counted(self):
-        results = [ShadowResult("c", "storage", "uncertain", (), ("media",), False, False, False)]
+        results = [ShadowResult("c", "storage", "uncertain", (), ("media",), False, False, False,
+                                n_candidates=1, n_services=4)]
         assert score_shadow(results).candidate_recall == 0.0

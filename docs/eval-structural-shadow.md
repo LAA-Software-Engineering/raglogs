@@ -17,11 +17,15 @@ scorer can check it. Candidate recall is not a downgraded metric — for a tool 
 *"produce a small, defensible hypothesis set with evidence"*, retaining the true cause is a real
 product metric. It just isn't structural correctness, and this doc does not call it that.
 
-Two **sound** choices this bridge makes (correcting the first cut, per the #202 review):
+Sound choices this bridge makes (correcting the first cut, per the #202 reviews):
 
-- **Availability is honest.** A `sig:{service}` observable is emitted only when an incident
-  error/latency signal was actually measured. A service with no incident measurement — baseline-only,
-  or only unrelated OTLP counters — stays **UNKNOWN**, never a synthesized OBSERVED ABSENT.
+- **Availability is honest, three-valued.** `sig` is error present **or** latency ≥2×. It is `PRESENT`
+  only when a *measured* branch proves it, `ABSENT` only when **both** branches were measured and
+  normal, and **UNKNOWN** otherwise — so a service with only an incident latency (no baseline to form a
+  ratio), only an error rate (no latency), or only unrelated OTLP counters stays UNKNOWN, never a
+  synthesized OBSERVED ABSENT. Only proven coordinates enter `F_usable`.
+- **Trace-scoped call edges.** Parent spans are resolved by `(trace_id, span_id)`, not `span_id` alone
+  (which is trace-local), so a multi-trace sidecar can't invent or drop edges by row order.
 - **No unsound hard rule.** An anomalous callee does **not** logically exclude its caller as the root
   (a caller can overload/misuse a callee; multi-fault incidents happen). Dependency direction is *not*
   fed into the hard-contradiction channel — it is left to soft ranking (Phase G). Each hypothesis
@@ -44,8 +48,13 @@ Run it: `python scripts/structural_shadow_eval.py data/eval-cases/trace-loc`.
 | | value |
 |---|---|
 | **candidate_recall** | **100%** (24/24 — every fault family: callee_fail, caller_fail, latency_only, symptom_only) |
+| **selectivity** | mean **2.4** candidates, **42.8%** of services (1.0 = enumerate everything) |
 | unique (structural IDENTIFIED at truth) | **0%** — every case is `UNCERTAIN` |
 | abstention | 0% |
+
+The selectivity line is essential context: 100% recall would be trivial if the generator returned every
+service, so it is reported with candidate-set size — here the set is ~43% of the services, real
+narrowing, not enumeration.
 
 So the propagation-aware generator **retains the true cause in 100%** of trace-loc cases — including
 the `symptom_only` roots the existing pipeline lost as coverage (H1) and the `callee_fail`/`latency_only`

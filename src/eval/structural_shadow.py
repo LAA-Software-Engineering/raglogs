@@ -33,6 +33,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from src.core.rca.expectations import ExpectedObservation, ObservationModel
 from src.core.rca.hypothesis import Kind, from_observation_model
@@ -44,22 +45,34 @@ from src.eval.case import EvalCase
 
 @dataclass(frozen=True)
 class ServiceSignal:
-    """A service's incident-vs-baseline summary. ``measured`` is whether a sig-relevant incident
-    signal (error rate or latency) was actually sampled — the availability gate; ``anomalous`` implies
-    ``measured``."""
+    """A service's incident-vs-baseline summary. ``sig_state`` is **three-valued**: ``PRESENT`` when a
+    *measured* branch (error or latency) proves an anomaly, ``ABSENT`` only when **both** branches were
+    measured and normal, and ``None`` (UNKNOWN) otherwise — a missing branch never fabricates absence.
+    ``measured`` = ``sig_state is not None``; ``anomalous`` = ``sig_state == PRESENT``."""
 
     service: str
     error_rate: float
     latency_ratio: float
-    measured: bool
-    anomalous: bool
+    error_measured: bool
+    latency_measured: bool
+    sig_state: Optional[str]
+
+    @property
+    def measured(self) -> bool:
+        return self.sig_state is not None
+
+    @property
+    def anomalous(self) -> bool:
+        return self.sig_state == State.PRESENT
 
 
 def summarize_metrics(samples: list, window_start: datetime) -> dict[str, ServiceSignal]:
     """Summarize ``ParsedMetricSample`` records into a per-service signal. Samples at/after
-    ``window_start`` are the incident; earlier ones the baseline. A service is ``measured`` only if it
-    has an incident ``error_rate`` or ``latency_ms`` sample; ``anomalous`` = measured and (error
-    present, Phase D ``discretize_rate``, or latency ≥2×, ``discretize_ratio``)."""
+    ``window_start`` are the incident; earlier ones the baseline. The combined ``sig`` (error present
+    **or** latency ≥2×) is computed with **three-valued** availability: an error branch is measured
+    when incident ``error_rate`` exists; a latency branch is measured only when both incident **and**
+    baseline ``latency_ms`` exist (a ratio needs both). ``sig`` is ``PRESENT`` if a measured branch is
+    anomalous, ``ABSENT`` only if both branches are measured-and-normal, else UNKNOWN."""
     inc: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
     base: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
     for s in samples:
@@ -75,36 +88,54 @@ def summarize_metrics(samples: list, window_start: datetime) -> dict[str, Servic
     for svc in sorted(set(inc) | set(base)):
         inc_err = inc[svc].get("error_rate", [])
         inc_lat = inc[svc].get("latency_ms", [])
-        measured = bool(inc_err or inc_lat)  # a sig-relevant incident measurement exists
+        base_lat = base[svc].get("latency_ms", [])
+
+        error_measured = bool(inc_err)
+        latency_measured = bool(inc_lat and base_lat)  # a ratio needs both windows
         err = mean(inc_err)
-        base_lat = mean(base[svc].get("latency_ms", []))
-        ratio = mean(inc_lat) / base_lat if inc_lat and base_lat > 0 else 1.0
-        anomalous = measured and (
-            discretize_rate(min(err, 1.0)) == State.PRESENT
-            or discretize_ratio(max(ratio, 0.0)) == State.HIGH
-        )
-        signals[svc] = ServiceSignal(svc, err, ratio, measured, anomalous)
+        ratio = mean(inc_lat) / mean(base_lat) if latency_measured and mean(base_lat) > 0 else 1.0
+
+        error_present = error_measured and discretize_rate(min(err, 1.0)) == State.PRESENT
+        latency_high = latency_measured and discretize_ratio(max(ratio, 0.0)) == State.HIGH
+        if error_present or latency_high:          # a measured branch proves the anomaly
+            sig_state: Optional[str] = State.PRESENT
+        elif error_measured and latency_measured:  # both measured and normal -> proven absent
+            sig_state = State.ABSENT
+        else:                                       # some branch unmeasured, nothing proves present
+            sig_state = None
+        signals[svc] = ServiceSignal(svc, err, ratio, error_measured, latency_measured, sig_state)
     return signals
 
 
 def call_edges(spans: list) -> set[tuple[str, str]]:
-    """Distinct (caller_service, callee_service) edges from ``ParsedSpan`` records via parent links."""
-    service_of = {sp.span_id: sp.service for sp in spans if sp.span_id and sp.service}
+    """Distinct (caller_service, callee_service) edges from ``ParsedSpan`` records via parent links.
+
+    A ``span_id`` is scoped to its trace, so the parent index is keyed by ``(trace_id, span_id)`` —
+    keying by ``span_id`` alone would let one trace's span overwrite another's that reuses the same
+    local id, inventing or dropping edges by row order. A span with no ``trace_id`` cannot be resolved
+    across traces safely, so it is skipped for edge construction."""
+    service_of = {
+        (sp.trace_id, sp.span_id): sp.service
+        for sp in spans if sp.trace_id and sp.span_id and sp.service
+    }
     edges: set[tuple[str, str]] = set()
     for sp in spans:
-        caller = service_of.get(sp.parent_span_id) if sp.parent_span_id else None
-        if caller and sp.service and caller != sp.service:
+        if not (sp.trace_id and sp.parent_span_id and sp.service):
+            continue
+        caller = service_of.get((sp.trace_id, sp.parent_span_id))
+        if caller and caller != sp.service:
             edges.add((caller, sp.service))
     return edges
 
 
 def build_observables(signals: dict[str, ServiceSignal]) -> list[Observable]:
-    """One ``sig:{service}`` observable per **measured** service (OBSERVED PRESENT/ABSENT). Unmeasured
-    services are omitted — their coordinate stays UNKNOWN, never a fabricated OBSERVED ABSENT."""
+    """One ``sig:{service}`` observable per service whose combined signal is *proven* PRESENT or ABSENT
+    (three-valued). A service whose ``sig`` is UNKNOWN (a branch unmeasured) is omitted — its
+    coordinate stays UNKNOWN, never a fabricated OBSERVED ABSENT."""
     return [
-        observed(f"sig:{svc}", State.PRESENT if sig.anomalous else State.ABSENT)
+        observed(f"sig:{svc}", sig.sig_state)
         for svc, sig in sorted(signals.items())
-        if sig.measured
+        if sig.sig_state is not None
     ]
 
 
@@ -157,6 +188,14 @@ class ShadowResult:
     truth_retained: bool
     unique: bool
     abstained: bool
+    n_candidates: int = 0   # size of the generated hypothesis set (localizations)
+    n_services: int = 0     # services seen in the case's telemetry (the enumerate-everything baseline)
+
+    @property
+    def candidate_ratio(self) -> Optional[float]:
+        """Candidate set size relative to enumerating every service (``None`` if no services seen).
+        Recall near 1.0 is only meaningful if this stays well below 1.0 — otherwise it is enumeration."""
+        return self.n_candidates / self.n_services if self.n_services else None
 
 
 def shadow_result(case: EvalCase) -> ShadowResult:
@@ -171,9 +210,11 @@ def shadow_result(case: EvalCase) -> ShadowResult:
 
     signals = summarize_metrics(load_metrics_jsonl(case.metrics_path), case.window_start)
     edges = call_edges(load_spans_jsonl(case.spans_path))
+    n_services = len(signals)
     hypotheses = build_hypotheses(signals, edges)
     if not hypotheses:
-        return ShadowResult(case.id, truth, "no_candidates", (), (), False, False, False)
+        return ShadowResult(case.id, truth, "no_candidates", (), (), False, False, False,
+                            n_candidates=0, n_services=n_services)
 
     result = resolve(partition(hypotheses, build_observables(signals)))
     classes = tuple(ClassInfo(c.localizations, c.signature, c.d_missing) for c in result.classes)
@@ -184,6 +225,7 @@ def shadow_result(case: EvalCase) -> ShadowResult:
         truth_retained=truth in localizations,
         unique=result.outcome is Outcome.IDENTIFIED and localizations == (truth,),
         abstained=result.outcome is Outcome.NO_COMPATIBLE_HYPOTHESIS,
+        n_candidates=len(localizations), n_services=n_services,
     )
 
 
@@ -192,13 +234,17 @@ class ShadowScore:
     """Aggregate structural shadow metrics over a corpus (labeled positive cases only).
 
     ``candidate_recall`` is the headline — the fraction of cases whose true cause the generator
-    retained. ``unique_rate`` is the *structural* identification rate (no ranking). Neither is
-    ``struct_ok`` (full structural correctness per #186), which is not measured here."""
+    retained — but it is only meaningful alongside ``mean_candidate_ratio``: recall≈1 with the set
+    being every service is enumeration, not narrowing. ``unique_rate`` is the *structural*
+    identification rate (no ranking). None of these is ``struct_ok`` (full structural correctness per
+    #186), which is not measured here."""
 
     n: int
     candidate_recall: float
     unique_rate: float
     abstention_rate: float
+    mean_candidate_ratio: float   # mean |candidates| / |services| — selectivity (1.0 = enumerate all)
+    mean_candidates: float
     outcome_counts: dict[str, int]
 
 
@@ -209,11 +255,14 @@ def score_shadow(results: list[ShadowResult]) -> ShadowScore:
     for r in scored:
         counts[r.outcome] += 1
     ratio = lambda k: (k / n if n else 0.0)  # noqa: E731
+    ratios = [r.candidate_ratio for r in scored if r.candidate_ratio is not None]
     return ShadowScore(
         n=n,
         candidate_recall=ratio(sum(r.truth_retained for r in scored)),
         unique_rate=ratio(sum(r.unique for r in scored)),
         abstention_rate=ratio(sum(r.abstained for r in scored)),
+        mean_candidate_ratio=(sum(ratios) / len(ratios) if ratios else 0.0),
+        mean_candidates=ratio(sum(r.n_candidates for r in scored)),
         outcome_counts=dict(sorted(counts.items())),
     )
 
