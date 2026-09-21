@@ -61,6 +61,10 @@ class ExplainResult:
     # selected/top-k output above: eval's failure taxonomy uses it to tell "cause never generated"
     # (coverage) from "generated but not selected/ranked" (inference). Instrumentation only.
     generated_candidates: list[str] = field(default_factory=list)
+    # Absence-derived candidates (#184 Phase F): services whose span traffic was baselined then
+    # collapsed in the incident — silent failures the incident-window features can't see. Unioned into
+    # `generated_candidates` so a vanished root cause is generated regardless of the learned ranker.
+    absence_candidates: list[str] = field(default_factory=list)
     # Calibrated P(top-1 correct) for the ranker prediction (#118 D / #83). Set
     # only when a calibrator model is configured; None otherwise.
     predicted_root_cause_confidence: Optional[float] = None
@@ -197,6 +201,18 @@ def _explain_window(
     # otherwise the legacy significant-cluster pool. Never `services_affected` — that includes
     # informational-only and excluded services that were never eligible candidates.
     generated_candidates = sorted(ranked_services) if ranked_services else list(packet.candidate_services)
+    # Phase F (#184): absence-derived candidates — services whose span traffic was baselined then
+    # collapsed. Unioned in so a *silent* root cause (no incident spans/logs) is generated even on the
+    # no-ranker path. Empty when nothing disappeared, so this is behaviour-neutral off the fault.
+    absence_candidates = _absence_candidates(db, scope, window_start, window_end, baseline_window)
+    if absence_candidates:
+        generated_candidates = sorted(set(generated_candidates) | set(absence_candidates))
+    # Surface the disappearance in the evidence so a silent failure is visible, not just eval-counted.
+    evidence_items = list(packet.evidence_items) + (
+        [f"{len(absence_candidates)} service(s) went silent — span traffic collapsed vs baseline: "
+         + ", ".join(absence_candidates)]
+        if absence_candidates else []
+    )
 
     # NOTE: a metric/log abstention "gate" (#79) was investigated and shelved as a
     # negative result — no modality on the available dev corpora both calibrates and
@@ -214,13 +230,14 @@ def _explain_window(
             window_end=window_end,
             summary_text=render_insufficient_evidence(window_start, window_end, packet.total_logs),
             confidence="low",
-            evidence_items=packet.evidence_items,
+            evidence_items=evidence_items,
             services_affected=packet.services_affected,
             total_logs=packet.total_logs,
             mode="rules",
             predicted_root_cause=predicted_root_cause,
             root_cause_candidates=rca_candidates,
             generated_candidates=generated_candidates,
+            absence_candidates=absence_candidates,
             predicted_root_cause_confidence=rca_confidence,
         )
 
@@ -265,7 +282,7 @@ def _explain_window(
         window_end=window_end,
         summary_text=summary_text,
         confidence=confidence,
-        evidence_items=packet.evidence_items,
+        evidence_items=evidence_items,
         services_affected=packet.services_affected,
         total_logs=packet.total_logs,
         mode=mode,
@@ -307,9 +324,37 @@ def _explain_window(
         predicted_root_cause=predicted_root_cause,
         root_cause_candidates=rca_candidates,
         generated_candidates=generated_candidates,
+        absence_candidates=absence_candidates,
         predicted_root_cause_confidence=rca_confidence,
         confidence_calibrated=confidence_calibrated,
     )
+
+
+def _absence_candidates(
+    db: Session, scope: str, window_start: datetime, window_end: datetime, baseline_window: str
+) -> list[str]:
+    """Services whose span traffic was baselined then collapsed in the incident (#184 Phase F).
+    Queries spans over ``[baseline_start, window_end]`` and delegates to
+    :func:`~src.core.rca.features.detect_absence`. Empty (no behaviour change) when nothing vanished
+    or there are no traces."""
+    from sqlalchemy import select
+
+    from src.core.rca.features import detect_absence
+    from src.db.models import TraceSpan
+    from src.utils.time import parse_duration
+
+    try:
+        baseline_start = window_start - parse_duration(baseline_window)
+    except (ValueError, TypeError):
+        return []
+    span_rows = db.execute(
+        select(TraceSpan).where(
+            TraceSpan.scope == scope,
+            TraceSpan.start_time >= baseline_start,
+            TraceSpan.start_time <= window_end,
+        )
+    ).scalars().all()
+    return sorted(detect_absence(span_rows, baseline_start, window_start, window_end))
 
 
 def _rank_candidates(

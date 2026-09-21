@@ -111,6 +111,48 @@ def _seconds(delta_start: datetime, delta_end: datetime) -> float:
     return max((delta_end - delta_start).total_seconds(), 1.0)
 
 
+def detect_absence(
+    spans,
+    baseline_start: datetime,
+    incident_start: datetime,
+    incident_end: datetime,
+    *,
+    min_baseline_spans: int = 5,
+    collapse_fraction: float = 0.2,
+) -> dict[str, float]:
+    """Absence-derived candidates (#184, Phase F): services whose span traffic was **established in the
+    baseline and collapsed in the incident** — the silent-failure coverage gap the normal
+    incident-window features can't see (``trace_features`` only entries services present in the
+    incident). Returns ``{service: collapse_strength in (0, 1]}``.
+
+    An absence is evidence **only when** the signal was baselined (Invariant 2): a service needs at
+    least ``min_baseline_spans`` baseline spans to count as "expected", so a service that was never
+    seen — missing telemetry — can never become a disappearance signal. A service is a candidate only
+    when its incident span-rate drops to ``≤ collapse_fraction`` of its baseline rate."""
+    pre = _seconds(baseline_start, incident_start)
+    post = _seconds(incident_start, incident_end)
+    bc: Counter = Counter()
+    ic: Counter = Counter()
+    for sp in spans:
+        s = sp.service
+        ts = sp.start_time
+        if not s or ts is None:
+            continue
+        if baseline_start <= ts < incident_start:
+            bc[s] += 1
+        elif incident_start <= ts <= incident_end:
+            ic[s] += 1
+    absent: dict[str, float] = {}
+    for s, base in bc.items():
+        if base < min_baseline_spans:  # not enough baseline to establish the signal was expected
+            continue
+        base_rate = base / pre
+        inc_rate = ic.get(s, 0) / post
+        if base_rate > 0 and inc_rate <= collapse_fraction * base_rate:
+            absent[s] = round(1.0 - inc_rate / base_rate, 4)
+    return absent
+
+
 def log_features(
     entries, incident_start: datetime, incident_end: datetime
 ) -> tuple[dict[str, int], dict[str, int], dict[str, int]]:
