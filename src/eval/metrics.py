@@ -24,6 +24,10 @@ class Prediction:
     produced_explanation: bool
     root_cause_service: Optional[str] = None
     predicted_services: list[str] = field(default_factory=list)
+    # The FULL generated-candidate set (services_affected ∪ every ranked candidate), distinct from
+    # the selected/top-k `predicted_services`. The failure taxonomy uses it to separate "cause never
+    # generated" (coverage) from "generated but not selected" (inference).
+    generated_candidates: list[str] = field(default_factory=list)
     top_trigger_timestamp: Optional[datetime] = None
     returned_any_trigger: bool = False
     confidence: str = "low"

@@ -16,11 +16,20 @@ the top pick, and the ground-truth service — buckets deterministically:
 |---|---|---|
 | `CORRECT` | top-1 pick == labeled cause | — (not a failure) |
 | `DETECTION` | positive case, no explanation produced | fix detection / triggering |
-| `COVERAGE` | labeled cause **not** in the candidate set | improve causal-object generation (→ Phase F) |
-| `INFERENCE` | labeled cause **in** the set but not ranked top-1 | fix ranking/compatibility (→ Phase G) |
+| `COVERAGE` | labeled cause **not** in the *full generated* candidate set | improve causal-object generation (→ Phase F) |
+| `INFERENCE` | labeled cause **was** generated but not ranked top-1 | fix ranking/compatibility (→ Phase G) |
 
-`CORRECT` is strict **top-1**: a labeled cause present but not top-ranked is an `INFERENCE` failure, one
-absent entirely is `COVERAGE`. Negative cases and unlabeled positives are out of scope (`None`).
+`CORRECT` is strict **top-1**. Coverage vs inference is decided against the **full generated candidate
+set** (`services_affected` ∪ every ranked candidate, recorded on `ExplainResult.generated_candidates`),
+**not** the selected/top-k `predicted_services` — a cause that was generated but dropped during cluster
+selection or truncated below top-k is an `INFERENCE` failure, not a generation gap. Getting this wrong
+would recommend Phase F when the real work is Phase G. Negative cases and unlabeled positives are out of
+scope (`None`).
+
+The report publishes **two named distributions**: `share_of_scored` (bucket / all labeled positives) and
+`share_of_failures` (bucket / failures) plus the overall `failure_rate`. #186 asks whether a failure
+*class* is "substantial", which is a share **of failures** — for 90 correct / 5 coverage / 5 inference,
+coverage is 5% of scored but 50% of failures.
 
 ### Why the finer buckets are not guessed here
 

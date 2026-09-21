@@ -99,8 +99,11 @@ def build_report(results: list[CaseResult]) -> dict:
         "lift_over_baseline": lift,
         "failure_taxonomy": {
             "n_scored": taxonomy.n_scored,
+            "n_failures": taxonomy.n_failures,
+            "failure_rate": _pct(taxonomy.failure_rate),
             "counts": taxonomy.counts,
-            "shares": {b.value: _pct(taxonomy.share(b)) for b in Bucket},
+            "share_of_scored": {b.value: _pct(taxonomy.share_of_scored(b)) for b in Bucket},
+            "share_of_failures": {b.value: _pct(taxonomy.share_of_failures(b)) for b in Bucket},
             "case_ids": taxonomy.case_ids,
             "scorable_axes": SCORABLE_AXES,
         },
@@ -145,11 +148,17 @@ def render_table(report: dict) -> str:
     tax = report.get("failure_taxonomy")
     if tax:
         lines.append("")
-        lines.append(f"Failure taxonomy (raglogs, existing pipeline; n={tax['n_scored']} labeled positive):")
+        lines.append(
+            f"Failure taxonomy (raglogs, existing pipeline; n={tax['n_scored']} labeled positive, "
+            f"failure rate {_fmt(tax.get('failure_rate'))}):"
+        )
         if tax["n_scored"]:
+            lines.append(f"  {'bucket':<12}{'of scored':>12}{'of failures':>14}{'n':>6}")
             for bucket in ("correct", "detection", "coverage", "inference"):
                 n = tax["counts"].get(bucket, 0)
-                lines.append(f"  {bucket:<12} {_fmt(tax['shares'].get(bucket))}  (n={n})")
+                of_scored = _fmt(tax["share_of_scored"].get(bucket))
+                of_fail = "—" if bucket == "correct" else _fmt(tax["share_of_failures"].get(bucket))
+                lines.append(f"  {bucket:<12}{of_scored:>12}{of_fail:>14}{n:>6}")
             lines.append("  (finer structural buckets — observability/ontology/observation-model/")
             lines.append("   non-identifiable — require the Phase H2 shadow eval; see scorable_axes)")
         else:

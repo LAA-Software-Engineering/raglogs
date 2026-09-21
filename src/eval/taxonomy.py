@@ -52,7 +52,12 @@ def classify_failure(case: EvalCase, pred: Prediction) -> Optional[Bucket]:
     truth = case.root_cause.service
     if pred.root_cause_service == truth:
         return Bucket.CORRECT
-    if truth in pred.predicted_services:
+    # Coverage vs inference must be decided against the FULL generated-candidate set, not the
+    # selected/top-k `predicted_services` — a cause that was generated but not selected/ranked is an
+    # inference failure, not a generation gap. Fall back to `predicted_services` only when the full
+    # set is unavailable (e.g. the baseline arm, which does not generate a candidate set).
+    generated = pred.generated_candidates or pred.predicted_services
+    if truth in generated:
         return Bucket.INFERENCE
     return Bucket.COVERAGE
 
@@ -65,19 +70,32 @@ class TaxonomyReport:
     counts: dict[str, int] = field(default_factory=dict)      # bucket value -> count
     case_ids: dict[str, list[str]] = field(default_factory=dict)  # bucket value -> case ids
 
-    def share(self, bucket: Bucket) -> Optional[float]:
-        """The fraction of scored cases in ``bucket`` (``None`` when nothing was scored)."""
+    @property
+    def n_failures(self) -> int:
+        """Scored cases that are any failure (everything but ``CORRECT``)."""
+        return self.n_scored - self.counts.get(Bucket.CORRECT.value, 0)
+
+    def share_of_scored(self, bucket: Bucket) -> Optional[float]:
+        """The fraction of **all scored** cases in ``bucket`` (``None`` when nothing was scored)."""
         if self.n_scored == 0:
             return None
         return self.counts.get(bucket.value, 0) / self.n_scored
 
+    def share_of_failures(self, bucket: Bucket) -> Optional[float]:
+        """The fraction of **failures** in ``bucket`` — the composition #186 asks for (``None`` when
+        there were no failures; ``CORRECT`` is not a failure and always maps to ``0.0``)."""
+        if self.n_failures == 0:
+            return None
+        if bucket == Bucket.CORRECT:
+            return 0.0
+        return self.counts.get(bucket.value, 0) / self.n_failures
+
     @property
-    def failure_share(self) -> Optional[float]:
-        """Fraction of scored cases that are any failure (not ``CORRECT``)."""
+    def failure_rate(self) -> Optional[float]:
+        """Overall fraction of scored cases that are failures (``None`` when nothing was scored)."""
         if self.n_scored == 0:
             return None
-        failures = self.n_scored - self.counts.get(Bucket.CORRECT.value, 0)
-        return failures / self.n_scored
+        return self.n_failures / self.n_scored
 
 
 def build_taxonomy(pairs: list[tuple[EvalCase, Prediction]]) -> TaxonomyReport:

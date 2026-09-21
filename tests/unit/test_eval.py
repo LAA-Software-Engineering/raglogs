@@ -236,6 +236,20 @@ class TestPredictionFromResult:
         assert pred.root_cause_service == "billing-worker"
         assert pred.predicted_services == ["billing-worker"]
 
+    def test_generated_candidates_carry_the_full_set(self):
+        # A cause in a secondary cluster / beyond top-k is in generated_candidates though the
+        # selected predicted_services omit it — so the taxonomy calls it inference, not coverage.
+        res = _result(primary_services=["api"])
+        res.root_cause_candidates = [{"service": "api"}]  # selected top-k
+        res.generated_candidates = ["api", "db"]          # full generated set (db beyond top-k)
+        pred = prediction_from_result(res)
+        assert pred.predicted_services == ["api"]
+        assert pred.generated_candidates == ["api", "db"]
+
+    def test_generated_candidates_fall_back_to_selected_when_absent(self):
+        pred = prediction_from_result(_result(primary_services=["billing-worker"]))
+        assert pred.generated_candidates == ["billing-worker"]  # older result: no full set recorded
+
 
 class TestOrderedServices:
     def _cluster(self, services, error_service_counts):

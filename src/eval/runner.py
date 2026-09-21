@@ -59,6 +59,9 @@ def prediction_from_result(result: ExplainResult) -> Prediction:
         produced_explanation=produced,
         root_cause_service=root_cause,
         predicted_services=predicted,
+        # The full generated set the pipeline recorded (services_affected ∪ full ranked list),
+        # falling back to the selected list only when the field is absent (older results).
+        generated_candidates=list(result.generated_candidates) or list(predicted),
         top_trigger_timestamp=top_trigger_ts,
         returned_any_trigger=bool(result.trigger_candidates),
         confidence=result.confidence,

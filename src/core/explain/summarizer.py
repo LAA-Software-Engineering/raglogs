@@ -54,6 +54,11 @@ class ExplainResult:
     # the log-cluster path is unchanged when no model is present.
     predicted_root_cause: Optional[str] = None
     root_cause_candidates: list[dict] = field(default_factory=list)
+    # The FULL set of services generated as candidates this incident (services_affected ∪ every
+    # ranked candidate, before top-k truncation or cluster selection). Distinct from the selected
+    # top-k output above: eval's failure taxonomy uses it to tell "cause never generated" (coverage)
+    # from "generated but not selected/ranked" (inference). No behaviour change; instrumentation only.
+    generated_candidates: list[str] = field(default_factory=list)
     # Calibrated P(top-1 correct) for the ranker prediction (#118 D / #83). Set
     # only when a calibrator model is configured; None otherwise.
     predicted_root_cause_confidence: Optional[float] = None
@@ -182,9 +187,11 @@ def _explain_window(
     # configured it ranks candidate services across logs/traces/metrics — this can
     # localise trace/metric-only root causes that have no distinctive log cluster.
     # With no model this is skipped entirely and the log-cluster path is unchanged.
-    predicted_root_cause, rca_candidates, rca_confidence = _rank_candidates(
+    predicted_root_cause, rca_candidates, rca_confidence, ranked_services = _rank_candidates(
         db, scope, window_start, window_end, baseline_window, settings
     )
+    # The full generated-candidate set: every affected service plus every ranked candidate (untruncated).
+    generated_candidates = sorted(set(packet.services_affected) | set(ranked_services))
 
     # NOTE: a metric/log abstention "gate" (#79) was investigated and shelved as a
     # negative result — no modality on the available dev corpora both calibrates and
@@ -208,6 +215,7 @@ def _explain_window(
             mode="rules",
             predicted_root_cause=predicted_root_cause,
             root_cause_candidates=rca_candidates,
+            generated_candidates=generated_candidates,
             predicted_root_cause_confidence=rca_confidence,
         )
 
@@ -293,6 +301,7 @@ def _explain_window(
         ],
         predicted_root_cause=predicted_root_cause,
         root_cause_candidates=rca_candidates,
+        generated_candidates=generated_candidates,
         predicted_root_cause_confidence=rca_confidence,
         confidence_calibrated=confidence_calibrated,
     )
@@ -314,7 +323,7 @@ def _rank_candidates(
 
     ranker = load_ranker(settings.rca_ranker_model_path)
     if ranker is None:
-        return None, [], None
+        return None, [], None, []
 
     from src.core.rca.candidates import build_candidates
     from src.core.rca.features import compute_features
@@ -336,7 +345,7 @@ def _rank_candidates(
     )
     candidates = build_candidates(table, scorer=ranker.score, exclude=excluded)
     if not candidates:
-        return None, [], None
+        return None, [], None, []
     ranker_top = candidates[0].service
     # Trace-graph propagation rerank (#118 / #79 carve-out, opt-in). Refines the
     # order so a true upstream culprit can overtake the loud caller that only
@@ -357,7 +366,10 @@ def _rank_candidates(
         confidence = calibrated_confidence(calibrator, candidates)
     else:
         confidence = None
-    return candidates[0].service, [c.to_dict() for c in candidates[:top_k]], confidence
+    # Also return the FULL ranked service list (untruncated) so the caller can record the complete
+    # generated-candidate set — a labeled cause ranked beyond top-k is "generated", not "missing".
+    ranked_services = [c.service for c in candidates]
+    return candidates[0].service, [c.to_dict() for c in candidates[:top_k]], confidence, ranked_services
 
 
 def _propagation_rerank(
