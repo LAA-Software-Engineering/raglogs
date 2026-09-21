@@ -113,6 +113,21 @@ class TestAvailability:
         sig = summarize_metrics(samples, _T0)["db"]
         assert sig.error_measured is False and sig.sig_state is None
 
+    def test_one_malformed_sample_among_valid_ones_is_not_averaged_to_normal(self):
+        # incident latency [-10, 30] averages to a normal-looking 10, but one sample is malformed;
+        # validate raw samples -> latency branch UNKNOWN, so no fabricated OBSERVED ABSENT.
+        samples = [_M("db", "error_rate", 0.01, _T0 + timedelta(minutes=1)),
+                   _M("db", "latency_ms", 10.0, _T0 - timedelta(minutes=1)),
+                   _M("db", "latency_ms", -10.0, _T0 + timedelta(minutes=1)),
+                   _M("db", "latency_ms", 30.0, _T0 + timedelta(minutes=1))]
+        sig = summarize_metrics(samples, _T0)["db"]
+        assert sig.latency_measured is False and sig.sig_state is None
+        assert build_observables({"db": sig}) == []
+        # an out-of-range error sample among valid ones also invalidates the error branch
+        err_samples = [_M("db", "error_rate", 0.01, _T0 + timedelta(minutes=1)),
+                       _M("db", "error_rate", 5.0, _T0 + timedelta(minutes=1))]
+        assert summarize_metrics(err_samples, _T0)["db"].error_measured is False
+
     def test_zero_latency_baseline_is_unknown_not_absent(self):
         # baseline latency 0 makes 30/0 undefined; with a measured-normal error branch the OR must
         # NOT be declared ABSENT — the latency branch is unavailable, so sig is UNKNOWN.

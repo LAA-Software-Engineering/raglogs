@@ -85,21 +85,31 @@ def summarize_metrics(samples: list, window_start: datetime) -> dict[str, Servic
     def mean(xs: list[float]) -> float:
         return sum(xs) / len(xs) if xs else 0.0
 
+    def all_valid_rates(xs: list[float]) -> bool:
+        return all(math.isfinite(x) and 0.0 <= x <= 1.0 for x in xs)
+
+    def all_nonneg(xs: list[float]) -> bool:
+        return all(math.isfinite(x) and x >= 0.0 for x in xs)
+
     signals: dict[str, ServiceSignal] = {}
     for svc in sorted(set(inc) | set(base)):
         inc_err = inc[svc].get("error_rate", [])
         inc_lat = inc[svc].get("latency_ms", [])
-        base_lat_mean = mean(base[svc].get("latency_ms", []))
-        err = mean(inc_err)
-        # A ratio needs an incident sample AND a *positive* baseline (30/0 is UNKNOWN, not normal).
-        ratio = mean(inc_lat) / base_lat_mean if inc_lat and base_lat_mean > 0 else 1.0
+        base_lat = base[svc].get("latency_ms", [])
+        base_lat_mean = mean(base_lat)
 
-        # Validate each branch against the core's numeric contract instead of clamping malformed
-        # telemetry into a category: an out-of-range/non-finite value leaves that branch UNKNOWN
-        # (unmeasured), never a fabricated OBSERVED-normal. A rate must be finite in [0,1]; a latency
-        # ratio finite and non-negative.
-        error_measured = bool(inc_err) and math.isfinite(err) and 0.0 <= err <= 1.0
-        latency_measured = bool(inc_lat) and base_lat_mean > 0 and math.isfinite(ratio) and ratio >= 0.0
+        # Validate every RAW sample, not just the aggregate — an in-range mean does not prove valid
+        # inputs (e.g. incident latency [-10, 30] averages to a normal-looking 10). Any malformed
+        # sample leaves that branch UNKNOWN (unmeasured), never averaged into false-normal evidence.
+        # A rate must be finite in [0,1]; a latency needs valid non-negative incident + positive
+        # baseline samples (30/0 is UNKNOWN, not normal).
+        error_measured = bool(inc_err) and all_valid_rates(inc_err)
+        latency_measured = (
+            bool(inc_lat) and all_nonneg(inc_lat)
+            and bool(base_lat) and all_nonneg(base_lat) and base_lat_mean > 0
+        )
+        err = mean(inc_err)
+        ratio = mean(inc_lat) / base_lat_mean if latency_measured else 1.0
 
         error_present = error_measured and discretize_rate(err) == State.PRESENT
         latency_high = latency_measured and discretize_ratio(ratio) == State.HIGH
