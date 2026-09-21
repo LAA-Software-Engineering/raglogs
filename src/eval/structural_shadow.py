@@ -145,11 +145,11 @@ def _callees(service: str, edges: set[tuple[str, str]]) -> set[str]:
     return {callee for caller, callee in edges if caller == service}
 
 
-def service_universe(signals: dict[str, ServiceSignal], edges: set[tuple[str, str]]) -> set[str]:
-    """Every service the generator could return — metric-bearing services **and** span-only services
-    (metricless callees can become silent-root candidates). This is the denominator for
-    ``candidate_ratio`` so "enumerate everything" is exactly 1.0."""
-    return set(signals) | {svc for edge in edges for svc in edge}
+def service_universe(signals: dict[str, ServiceSignal], span_services: set[str]) -> set[str]:
+    """Every service seen in the case's telemetry — metric-bearing services **and** all services seen
+    in spans (including root-only spans with no parent edge). This is the denominator for
+    ``candidate_ratio`` so "enumerate everything" is exactly 1.0 and matches the telemetry-wide meaning."""
+    return set(signals) | set(span_services)
 
 
 def build_hypotheses(signals: dict[str, ServiceSignal], edges: set[tuple[str, str]]):
@@ -215,16 +215,19 @@ def shadow_result(case: EvalCase) -> ShadowResult:
 
     truth = case.root_cause.service if case.root_cause else ""
     if case.metrics_path is None or case.spans_path is None:
-        return ShadowResult(case.id, truth, "no_telemetry", (), (), False, False, False)
+        # No telemetry -> no localization -> an abstention (returned nothing).
+        return ShadowResult(case.id, truth, "no_telemetry", (), (), False, False, True)
 
     signals = summarize_metrics(load_metrics_jsonl(case.metrics_path), case.window_start)
-    edges = call_edges(load_spans_jsonl(case.spans_path))
-    # The service universe must include span-only services (the generator adds metricless callees as
-    # silent-root candidates), else candidate_ratio can exceed 1.0 and "1.0 = enumerate all" is false.
-    n_services = len(service_universe(signals, edges))
+    spans = load_spans_jsonl(case.spans_path)
+    edges = call_edges(spans)
+    # The service universe is every service seen in telemetry — metric-bearing services and all span
+    # services (incl. root-only spans with no edge) — so candidate_ratio's "1.0 = enumerate all" holds.
+    n_services = len(service_universe(signals, {sp.service for sp in spans if sp.service}))
     hypotheses = build_hypotheses(signals, edges)
     if not hypotheses:
-        return ShadowResult(case.id, truth, "no_candidates", (), (), False, False, False,
+        # No hypothesis returned -> an abstention, not a zero-abstention success.
+        return ShadowResult(case.id, truth, "no_candidates", (), (), False, False, True,
                             n_candidates=0, n_services=n_services)
 
     result = resolve(partition(hypotheses, build_observables(signals)))
@@ -235,7 +238,7 @@ def shadow_result(case: EvalCase) -> ShadowResult:
         classes=classes, localizations=localizations,
         truth_retained=truth in localizations,
         unique=result.outcome is Outcome.IDENTIFIED and localizations == (truth,),
-        abstained=result.outcome is Outcome.NO_COMPATIBLE_HYPOTHESIS,
+        abstained=not localizations,  # any empty result (incl. NO_COMPATIBLE) is an abstention
         n_candidates=len(localizations), n_services=n_services,
     )
 

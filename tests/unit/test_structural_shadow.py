@@ -156,9 +156,14 @@ class TestCandidateRecall:
         hyps = build_hypotheses(signals, edges)
         localizations = {h.localization for h in hyps}
         assert "db" in localizations                                   # silent-root candidate generated
-        universe = service_universe(signals, edges)
-        assert universe == {"api", "db"}                               # span-only 'db' counted
+        universe = service_universe(signals, {"api", "db"})            # span_services, not edges
+        assert universe == {"api", "db"}
         assert len(localizations) <= len(universe)                     # candidate_ratio <= 1.0
+
+    def test_span_only_root_with_no_edge_counts_in_universe(self):
+        from src.eval.structural_shadow import service_universe
+        # 'db' appears only as a root span (no parent edge) -> still telemetry-visible
+        assert service_universe({"api": _sig("api", anomalous=True)}, {"api", "db"}) == {"api", "db"}
 
 
 class TestScoring:
@@ -190,3 +195,12 @@ class TestScoring:
         results = [ShadowResult("c", "storage", "uncertain", (), ("media",), False, False, False,
                                 n_candidates=1, n_services=4)]
         assert score_shadow(results).candidate_recall == 0.0
+
+    def test_no_localization_cases_count_as_abstentions(self):
+        # every case produced no candidate -> abstention_rate must be 100%, not 0%
+        results = [
+            ShadowResult("c1", "db", "no_candidates", (), (), False, False, True, 0, 3),
+            ShadowResult("c2", "db", "no_telemetry", (), (), False, False, True, 0, 0),
+        ]
+        s = score_shadow(results)
+        assert s.abstention_rate == 1.0 and s.candidate_recall == 0.0

@@ -66,7 +66,9 @@ a confident structural pick.
 
 ## Result — real OTel (`otel`, `otel-fresh`, 9 cases each): `no_candidates`
 
-The generator produced **no candidates** on every OTel case: the telemetry is OTLP infra counters
+The generator produced **no candidates** on every OTel case (reported honestly as **abstention 100%** —
+a no-localization result is an abstention, not a zero-abstention success): the telemetry is OTLP infra
+counters
 (`process.cpu.time`, `container.memory.percent`, many `service = null`) with `status_code = null`
 spans — no per-service error/latency signal for the `sig` adapter to key on. This is **not** an A–E
 result at all; it localizes the real-world gap to the **observable adapter** (deriving per-service
