@@ -1,6 +1,6 @@
 import math
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -145,6 +145,11 @@ class EvidencePacket:
     trigger_candidates: list[TriggerCandidate]
     evidence_items: list[str]
     services_affected: list[str]
+    # The legacy candidate-generation pool: services drawn from the significant (error/warn/fatal/
+    # critical) clusters only — the set primary selection actually considers. Distinct from
+    # `services_affected` (every service in every cluster, incl. informational), which is a
+    # display/evidence field. Used by eval's failure taxonomy to decide coverage vs. inference.
+    candidate_services: list[str] = field(default_factory=list)
     service_filter: Optional[str] = None
     environment_filter: Optional[str] = None
     # #82: a rare change occurred near onset (trigger_found) vs. that change is
@@ -353,6 +358,24 @@ def _candidate_score(
     )
 
 
+def select_significant_clusters(clusters: list[ClusterData]) -> list[ClusterData]:
+    """The legacy primary-analysis pool: clusters carrying an error/warn/fatal/critical level. Falls
+    back to *all* clusters only when none is significant, so an explanation is still produced. This is
+    the candidate-eligibility boundary — informational-only clusters are not considered."""
+    significant = [
+        c for c in clusters
+        if any(lvl in ("error", "fatal", "warn", "critical") for lvl in c.levels)
+    ]
+    return significant or clusters
+
+
+def legacy_candidate_services(significant_clusters: list[ClusterData]) -> list[str]:
+    """The services eligible as root-cause candidates on the legacy (no-ranker) path: the distinct
+    services appearing in the significant clusters. Not ``services_affected`` (every service in every
+    cluster) — a service seen only in an informational cluster was never a candidate."""
+    return sorted({s for c in significant_clusters for s in c.services})
+
+
 def select_primary_cluster(
     significant_clusters: list[ClusterData],
     window_start: Optional[datetime] = None,
@@ -408,14 +431,8 @@ def assemble_evidence(
         scope=scope,
     )
 
-    # Error/warn clusters only for primary analysis
-    significant_clusters = [
-        c for c in clusters
-        if any(lvl in ("error", "fatal", "warn", "critical") for lvl in c.levels)
-    ]
-
-    if not significant_clusters:
-        significant_clusters = clusters
+    # Error/warn clusters only for primary analysis — the legacy candidate-generation pool.
+    significant_clusters = select_significant_clusters(clusters)
 
     primary = select_primary_cluster(significant_clusters, window_start, window_end)
     # Sort secondary by count descending — surface highest-volume effects first.
@@ -451,11 +468,12 @@ def assemble_evidence(
             search_end=onset,
         )
 
-    # Collect affected services
+    # Collect affected services (display) vs. the candidate pool (significant clusters only).
     services_set: set[str] = set()
     for c in clusters:
         services_set.update(c.services.keys())
     services_affected = sorted(services_set)
+    candidate_services = legacy_candidate_services(significant_clusters)
 
     # Build evidence items
     evidence_items = _build_evidence_items(
@@ -476,6 +494,7 @@ def assemble_evidence(
         trigger_candidates=triggers,
         evidence_items=evidence_items,
         services_affected=services_affected,
+        candidate_services=candidate_services,
         service_filter=service_filter,
         environment_filter=environment_filter,
         trigger_found=trigger_found,

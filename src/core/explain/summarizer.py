@@ -54,6 +54,13 @@ class ExplainResult:
     # the log-cluster path is unchanged when no model is present.
     predicted_root_cause: Optional[str] = None
     root_cause_candidates: list[dict] = field(default_factory=list)
+    # The full eligible candidate set of the ACTIVE generation mechanism: the learned ranker's
+    # post-exclusion, pre-top-k list when it produced candidates, otherwise the legacy
+    # significant-cluster pool (never a union of the two, and never `services_affected`, which
+    # includes informational-only / excluded services that were never eligible). Distinct from the
+    # selected/top-k output above: eval's failure taxonomy uses it to tell "cause never generated"
+    # (coverage) from "generated but not selected/ranked" (inference). Instrumentation only.
+    generated_candidates: list[str] = field(default_factory=list)
     # Calibrated P(top-1 correct) for the ranker prediction (#118 D / #83). Set
     # only when a calibrator model is configured; None otherwise.
     predicted_root_cause_confidence: Optional[float] = None
@@ -182,9 +189,14 @@ def _explain_window(
     # configured it ranks candidate services across logs/traces/metrics — this can
     # localise trace/metric-only root causes that have no distinctive log cluster.
     # With no model this is skipped entirely and the log-cluster path is unchanged.
-    predicted_root_cause, rca_candidates, rca_confidence = _rank_candidates(
+    predicted_root_cause, rca_candidates, rca_confidence, ranked_services = _rank_candidates(
         db, scope, window_start, window_end, baseline_window, settings
     )
+    # The generated-candidate set of the ACTIVE mechanism (not a union of both): when the learned
+    # ranker produced candidates it *is* the generator (its full post-exclusion, pre-top-k list),
+    # otherwise the legacy significant-cluster pool. Never `services_affected` — that includes
+    # informational-only and excluded services that were never eligible candidates.
+    generated_candidates = sorted(ranked_services) if ranked_services else list(packet.candidate_services)
 
     # NOTE: a metric/log abstention "gate" (#79) was investigated and shelved as a
     # negative result — no modality on the available dev corpora both calibrates and
@@ -208,6 +220,7 @@ def _explain_window(
             mode="rules",
             predicted_root_cause=predicted_root_cause,
             root_cause_candidates=rca_candidates,
+            generated_candidates=generated_candidates,
             predicted_root_cause_confidence=rca_confidence,
         )
 
@@ -293,6 +306,7 @@ def _explain_window(
         ],
         predicted_root_cause=predicted_root_cause,
         root_cause_candidates=rca_candidates,
+        generated_candidates=generated_candidates,
         predicted_root_cause_confidence=rca_confidence,
         confidence_calibrated=confidence_calibrated,
     )
@@ -306,15 +320,17 @@ def _rank_candidates(
     baseline_window: str,
     settings,
     top_k: int = 5,
-) -> tuple[Optional[str], list[dict], Optional[float]]:
-    """Rank candidate services with the learned ranker, or ``(None, [])`` when no
-    model artifact is configured (graceful fallback — the caller then relies on
-    the existing log-cluster selection)."""
+) -> tuple[Optional[str], list[dict], Optional[float], list[str]]:
+    """Rank candidate services with the learned ranker. Returns
+    ``(top_service, top_k_candidate_dicts, calibrated_confidence, all_candidate_services)`` — the last
+    being the FULL post-exclusion, pre-top-k candidate list (the generation boundary). All four are
+    empty/``None`` (``(None, [], None, [])``) when no model artifact is configured — a graceful
+    fallback, and the caller then relies on the legacy log-cluster candidate pool."""
     from src.core.rca.ranker import load_ranker
 
     ranker = load_ranker(settings.rca_ranker_model_path)
     if ranker is None:
-        return None, [], None
+        return None, [], None, []
 
     from src.core.rca.candidates import build_candidates
     from src.core.rca.features import compute_features
@@ -336,7 +352,7 @@ def _rank_candidates(
     )
     candidates = build_candidates(table, scorer=ranker.score, exclude=excluded)
     if not candidates:
-        return None, [], None
+        return None, [], None, []
     ranker_top = candidates[0].service
     # Trace-graph propagation rerank (#118 / #79 carve-out, opt-in). Refines the
     # order so a true upstream culprit can overtake the loud caller that only
@@ -357,7 +373,10 @@ def _rank_candidates(
         confidence = calibrated_confidence(calibrator, candidates)
     else:
         confidence = None
-    return candidates[0].service, [c.to_dict() for c in candidates[:top_k]], confidence
+    # Also return the FULL ranked service list (untruncated) so the caller can record the complete
+    # generated-candidate set — a labeled cause ranked beyond top-k is "generated", not "missing".
+    ranked_services = [c.service for c in candidates]
+    return candidates[0].service, [c.to_dict() for c in candidates[:top_k]], confidence, ranked_services
 
 
 def _propagation_rerank(

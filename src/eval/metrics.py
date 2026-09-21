@@ -24,6 +24,11 @@ class Prediction:
     produced_explanation: bool
     root_cause_service: Optional[str] = None
     predicted_services: list[str] = field(default_factory=list)
+    # The full eligible candidate set of the active generation mechanism (the ranker's
+    # post-exclusion/pre-top-k list, else the legacy significant-cluster pool), distinct from the
+    # selected/top-k `predicted_services`. The failure taxonomy uses it to separate "cause never
+    # generated" (coverage) from "generated but not selected" (inference).
+    generated_candidates: list[str] = field(default_factory=list)
     top_trigger_timestamp: Optional[datetime] = None
     returned_any_trigger: bool = False
     confidence: str = "low"

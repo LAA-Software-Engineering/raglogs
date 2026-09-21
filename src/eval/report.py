@@ -18,6 +18,7 @@ from src.eval.metrics import (
     trigger_hit,
 )
 from src.eval.runner import CaseResult
+from src.eval.taxonomy import SCORABLE_AXES, Bucket, build_taxonomy, classify_failure
 
 
 def _pct(x: Optional[float]) -> Optional[float]:
@@ -62,13 +63,17 @@ def build_report(results: list[CaseResult]) -> dict:
         ),
     }
 
+    taxonomy = build_taxonomy(raglogs_pairs)
+
     cases = []
     for r in results:
+        bucket = classify_failure(r.case, r.raglogs)
         cases.append(
             {
                 "id": r.case.id,
                 "expect_explanation": r.case.expect_explanation,
                 "expected_service": r.case.root_cause.service if r.case.root_cause else None,
+                "failure_bucket": bucket.value if bucket else None,
                 "raglogs": {
                     "produced_explanation": r.raglogs.produced_explanation,
                     "root_cause_hit": root_cause_hit(r.case, r.raglogs),
@@ -92,6 +97,16 @@ def build_report(results: list[CaseResult]) -> dict:
         "raglogs": _arm_dict(raglogs_score),
         "baseline": _arm_dict(baseline_score),
         "lift_over_baseline": lift,
+        "failure_taxonomy": {
+            "n_scored": taxonomy.n_scored,
+            "n_failures": taxonomy.n_failures,
+            "failure_rate": _pct(taxonomy.failure_rate),
+            "counts": taxonomy.counts,
+            "share_of_scored": {b.value: _pct(taxonomy.share_of_scored(b)) for b in Bucket},
+            "share_of_failures": {b.value: _pct(taxonomy.share_of_failures(b)) for b in Bucket},
+            "case_ids": taxonomy.case_ids,
+            "scorable_axes": SCORABLE_AXES,
+        },
         "cases": cases,
     }
 
@@ -129,6 +144,25 @@ def render_table(report: dict) -> str:
             lines.append(f"  {conf:<10} {_fmt(cell['accuracy'])}  (n={cell['n']})")
     else:
         lines.append("  (no cases)")
+
+    tax = report.get("failure_taxonomy")
+    if tax:
+        lines.append("")
+        lines.append(
+            f"Failure taxonomy (raglogs, existing pipeline; n={tax['n_scored']} labeled positive, "
+            f"failure rate {_fmt(tax.get('failure_rate'))}):"
+        )
+        if tax["n_scored"]:
+            lines.append(f"  {'bucket':<12}{'of scored':>12}{'of failures':>14}{'n':>6}")
+            for bucket in ("correct", "detection", "coverage", "inference"):
+                n = tax["counts"].get(bucket, 0)
+                of_scored = _fmt(tax["share_of_scored"].get(bucket))
+                of_fail = "—" if bucket == "correct" else _fmt(tax["share_of_failures"].get(bucket))
+                lines.append(f"  {bucket:<12}{of_scored:>12}{of_fail:>14}{n:>6}")
+            lines.append("  (finer structural buckets — observability/ontology/observation-model/")
+            lines.append("   non-identifiable — require the Phase H2 shadow eval; see scorable_axes)")
+        else:
+            lines.append("  (no labeled positive cases)")
     return "\n".join(lines)
 
 
