@@ -19,12 +19,19 @@ the top pick, and the ground-truth service — buckets deterministically:
 | `COVERAGE` | labeled cause **not** in the *full generated* candidate set | improve causal-object generation (→ Phase F) |
 | `INFERENCE` | labeled cause **was** generated but not ranked top-1 | fix ranking/compatibility (→ Phase G) |
 
-`CORRECT` is strict **top-1**. Coverage vs inference is decided against the **full generated candidate
-set** (`services_affected` ∪ every ranked candidate, recorded on `ExplainResult.generated_candidates`),
-**not** the selected/top-k `predicted_services` — a cause that was generated but dropped during cluster
-selection or truncated below top-k is an `INFERENCE` failure, not a generation gap. Getting this wrong
-would recommend Phase F when the real work is Phase G. Negative cases and unlabeled positives are out of
-scope (`None`).
+`CORRECT` is strict **top-1**. Coverage vs inference is decided against the **generated candidate set of
+the active mechanism** (recorded on `ExplainResult.generated_candidates`), **not** the selected/top-k
+`predicted_services`:
+
+- when the learned ranker fired it *is* the generator — its full candidate list **after exclusion,
+  before top-k truncation** (`build_candidates(..., exclude=…)`);
+- otherwise the legacy pool — services from the **significant clusters** (error/warn/fatal/critical),
+  never `services_affected` (which includes informational-only and thus never-eligible services).
+
+It is the active mechanism's set, never a union of the two — a cause dropped during cluster selection or
+truncated below top-k is `INFERENCE`, but a cause that only ever appeared in an informational cluster or
+was excluded upstream is `COVERAGE`. Getting either direction wrong would recommend the wrong phase.
+Negative cases and unlabeled positives are out of scope (`None`).
 
 The report publishes **two named distributions**: `share_of_scored` (bucket / all labeled positives) and
 `share_of_failures` (bucket / failures) plus the overall `failure_rate`. #186 asks whether a failure
