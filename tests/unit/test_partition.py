@@ -184,6 +184,24 @@ class TestInputBoundaryIsASet:
             Partition(classes=(EquivalenceClass(signature=(), members=(), d_missing=frozenset()),),
                       f_usable=(), eliminated=())
 
+    def test_value_types_own_their_containers(self):
+        from src.core.rca.partition import EquivalenceClass, Partition
+        members = [_h("h", {"a": "present"})]
+        missing = {"x"}
+        ec = EquivalenceClass(signature=[("a", "present")], members=members, d_missing=missing)
+        missing.clear()   # must not change D_missing (NON_IDENTIFIABLE -> IRREDUCIBLE)
+        members.clear()   # must not empty the class
+        assert ec.d_missing == frozenset({"x"})
+        assert len(ec.members) == 1
+        assert isinstance(ec.signature, tuple) and isinstance(ec.members, tuple)
+
+        classes = [ec]
+        elim: list = []
+        p = Partition(classes=classes, f_usable=["a"], eliminated=elim)
+        classes.clear()   # must not zero out the partition
+        assert len(p.classes) == 1
+        assert isinstance(p.classes, tuple) and isinstance(p.f_usable, tuple)
+
 
 class TestNonFiniteInputsRejected:
     @pytest.mark.parametrize("bad", [float("nan"), float("inf"), -0.1])

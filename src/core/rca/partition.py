@@ -111,6 +111,12 @@ class EquivalenceClass:
     d_missing: frozenset[str]
 
     def __post_init__(self) -> None:
+        # Own the representation before validating it (frozen only stops field reassignment, not
+        # mutation through a caller's aliased list/set): snapshot into immutable containers so the
+        # invariants below hold for the object's lifetime, not just at construction.
+        object.__setattr__(self, "signature", tuple(tuple(pair) for pair in self.signature))
+        object.__setattr__(self, "members", tuple(self.members))
+        object.__setattr__(self, "d_missing", frozenset(self.d_missing))
         # A class is an equivalence class of *hypotheses*: it must contain at least one. An empty
         # class is neither a singleton nor a multi-member class, so it would fall outside the outcome
         # function entirely — reject it at construction, on every path, not just in the factory.
@@ -142,6 +148,11 @@ class Partition:
     eliminated: tuple[Hypothesis, ...] = ()
 
     def __post_init__(self) -> None:
+        # Own the representation before validating (see EquivalenceClass): snapshot into tuples so a
+        # caller's aliased list cannot later empty `classes`/`eliminated` and bypass the invariant.
+        object.__setattr__(self, "classes", tuple(self.classes))
+        object.__setattr__(self, "f_usable", tuple(self.f_usable))
+        object.__setattr__(self, "eliminated", tuple(self.eliminated))
         if not self.classes and not self.eliminated:
             raise ValueError(
                 "Partition describes no hypotheses: an empty `classes` is valid only when `eliminated` "
