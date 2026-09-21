@@ -190,8 +190,11 @@ def _explain_window(
     predicted_root_cause, rca_candidates, rca_confidence, ranked_services = _rank_candidates(
         db, scope, window_start, window_end, baseline_window, settings
     )
-    # The full generated-candidate set: every affected service plus every ranked candidate (untruncated).
-    generated_candidates = sorted(set(packet.services_affected) | set(ranked_services))
+    # The generated-candidate set of the ACTIVE mechanism (not a union of both): when the learned
+    # ranker produced candidates it *is* the generator (its full post-exclusion, pre-top-k list),
+    # otherwise the legacy significant-cluster pool. Never `services_affected` — that includes
+    # informational-only and excluded services that were never eligible candidates.
+    generated_candidates = sorted(ranked_services) if ranked_services else list(packet.candidate_services)
 
     # NOTE: a metric/log abstention "gate" (#79) was investigated and shelved as a
     # negative result — no modality on the available dev corpora both calibrates and
@@ -315,10 +318,12 @@ def _rank_candidates(
     baseline_window: str,
     settings,
     top_k: int = 5,
-) -> tuple[Optional[str], list[dict], Optional[float]]:
-    """Rank candidate services with the learned ranker, or ``(None, [])`` when no
-    model artifact is configured (graceful fallback — the caller then relies on
-    the existing log-cluster selection)."""
+) -> tuple[Optional[str], list[dict], Optional[float], list[str]]:
+    """Rank candidate services with the learned ranker. Returns
+    ``(top_service, top_k_candidate_dicts, calibrated_confidence, all_candidate_services)`` — the last
+    being the FULL post-exclusion, pre-top-k candidate list (the generation boundary). All four are
+    empty/``None`` (``(None, [], None, [])``) when no model artifact is configured — a graceful
+    fallback, and the caller then relies on the legacy log-cluster candidate pool."""
     from src.core.rca.ranker import load_ranker
 
     ranker = load_ranker(settings.rca_ranker_model_path)
