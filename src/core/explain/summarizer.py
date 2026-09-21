@@ -54,10 +54,12 @@ class ExplainResult:
     # the log-cluster path is unchanged when no model is present.
     predicted_root_cause: Optional[str] = None
     root_cause_candidates: list[dict] = field(default_factory=list)
-    # The FULL set of services generated as candidates this incident (services_affected ∪ every
-    # ranked candidate, before top-k truncation or cluster selection). Distinct from the selected
-    # top-k output above: eval's failure taxonomy uses it to tell "cause never generated" (coverage)
-    # from "generated but not selected/ranked" (inference). No behaviour change; instrumentation only.
+    # The full eligible candidate set of the ACTIVE generation mechanism: the learned ranker's
+    # post-exclusion, pre-top-k list when it produced candidates, otherwise the legacy
+    # significant-cluster pool (never a union of the two, and never `services_affected`, which
+    # includes informational-only / excluded services that were never eligible). Distinct from the
+    # selected/top-k output above: eval's failure taxonomy uses it to tell "cause never generated"
+    # (coverage) from "generated but not selected/ranked" (inference). Instrumentation only.
     generated_candidates: list[str] = field(default_factory=list)
     # Calibrated P(top-1 correct) for the ranker prediction (#118 D / #83). Set
     # only when a calibrator model is configured; None otherwise.

@@ -6,13 +6,19 @@ makes that bet falsifiable: bucket the current pipeline's failures **before** ex
 so the next investment is chosen by data (this is the "measure before extend" checkpoint, #88/#74).
 
 This module is deliberately narrow. It classifies each labeled positive case's *existing* output —
-service candidates (`predicted_services`) + the top pick + ground-truth service — into the buckets a
+the top pick, the selected/top-k `predicted_services`, and the **full eligible candidate set** the
+active mechanism generated (`generated_candidates`: the ranker's post-exclusion/pre-top-k list, else
+the legacy significant-cluster pool) — against the ground-truth service, into the buckets a
 service-level pipeline can determine **without** running the new structural machinery:
 
 - ``CORRECT``   — the top-1 pick is the labeled cause (not a failure).
 - ``DETECTION`` — a positive case produced no explanation at all.
-- ``COVERAGE``  — the labeled cause was never generated as a candidate.
-- ``INFERENCE`` — the labeled cause **was** a candidate but was not ranked top-1.
+- ``COVERAGE``  — the labeled cause is **not** in the generated candidate set (never generated).
+- ``INFERENCE`` — the labeled cause **was** generated but was not ranked/selected top-1.
+
+Coverage vs inference is decided against `generated_candidates`, **not** `predicted_services` — a cause
+that was generated but dropped in selection/top-k is an inference failure, while an informational-only
+or excluded service that was never eligible is a coverage gap.
 
 The finer structural buckets in #177 — ``observability`` / ``ontology`` / ``observation-model`` /
 ``non-identifiable`` — are refinements of ``COVERAGE`` / ``INFERENCE`` that need the structural shadow
