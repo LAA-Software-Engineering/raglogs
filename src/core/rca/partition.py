@@ -110,13 +110,13 @@ class EquivalenceClass:
 
 @dataclass(frozen=True)
 class Partition:
-    """The full structural result: the surviving ``classes`` (deterministically ordered by
+    """The full **structural** result: the surviving ``classes`` (deterministically ordered by
     signature) and the ``f_usable`` set they were computed over. ``eliminated`` are the hypotheses
     a usable observation hard-contradicted.
 
-    The outcome the partition maps to (IDENTIFIED / NON_IDENTIFIABLE / UNCERTAIN /
-    NO_COMPATIBLE_HYPOTHESIS) is defined by the cross-phase contract in
-    ``docs/rca-structural-outcomes.md``, not here — Phase E (#183) reads the outcome off this value.
+    This is the machinery only — it does **not** assign an outcome. Reading a partition as
+    IDENTIFIED / NON_IDENTIFIABLE / UNCERTAIN is Phase E's job (#183); how Phase E treats a
+    zero-``classes`` partition is defined there, not here.
 
     The value type **enforces its own invariant**: a partition describes at least one hypothesis, so
     an empty ``classes`` is only valid alongside a non-empty ``eliminated``. That makes
@@ -131,14 +131,14 @@ class Partition:
         if not self.classes and not self.eliminated:
             raise ValueError(
                 "Partition describes no hypotheses: an empty `classes` is valid only when `eliminated` "
-                "is non-empty (the no-compatible-hypothesis state)"
+                "is non-empty (every hypothesis was hard-eliminated)"
             )
 
     @property
     def no_surviving_hypothesis(self) -> bool:
         """True when no hypothesis survived hard-incompatibility filtering (``classes`` is empty, so
-        by the type invariant everything is in ``eliminated``) — the NO_COMPATIBLE_HYPOTHESIS state
-        defined in ``docs/rca-structural-outcomes.md``."""
+        by the type invariant everything is in ``eliminated``). A structural fact Phase E consumes;
+        this module does not label it an outcome."""
         return not self.classes
 
 
@@ -237,8 +237,8 @@ def partition(
     observations, after dropping any hypothesis a usable observation hard-contradicts. **Reads no
     scores** — the result is identical for any ranking (Invariant 6). Raises if the set is empty or
     carries conflicting/degenerate definitions; a zero-class result means every hypothesis was
-    hard-eliminated (:attr:`Partition.no_surviving_hypothesis`), the NO_COMPATIBLE_HYPOTHESIS state in
-    ``docs/rca-structural-outcomes.md``."""
+    hard-eliminated (:attr:`Partition.no_surviving_hypothesis`). Assigning an outcome to the partition
+    is Phase E's responsibility (#183), not this function's."""
     observations = list(observations)
     # Derive the ONE usable set and reuse it for signatures, D_missing, AND hard elimination — so a
     # below-threshold observation that is excluded from F_usable also cannot eliminate a hypothesis.
