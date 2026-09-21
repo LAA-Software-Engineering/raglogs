@@ -301,14 +301,18 @@ def generate_disappearance(out: Path, seed: int = 0) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     root = Path(__file__).resolve().parents[1] / "data" / "eval-cases"
-    ap.add_argument("--out", type=Path, default=root / "trace-loc")
-    ap.add_argument("--disappearance-out", type=Path, default=root / "trace-loc-disappearance")
+    ap.add_argument("--out", type=Path, default=root / "trace-loc",
+                    help="propagation corpus output directory")
+    ap.add_argument("--disappearance-out", type=Path, default=None,
+                    help="ALSO generate the disappearance (Phase F) corpus here — opt-in; "
+                         f"the frozen corpus is {root / 'trace-loc-disappearance'}")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
     n = generate(args.out, args.seed)
     print(f"wrote {n} trace-localization cases -> {args.out}")
-    nd = generate_disappearance(args.disappearance_out, args.seed)
-    print(f"wrote {nd} disappearance cases -> {args.disappearance_out}")
+    if args.disappearance_out is not None:  # opt-in: never write a second target implicitly
+        nd = generate_disappearance(args.disappearance_out, args.seed)
+        print(f"wrote {nd} disappearance cases -> {args.disappearance_out}")
     return 0
 
 

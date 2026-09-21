@@ -22,9 +22,12 @@ orders / media), 2 variants = **6 cases**. In each:
 
 The only thing that betrays the cause is the **absence** of an expected signal — exactly what
 absence-derived candidate generation (Phase F) must recover. `data/` is gitignored, so the corpus is
-defined by the committed generator; `tests/unit/test_disappearance_corpus.py` freezes the contract
-(baseline spans present, incident spans zero, caller errors, labels), and guards that existing families
-are unaffected.
+defined by the committed generator (regenerate with `python scripts/gen_trace_localization_corpus.py
+--disappearance-out data/eval-cases/trace-loc-disappearance` — disappearance generation is opt-in, so
+the default `--out` run is unchanged). `tests/unit/test_disappearance_corpus.py` freezes the **actual
+published** six cases by content-hash manifest **and** by invariant (baseline spans present, incident
+spans zero, cause metrics flat, caller errors, labels loadable by the scorer), so the "before" corpus
+cannot drift with green tests; it also guards that existing families are unaffected.
 
 ## Frozen pre-F baseline — existing pipeline
 
