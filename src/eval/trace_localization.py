@@ -14,7 +14,7 @@ A case's ground truth (the ``trace_localization`` block of its ``case.yaml``) ca
   ``propagation_path``    ordered cause -> ... -> symptom services the fault travels
   ``symptom_services``    services that only *report* the failure (loud but not the cause)
   ``edges``               caller -> callee dependency edges (the call graph)
-  ``fault_type``          caller_fail | callee_fail | symptom_only | latency_only
+  ``fault_type``          caller_fail | callee_fail | symptom_only | latency_only | callee_vanish
 
 The point of the ``symptom_services`` label is the adversarial test: the trivial
 "loudest-error / busiest-caller" baseline ranks a symptom first, so a method that scores
@@ -29,7 +29,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-FAULT_TYPES = frozenset({"caller_fail", "callee_fail", "symptom_only", "latency_only"})
+FAULT_TYPES = frozenset(
+    {"caller_fail", "callee_fail", "symptom_only", "latency_only", "callee_vanish"}
+)
 
 
 @dataclass
