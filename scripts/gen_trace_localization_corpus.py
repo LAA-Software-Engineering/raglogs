@@ -81,7 +81,16 @@ SIGNALS: dict[str, dict[str, set[str]]] = {
     "symptom_only": {"cause": {"status"},                      "symptom": {"status", "log", "metric_err"}},
     "latency_only": {"cause": {"latency"},                     "symptom": {"latency"}},
     "caller_fail":  {"cause": {"status", "log", "metric_err"}, "symptom": set()},
+    # Disappearance (#184 Phase F target): the cause is reachable in the baseline but goes silent in
+    # the incident — its spans stop entirely (span-rate collapse), so the *only* thing that betrays it
+    # is the absence of an expected signal. Its caller errors because the callee is unreachable. The
+    # cause emits NO error signal of its own (it just vanishes), which is why absence-derived candidate
+    # generation is the only way to recover it.
+    "callee_vanish": {"cause": set(), "symptom": {"status", "log", "metric_err"}},
 }
+
+# Fault families whose cause disappears (no spans) during the incident window.
+DISAPPEARANCE_FAULTS = ("callee_vanish",)
 
 
 def _edges(topo: dict[str, list[str]]) -> list[tuple[str, str]]:
@@ -107,6 +116,20 @@ def _path_to(topo: dict[str, list[str]], target: str) -> list[str]:
 
 def _leaves(topo: dict[str, list[str]]) -> list[str]:
     return [s for s, c in topo.items() if not c]
+
+
+def _subtree(topo: dict[str, list[str]], root: str) -> set[str]:
+    """``root`` and every service reachable below it — the set that goes silent when ``root``
+    disappears (its callers can no longer reach it, so nothing downstream is exercised either)."""
+    seen: set[str] = set()
+    stack = [root]
+    while stack:
+        n = stack.pop()
+        if n in seen:
+            continue
+        seen.add(n)
+        stack.extend(topo.get(n, []))
+    return seen
 
 
 def _random_path(topo: dict[str, list[str]], rng: random.Random) -> list[str]:
@@ -135,21 +158,29 @@ def _gen_case(topo_name: str, fault_type: str, rng: random.Random, t0: datetime)
     logs: list[dict] = []
     metric_rows: list[tuple[str, str, float, datetime]] = []
     sig = SIGNALS[fault_type]
+    vanish = fault_type in DISAPPEARANCE_FAULTS
+    vanished = _subtree(topo, cause) if vanish else set()
+    # A vanished cause emits nothing, so its caller fails as soon as it can't reach it (at inject),
+    # not ONSET_GAP later (that models propagation of an *error*, which there isn't one to propagate).
+    symptom_onset = 0 if vanish else ONSET_GAP_S
 
     def _signals_for(svc: str, elapsed: float) -> set[str]:
-        """Active signals for ``svc`` at ``elapsed`` seconds past inject. The cause
-        degrades from inject; the symptom (caller) ONSET_GAP later (propagated)."""
+        """Active signals for ``svc`` at ``elapsed`` seconds past inject."""
         if svc == cause and elapsed >= 0:
             return sig["cause"]
-        if symptom and svc == symptom and elapsed >= ONSET_GAP_S:
+        if symptom and svc == symptom and elapsed >= symptom_onset:
             return sig["symptom"]
         return set()
 
-    def emit_trace(start: datetime, path: list[str]):
+    def emit_trace(start: datetime, path: list[str], incident: bool):
         trace_id = _hex(rng, 32)
         parent_span = None
         depth = len(path)
         for i, svc in enumerate(path):
+            # Disappearance: during the incident, the vanished subtree emits no spans — the trace is
+            # truncated at the caller, whose own span (below) carries the unreachable-callee error.
+            if incident and svc in vanished:
+                break
             span_id = _hex(rng, 16)
             svc_start = start + timedelta(milliseconds=2 * i)
             elapsed = (svc_start - t0).total_seconds()
@@ -176,11 +207,12 @@ def _gen_case(topo_name: str, fault_type: str, rng: random.Random, t0: datetime)
     total = BASELINE_S + INCIDENT_S
     for sec in range(total):
         ts = t0 + timedelta(seconds=sec - BASELINE_S)
+        incident = sec >= BASELINE_S
         for _ in range(rng.randint(2, 4)):
             # bias traffic toward the faulted path so the cause is well exercised
             path = cause_path if rng.random() < 0.55 else _random_path(topo, rng)
             jitter = timedelta(milliseconds=rng.uniform(0, 900))
-            for svc, svc_start, active in emit_trace(ts + jitter, path):
+            for svc, svc_start, active in emit_trace(ts + jitter, path, incident):
                 if "log" in active:
                     emit_log(svc_start, svc, "error", f"{svc}: request failed")
                 elif rng.random() < 0.15:
@@ -249,14 +281,34 @@ def generate(out: Path, seed: int = 0) -> int:
     return n
 
 
+def generate_disappearance(out: Path, seed: int = 0) -> int:
+    """The Phase F (#184) disappearance benchmark: the cause is reachable in the baseline and goes
+    silent (no spans) in the incident. Generated into its **own** corpus with an independent seed so
+    the propagation :func:`generate` corpus stays byte-identical. Frozen before Phase F is built."""
+    rng = random.Random(seed)
+    t0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    n = 0
+    for topo_name in TOPOLOGIES:
+        for fault_type in DISAPPEARANCE_FAULTS:
+            for variant in range(2):  # 3 topos x 1 family x 2 variants = 6 cases
+                case_rng = random.Random(rng.randint(0, 2**31))
+                data = _gen_case(topo_name, fault_type, case_rng, t0)
+                _write_case(out, f"tld_{topo_name}_{fault_type}_{variant}", data, t0)
+                n += 1
+    return n
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--out", type=Path,
-                    default=Path(__file__).resolve().parents[1] / "data" / "eval-cases" / "trace-loc")
+    root = Path(__file__).resolve().parents[1] / "data" / "eval-cases"
+    ap.add_argument("--out", type=Path, default=root / "trace-loc")
+    ap.add_argument("--disappearance-out", type=Path, default=root / "trace-loc-disappearance")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
     n = generate(args.out, args.seed)
     print(f"wrote {n} trace-localization cases -> {args.out}")
+    nd = generate_disappearance(args.disappearance_out, args.seed)
+    print(f"wrote {nd} disappearance cases -> {args.disappearance_out}")
     return 0
 
 
