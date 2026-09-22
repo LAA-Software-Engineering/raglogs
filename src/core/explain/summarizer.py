@@ -339,13 +339,23 @@ def _explain_window(
 def _absence_candidates(
     db: Session, scope: str, window_start: datetime, window_end: datetime, baseline_window: str
 ) -> list[str]:
-    """Services whose span traffic was baselined then collapsed in the incident (#184 Phase F).
-    Queries spans over ``[baseline_start, window_end]`` and delegates to
-    :func:`~src.core.rca.features.detect_absence`. Empty (no behaviour change) when nothing vanished
-    or there are no traces."""
-    from sqlalchemy import select
+    """Services whose span traffic was baselined then collapsed in the incident *and* whose baseline
+    caller recorded an incident failure toward them (#184 Phase F). Empty (no behaviour change) when
+    nothing vanished or there are no traces.
 
-    from src.core.rca.features import detect_absence
+    Bounded on purpose: instead of materializing every span in the (default 24h) baseline window, it
+    runs two per-service **aggregates** (baseline counts; incident counts + a failed-caller flag) and,
+    only for services that actually collapsed, one **edge query restricted to those callees**. So the
+    cost scales with the number of services and collapse candidates, not with all raw spans in a day —
+    and it never loads span ORM rows / JSON attributes into Python."""
+    from sqlalchemy import and_, func, select
+    from sqlalchemy.orm import aliased
+
+    from src.core.rca.features import (
+        _ERROR_STATUS,
+        collapsed_services,
+        confirm_absence,
+    )
     from src.db.models import TraceSpan
     from src.utils.time import parse_duration
 
@@ -353,16 +363,60 @@ def _absence_candidates(
         baseline_start = window_start - parse_duration(baseline_window)
     except (ValueError, TypeError):
         return []
-    span_rows = db.execute(
-        select(TraceSpan).where(
-            TraceSpan.scope == scope,
-            TraceSpan.start_time >= baseline_start,
-            TraceSpan.start_time <= window_end,
-        )
-    ).scalars().all()
-    # detect_absence gates trace-measurement availability internally (a baseline caller still emitting
-    # incident spans) — see its docstring; nothing else is needed here.
-    return sorted(detect_absence(span_rows, baseline_start, window_start, window_end))
+    baseline_seconds = max((window_start - baseline_start).total_seconds(), 1.0)
+    incident_seconds = max((window_end - window_start).total_seconds(), 1.0)
+    svc = TraceSpan.service
+    is_error = func.lower(func.trim(TraceSpan.status_code)).in_(_ERROR_STATUS)
+
+    # (1) baseline per-service counts.
+    baseline_counts = {
+        s: n
+        for s, n in db.execute(
+            select(svc, func.count())
+            .where(TraceSpan.scope == scope, svc.isnot(None),
+                   TraceSpan.start_time >= baseline_start, TraceSpan.start_time < window_start)
+            .group_by(svc)
+        ).all()
+    }
+    if not baseline_counts:
+        return []
+
+    # (2) incident per-service counts + which services emitted any error-status span (failed callers).
+    incident_counts: dict[str, int] = {}
+    incident_failed_callers: set[str] = set()
+    for s, n, n_err in db.execute(
+        select(svc, func.count(), func.count().filter(is_error))
+        .where(TraceSpan.scope == scope, svc.isnot(None),
+               TraceSpan.start_time >= window_start, TraceSpan.start_time <= window_end)
+        .group_by(svc)
+    ).all():
+        incident_counts[s] = n
+        if n_err:
+            incident_failed_callers.add(s)
+
+    collapsed = collapsed_services(baseline_counts, incident_counts, baseline_seconds, incident_seconds)
+    if not collapsed:
+        return []
+
+    # (3) baseline caller->callee edges, restricted to the collapsed callees (a small set). A span's
+    # caller is the service of its parent span in the same trace; bounded by the collapse candidates.
+    child = TraceSpan
+    parent = aliased(TraceSpan)
+    baseline_callers: dict[str, set[str]] = {s: set() for s in collapsed}
+    for callee, caller in db.execute(
+        select(child.service, parent.service)
+        .join(parent, and_(parent.scope == scope, parent.trace_id == child.trace_id,
+                           parent.span_id == child.parent_span_id,
+                           parent.start_time >= baseline_start, parent.start_time < window_start))
+        .where(child.scope == scope, child.service.in_(collapsed.keys()),
+               child.parent_span_id.isnot(None),
+               child.start_time >= baseline_start, child.start_time < window_start)
+        .group_by(child.service, parent.service)
+    ).all():
+        if caller and callee and caller != callee:
+            baseline_callers[callee].add(caller)
+
+    return sorted(confirm_absence(collapsed, baseline_callers, incident_failed_callers))
 
 
 def _rank_candidates(

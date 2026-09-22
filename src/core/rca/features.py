@@ -111,6 +111,64 @@ def _seconds(delta_start: datetime, delta_end: datetime) -> float:
     return max((delta_end - delta_start).total_seconds(), 1.0)
 
 
+def collapsed_services(
+    baseline_counts: dict[str, int],
+    incident_counts: dict[str, int],
+    baseline_seconds: float,
+    incident_seconds: float,
+    *,
+    min_baseline_spans: int = 5,
+    min_expected_incident: float = 5.0,
+    collapse_fraction: float = 0.2,
+) -> dict[str, float]:
+    """Services whose span *rate* was baselined and then collapsed in the incident — gates (1) and (3)
+    of :func:`detect_absence`, computed from per-service counts alone (aggregatable, no raw spans).
+    Returns ``{service: collapse_strength in (0, 1]}``; this is a *necessary* condition, not yet a
+    candidate — the caller-failure edge gate (2) is applied separately by :func:`confirm_absence`.
+
+    1. **Baselined** (Invariant 2): ≥ ``min_baseline_spans`` baseline spans, so a *never-seen* service
+       (missing telemetry) can never collapse.
+    3. **Expected**: the baseline rate must predict a meaningful incident count
+       (``base_rate × incident_seconds ≥ min_expected_incident``) — 5 spans over a 24h baseline predict
+       ~zero incident spans, so zero is the ordinary outcome, not a collapse."""
+    pre = max(baseline_seconds, 1.0)
+    post = max(incident_seconds, 1.0)
+    out: dict[str, float] = {}
+    for s, base in baseline_counts.items():
+        if base < min_baseline_spans:  # (1) not baselined enough to be "expected"
+            continue
+        base_rate = base / pre
+        if base_rate * post < min_expected_incident:  # (3) too sparse to expect incident traffic
+            continue
+        inc_rate = incident_counts.get(s, 0) / post
+        if inc_rate <= collapse_fraction * base_rate:
+            out[s] = round(1.0 - inc_rate / base_rate, 4)
+    return out
+
+
+def confirm_absence(
+    collapsed: dict[str, float],
+    baseline_callers: dict[str, set[str]],
+    incident_failed_callers: set[str],
+) -> dict[str, float]:
+    """Gate (2): keep only collapsed services with **positive evidence of a failed incident attempt**
+    at the edge — a baseline caller of the service recorded an error-status span in the incident (the
+    truncated-trace "couldn't reach the downstream" signal). Everything else stays UNKNOWN.
+
+    This is what makes trace-silence a sound *causal* candidate rather than a laundered guess. Caller
+    *liveness* is not enough: if the callee's own exporter failed while it kept serving, its baseline
+    caller would have called it **successfully** (no error) — no failed-attempt edge, so UNKNOWN. If a
+    caller simply stopped calling the callee while doing other work, again no error toward it — UNKNOWN.
+    Only an *erroring* baseline caller evidences an attempt that did not complete. The residual limit is
+    honest: an unrelated caller error can still satisfy this, so absence is surfaced as a candidate to
+    investigate, never as a proven cause."""
+    return {
+        s: strength
+        for s, strength in collapsed.items()
+        if incident_failed_callers & baseline_callers.get(s, set())
+    }
+
+
 def detect_absence(
     spans,
     baseline_start: datetime,
@@ -121,32 +179,22 @@ def detect_absence(
     min_expected_incident: float = 5.0,
     collapse_fraction: float = 0.2,
 ) -> dict[str, float]:
-    """Absence-derived candidates (#184, Phase F): services whose span traffic was **established in the
-    baseline and collapsed in the incident** — the silent-failure coverage gap the normal
+    """Absence-derived candidates (#184, Phase F) from raw span rows: services whose span traffic was
+    **established in the baseline and collapsed in the incident**, *and* for which a baseline caller
+    recorded an incident failure toward them — the silent-failure coverage gap the normal
     incident-window features can't see (``trace_features`` only entries services present in the
     incident). Returns ``{service: collapse_strength in (0, 1]}``.
 
-    An observation is emitted only under all three of #184's gates, else it stays UNKNOWN (empty) —
-    missing telemetry is never turned into absence evidence:
-
-    1. **Baselined** (Invariant 2): a service needs ≥ ``min_baseline_spans`` baseline spans, so a
-       service that was *never seen* — missing telemetry — can never become a disappearance signal.
-    2. **Trace measurement available**: at least one baseline **caller** of the service is still
-       emitting incident spans (an independent *edge* signal that the trace-collection path to the
-       service was live this incident). This is the ``measurement available`` gate #184 requires: it
-       rules out a whole-path/collector outage (no active caller → nothing collected → UNKNOWN) and
-       scope-wide false positives (an unrelated healthy service is not on the path). A service with no
-       active baseline caller (a root, or a path that went dark) stays UNKNOWN.
-    3. **Expected**: the baseline rate must predict a meaningful incident count
-       (``base_rate × incident_seconds ≥ min_expected_incident``). Five spans spread over a 24h
-       baseline predict ~zero spans in a 5-minute incident, so zero is the ordinary outcome, not a
-       collapse. Only then is a drop to ``≤ collapse_fraction`` of the baseline rate a candidate."""
+    Pure and span-driven, so it stays unit-testable; the DB path in the summarizer computes the same
+    aggregates server-side (counts + a bounded edge query) instead of materializing raw spans. The two
+    gate primitives it composes — :func:`collapsed_services` (rate collapse) and :func:`confirm_absence`
+    (failed-attempt edge) — carry the semantics; see their docstrings."""
     pre = _seconds(baseline_start, incident_start)
     post = _seconds(incident_start, incident_end)
     bc: Counter = Counter()
     ic: Counter = Counter()
     base_service_of: dict[tuple, str] = {}   # (trace_id, span_id) -> service, baseline spans only
-    incident_active: set[str] = set()
+    incident_failed: set[str] = set()        # services with >=1 error-status incident span
     for sp in spans:
         s = sp.service
         ts = sp.start_time
@@ -158,8 +206,9 @@ def detect_absence(
                 base_service_of[(sp.trace_id, sp.span_id)] = s
         elif incident_start <= ts <= incident_end:
             ic[s] += 1
-            incident_active.add(s)
-    # Baseline caller->callee edges: which services called each service (for the availability gate).
+            if _is_error_status(getattr(sp, "status_code", None)):
+                incident_failed.add(s)
+    # Baseline caller->callee edges: which services called each service (for the failed-attempt gate).
     callers: dict[str, set] = defaultdict(set)
     for sp in spans:
         ts = sp.start_time
@@ -169,19 +218,13 @@ def detect_absence(
         if caller and sp.service and caller != sp.service:
             callers[sp.service].add(caller)
 
-    absent: dict[str, float] = {}
-    for s, base in bc.items():
-        if not any(c in incident_active for c in callers.get(s, ())):  # (2) trace path not live -> UNKNOWN
-            continue
-        if base < min_baseline_spans:  # (1) not baselined enough to be "expected"
-            continue
-        base_rate = base / pre
-        if base_rate * post < min_expected_incident:  # (3) too sparse to expect incident traffic
-            continue
-        inc_rate = ic.get(s, 0) / post
-        if inc_rate <= collapse_fraction * base_rate:
-            absent[s] = round(1.0 - inc_rate / base_rate, 4)
-    return absent
+    collapsed = collapsed_services(
+        dict(bc), dict(ic), pre, post,
+        min_baseline_spans=min_baseline_spans,
+        min_expected_incident=min_expected_incident,
+        collapse_fraction=collapse_fraction,
+    )
+    return confirm_absence(collapsed, callers, incident_failed)
 
 
 def log_features(

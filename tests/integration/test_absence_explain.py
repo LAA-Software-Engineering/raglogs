@@ -1,7 +1,8 @@
 """Integration test: Phase F (#184) absence-derived candidates end-to-end through explain_window
 (product output) AND eval normalization. A service present in the baseline that goes silent in the
-incident — while still emitting metrics (available) — becomes a real product candidate, and the eval
-prediction derives it from that same field. Skipped without Postgres."""
+incident — while its baseline caller stays active and *errors toward it* (the failed-attempt edge) —
+becomes a real product candidate, and the eval prediction derives it from that same field. Skipped
+without Postgres."""
 from __future__ import annotations
 
 import os
@@ -39,10 +40,11 @@ def db_session():
         yield db
 
 
-def _span(trace, span_id, parent, service, ts):
+def _span(trace, span_id, parent, service, ts, status_code="0"):
     from src.core.ingestion.telemetry import ParsedSpan
     return ParsedSpan(trace_id=trace, span_id=span_id, parent_span_id=parent, service=service,
-                      operation=f"{service} handle", start_time=ts, duration_ms=5.0, status_code="0")
+                      operation=f"{service} handle", start_time=ts, duration_ms=5.0,
+                      status_code=status_code)
 
 
 def _seed(db):
@@ -60,8 +62,9 @@ def _seed(db):
         t = BASELINE_START + timedelta(seconds=i * 5)
         spans.append(_span(f"b{i}", f"c{i}", None, "checkout", t))
         spans.append(_span(f"b{i}", f"p{i}", f"c{i}", "payment", t + timedelta(milliseconds=2)))
-    for i in range(60):  # incident: only checkout emits (payment vanished)
-        spans.append(_span(f"i{i}", f"ic{i}", None, "checkout", INJECT + timedelta(seconds=i * 5)))
+    for i in range(60):  # incident: only checkout emits, and it ERRORS toward the vanished payment
+        spans.append(_span(f"i{i}", f"ic{i}", None, "checkout", INJECT + timedelta(seconds=i * 5),
+                           status_code="2"))
     persist_spans(db, spans, scope=SCOPE)
 
     # checkout error logs (the loud symptom -> a primary cluster / top-1)
@@ -71,7 +74,9 @@ def _seed(db):
             raw_message="payment unreachable", normalized_message="payment unreachable",
             fingerprint="co", scope=SCOPE,
         ))
-    # payment still emits metrics in the incident -> independently available (up, but unreachable)
+    # payment still emits metrics in the incident (it is "up" but unreachable). This is deliberately
+    # NOT what the mechanism keys on — availability comes from the failed-attempt edge, not metrics —
+    # and is kept only to show metric presence does not by itself create or suppress the candidate.
     persist_metric_samples(db, [
         ParsedMetricSample(service="payment", metric="error_rate", value=0.01,
                            ts=BASELINE_START + timedelta(seconds=5)),

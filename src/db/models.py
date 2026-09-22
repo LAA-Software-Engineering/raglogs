@@ -174,6 +174,9 @@ class TraceSpan(Base):
     __table_args__ = (
         Index("ix_trace_spans_scope_service_start", "scope", "service", "start_time"),
         Index("ix_trace_spans_scope_trace", "scope", "trace_id"),
+        # Absence detection (#184) aggregates spans over a (scope, time-range) with no service
+        # predicate; the service-first index can't serve that, so give the range scan its own index.
+        Index("ix_trace_spans_scope_start", "scope", "start_time"),
     )
 
 
