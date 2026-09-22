@@ -91,6 +91,22 @@ def test_unrelated_service_rare_change_found_not_explained(db_session, monkeypat
     assert pkt.trigger_explains is False
 
 
+def test_linked_candidate_sorts_first_even_when_it_scores_lower(db_session, monkeypatch):
+    # Ordering contract (#208 review): an unrelated rare change (billing) is earlier/rarer and would
+    # sort first by rarity x onset-earliness; a linked one (cart, same service as the errors) is later.
+    # The combined set must still surface the LINKED candidate first, so candidates[0] is defensible.
+    primary = _cluster("err", "NullPointer in cart", {"cart": 80}, count=80, baseline_count=3,
+                       change_ratio=20.0, first_seen=T0 + timedelta(seconds=30),
+                       error_services={"cart": 80})
+    unlinked_early = _cluster("cfgB", "config reloaded", {"billing": 1}, count=1, baseline_count=0,
+                              change_ratio=1.0, first_seen=T0 + timedelta(seconds=2))   # earliest
+    linked_late = _cluster("cfgC", "cart restarted", {"cart": 1}, count=1, baseline_count=0,
+                           change_ratio=1.0, first_seen=T0 + timedelta(seconds=25))     # later
+    pkt = _assemble(db_session, [primary, unlinked_early, linked_late], monkeypatch)
+    assert pkt.trigger_explains is True
+    assert pkt.trigger_candidates[0].service == "cart"  # linked-first, not the earlier billing change
+
+
 def test_metric_anomaly_onset_triggers_without_any_log_line(db_session, monkeypatch):
     # RE2-class: the only cluster is the primary error (no rare LOG candidate),
     # but a metric on the erroring service spikes -> trigger found via metrics.

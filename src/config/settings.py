@@ -50,11 +50,18 @@ class Settings(BaseSettings):
     # How far before window_start to search for trigger candidates (#76).
     trigger_lookback_minutes: int = 10
 
-    # Trigger detection strategy (#82): "regex" = the legacy TRIGGER_PATTERNS
-    # match (default, behaviour-preserving); "rare_event" = rare-fingerprint
-    # correlation + trace/service linkage, separating trigger_found from
-    # trigger_explains so an unvalidated match no longer manufactures "high"
-    # confidence. Default off until the RE2/RE3 eval delta is measured (T3).
+    # Trigger detection strategy (#82): "regex" (default) = the legacy TRIGGER_PATTERNS
+    # match; "rare_event" = rare-fingerprint correlation + trace/service linkage,
+    # separating trigger_found (a correlated anomaly) from trigger_explains (linked
+    # causal evidence) and never manufacturing "high" confidence.
+    # rare_event has far higher trigger recall (measured: 0%->100% on trace-loc; on
+    # real OTel with healthy negatives, 100% positive recall) BUT its default
+    # promotion is DEFERRED: unfiltered it fires a trigger on ~100% of healthy
+    # windows (poor specificity), and gating on linkage to fix that dropped the true
+    # trigger on ~44% of real-OTel positives (the trace graph's recall is too
+    # incomplete to serve as a causal gate). Promotion awaits a specificity signal
+    # that does not sacrifice recall (better call-edge telemetry). See
+    # docs/design-trigger-detection.md.
     trigger_mode: str = "regex"
     # In rare_event mode, a fingerprint counts as rare when baseline_count == 0 or
     # its change_ratio clears this threshold.
