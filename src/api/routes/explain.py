@@ -40,6 +40,9 @@ class ExplainRequest(QueryOverrideFields):
     force_refresh: bool = False               # bypass cache
     format: Literal["json", "markdown"] = "json"
     scope: Optional[str] = None
+    # [experimental] Also compute the opt-in deterministic structural view (#187). Additive: the
+    # ordinary response is unchanged; when true, `structural` carries the deterministic packet.
+    structural: bool = False
 
 
 def _cache_key(window_start: datetime, window_end: datetime,
@@ -228,9 +231,10 @@ def explain_endpoint(request: ExplainRequest, http_request: Request) -> ExplainR
 
     try:
         with get_db() as db:
-            # Cache check — skip only on force_refresh. The key includes resolved
-            # overrides so different max_clusters / llm settings do not collide.
-            if not request.force_refresh:
+            # Cache check — skip on force_refresh, and on a structural request (the experimental
+            # structural view is never cached, so a structural ask always recomputes and a plain ask
+            # never serves a structural payload).
+            if not request.force_refresh and not request.structural:
                 cached = _load_from_cache(db, cache_hash)
                 if cached:
                     body = explain_from_cached(
@@ -259,6 +263,7 @@ def explain_endpoint(request: ExplainRequest, http_request: Request) -> ExplainR
                 llm_provider=overrides.llm_provider,
                 ingestion_job_id=ingestion_job_id,
                 scope=scope,
+                structural=request.structural,
             )
 
             body = explain_from_result(
@@ -270,11 +275,13 @@ def explain_endpoint(request: ExplainRequest, http_request: Request) -> ExplainR
             )
 
             # Persist to cache (only rules mode — LLM results are expensive and should
-            # be explicitly refreshed; rules results are deterministic for the same window)
-            if result.mode == "rules":
+            # be explicitly refreshed; rules results are deterministic for the same window).
+            # A structural request is never cached (it bypassed the read above too).
+            if result.mode == "rules" and not request.structural:
                 cache_payload = body.model_dump(by_alias=True, exclude_unset=True)
                 cache_payload.pop("cached", None)
                 cache_payload.pop("markdown", None)
+                cache_payload.pop("structural", None)
                 _save_to_cache(
                     db, cache_hash, window_start, window_end,
                     request.service, request.env, cache_payload, result.confidence, result.mode,

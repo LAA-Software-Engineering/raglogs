@@ -162,6 +162,11 @@ class ExplainResponse(BaseModel):
     # indistinguishable from traces alone). This is observed EVIDENCE, not a causal candidate: it does
     # not affect `root_cause_candidates`, `predicted_root_cause`, or coverage. Empty by default.
     absence_candidates: list[str] = Field(default_factory=list)
+    # [experimental] The opt-in deterministic structural view (#187 Phase I): the structural packet
+    # (outcome / classes / observed evidence / d_missing / next observations). Present only when the
+    # request set `structural: true` AND the telemetry produced a structural candidate; else null. It
+    # is an ADDITIONAL view and never changes the fields above.
+    structural: Optional[dict] = None
 
 
 class TimelineEventModel(BaseModel):
@@ -541,6 +546,16 @@ def rca_candidates_from(raw: Any) -> list[RootCauseCandidate]:
     return out
 
 
+def _structural_packet_for(result: ExplainResult) -> Optional[dict]:
+    """The experimental structural packet (#187) when the result carries a structural view, else None.
+    Serialized only for a `structural: true` request; never affects the rest of the response."""
+    sr = getattr(result, "structural_result", None)
+    if sr is None:
+        return None
+    from src.core.rca.presentation import structural_packet
+    return structural_packet(sr, getattr(result, "structural_ranking", ()))
+
+
 def explain_from_result(
     result: ExplainResult,
     *,
@@ -584,6 +599,7 @@ def explain_from_result(
             else None
         ),
         absence_candidates=list(getattr(result, "absence_candidates", []) or []),
+        structural=_structural_packet_for(result),
     )
 
 

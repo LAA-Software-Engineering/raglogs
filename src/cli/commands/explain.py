@@ -17,6 +17,12 @@ def explain_cmd(
     baseline_window: Optional[str] = typer.Option(None, "--baseline-window", help="Baseline window e.g. 24h"),
     fmt: str = typer.Option("text", "--format", help="Output format: text|json|markdown"),
     no_llm: bool = typer.Option(False, "--no-llm", help="Skip LLM, use deterministic templates"),
+    structural: bool = typer.Option(
+        False, "--structural",
+        help="[experimental] Also show the deterministic structural explanation "
+             "(outcome / hypotheses / observed evidence / useful next observations). "
+             "Additive — the ordinary explanation is unchanged.",
+    ),
     all_ingestions: bool = typer.Option(False, "--all-ingestions", help="Include all historical ingestion data (not just latest)"),
     ingestion_job: Optional[str] = typer.Option(None, "--ingestion-job", help="Scope analysis to a specific ingestion job UUID"),
     scope: str = typer.Option(
@@ -67,6 +73,7 @@ def explain_cmd(
                     baseline_window_str=baseline_window,
                     ingestion_job_id=job_id,
                     scope=scope,
+                    structural=structural,
                 )
         except Exception as e:
             ui.print(f"[red]Error:[/red] {e}")
@@ -93,6 +100,9 @@ def explain_cmd(
             "root_cause_candidates": result.root_cause_candidates,
             "absence_candidates": result.absence_candidates,
         }
+        if result.structural_result is not None:
+            from src.core.rca.presentation import structural_packet
+            output["structural"] = structural_packet(result.structural_result, result.structural_ranking)
         console.print_json(json.dumps(output, default=str))
     elif fmt == "markdown":
         from src.core.explain.markdown_report import (
@@ -152,4 +162,14 @@ def explain_cmd(
                 "[dim](span traffic collapsed vs baseline — unreachable or a trace-collection gap):[/dim] "
                 + ", ".join(f"[yellow]{s}[/yellow]" for s in result.absence_candidates)
             )
+            console.print()
+        # Experimental structural view (#187): rendered deterministically from the structural packet.
+        if structural:
+            console.print("[bold magenta]Structural explanation[/bold magenta] [dim](experimental)[/dim]")
+            if result.structural_result is not None:
+                from src.core.rca.presentation import render_lines
+                for line in render_lines(result.structural_result, result.structural_ranking):
+                    console.print(f"  {line}")
+            else:
+                console.print("  [dim]No structural candidate from the available telemetry.[/dim]")
             console.print()

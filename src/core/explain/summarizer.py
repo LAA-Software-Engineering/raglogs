@@ -1,10 +1,14 @@
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import structlog
 from sqlalchemy.orm import Session
+
+if TYPE_CHECKING:
+    from src.core.rca.outcome import StructuralResult
+    from src.core.rca.scoring import ScoredClass
 
 from src.config import get_settings
 from src.core.clustering.clusterer import run_clustering
@@ -75,6 +79,13 @@ class ExplainResult:
     # legacy ordinal path and the insufficient-evidence case (where the label stays
     # "low" for narrative coherence even if the ranker was confident).
     confidence_calibrated: bool = False
+    # Opt-in, experimental structural view (#187 Phase I): the deterministic A–E structural result and
+    # its Phase G class ranking, attached ONLY when `structural=True` is requested. It is an ADDITIONAL
+    # view — the fields above (the ordinary explanation) are unchanged whether or not it is present, and
+    # it is `None` when the telemetry produced no candidate (an honest abstention). Rendered at the edges
+    # (CLI/API) via `src.core.rca.presentation`.
+    structural_result: Optional["StructuralResult"] = None
+    structural_ranking: tuple["ScoredClass", ...] = ()
 
 
 def get_latest_ingestion_job_id(
@@ -108,6 +119,7 @@ def explain_window(
     scope: str = DEFAULT_LOG_SCOPE,
     max_evidence_items: Optional[int] = None,
     llm_provider: Optional[str] = None,
+    structural: bool = False,
 ) -> ExplainResult:
     """
     Full explain pipeline for a time window.
@@ -128,6 +140,7 @@ def explain_window(
             scope=scope,
             max_evidence_items=max_evidence_items,
             llm_provider=llm_provider,
+            structural=structural,
         )
 
 
@@ -144,6 +157,7 @@ def _explain_window(
     scope: str = DEFAULT_LOG_SCOPE,
     max_evidence_items: Optional[int] = None,
     llm_provider: Optional[str] = None,
+    structural: bool = False,
 ) -> ExplainResult:
     """
     Full explain pipeline for a time window.
@@ -216,6 +230,14 @@ def _explain_window(
         if absence_candidates else []
     )
 
+    # Opt-in, experimental structural view (#187 Phase I): an ADDITIONAL deterministic A–E result +
+    # Phase G ranking, computed ONLY when requested. It never touches the ordinary explanation above,
+    # and stays None when the telemetry yields no candidate (an honest abstention).
+    structural_result, structural_ranking = (
+        _structural_view(db, scope, window_start, window_end, baseline_window) if structural
+        else (None, ())
+    )
+
     # NOTE: a metric/log abstention "gate" (#79) was investigated and shelved as a
     # negative result — no modality on the available dev corpora both calibrates and
     # transfers (metrics saturate on real OTLP counters; logs can't separate healthy
@@ -241,6 +263,8 @@ def _explain_window(
             generated_candidates=generated_candidates,
             absence_candidates=absence_candidates,
             predicted_root_cause_confidence=rca_confidence,
+            structural_result=structural_result,
+            structural_ranking=structural_ranking,
         )
 
     # #83: with a real explanation, when a ranker + calibrator produced a
@@ -329,7 +353,27 @@ def _explain_window(
         absence_candidates=absence_candidates,
         predicted_root_cause_confidence=rca_confidence,
         confidence_calibrated=confidence_calibrated,
+        structural_result=structural_result,
+        structural_ranking=structural_ranking,
     )
+
+
+def _structural_view(
+    db: Session, scope: str, window_start: datetime, window_end: datetime, baseline_window: str
+):
+    """Opt-in experimental structural view (#187): build the deterministic A–E result + Phase G ranking
+    from the scope's telemetry, or ``(None, ())`` when nothing usable is available. Isolated so a
+    structural-adapter failure can never break the ordinary explanation."""
+    from src.utils.time import parse_duration
+
+    try:
+        baseline_start = window_start - parse_duration(baseline_window)
+    except (ValueError, TypeError):
+        return None, ()
+    from src.core.rca.structural import build_structural_view
+
+    built = build_structural_view(db, scope, window_start, window_end, baseline_start)
+    return built if built is not None else (None, ())
 
 
 def _silent_services(

@@ -473,6 +473,19 @@
       },
       "title": "Absence Candidates",
       "type": "array"
+    },
+    "structural": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Structural"
     }
   },
   "required": [
