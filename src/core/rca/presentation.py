@@ -31,18 +31,31 @@ from src.core.rca.outcome import Outcome, Relation, StructuralResult
 from src.core.rca.scoring import ScoredClass
 
 
-def _ordered_classes(result: StructuralResult, ranking: tuple[ScoredClass, ...]):
-    """The result's classes in Phase G presentation order when a ranking is supplied, else the packet's
-    own deterministic order. Ranking only *reorders* — it never adds or drops a class (a ranking whose
-    id-set disagrees with the packet is ignored, so presentation can't silently diverge from inference)."""
+def _apply_ranking(result: StructuralResult, ranking: tuple[ScoredClass, ...]):
+    """Decide whether a Phase G ranking is used, once, for both order and scores. Returns
+    ``(ordered_classes, score_by_ids_or_None, applied)``.
+
+    A ranking is applied **only** when its class id-sets are *exactly* the packet's — same multiset,
+    no duplicate, no missing, no extra — so presentation can neither drop, add, nor duplicate a class,
+    and cannot claim a score order the classes were not given. Otherwise the packet's own order is used
+    and **no** scores are attached (a partial/duplicated ranking is rejected wholesale, not applied to
+    the overlap). ``rank_classes`` always produces a valid ranking; this only guards a hostile caller."""
     if not ranking:
-        return list(result.classes)
+        return list(result.classes), None, False
+    packet_ids = sorted(tuple(sorted(frozenset(c.hypothesis_ids))) for c in result.classes)
+    ranking_ids = sorted(tuple(sorted(frozenset(r.hypothesis_ids))) for r in ranking)
+    if ranking_ids != packet_ids:  # any disagreement (incl. a repeated id-set) -> trust the packet
+        return list(result.classes), None, False
     by_ids = {frozenset(c.hypothesis_ids): c for c in result.classes}
-    ordered = [by_ids[frozenset(r.hypothesis_ids)] for r in ranking
-               if frozenset(r.hypothesis_ids) in by_ids]
-    if len(ordered) != len(result.classes):  # ranking disagrees with the packet -> trust the packet
-        return list(result.classes)
-    return ordered
+    ordered = [by_ids[frozenset(r.hypothesis_ids)] for r in ranking]
+    return ordered, {frozenset(r.hypothesis_ids): r for r in ranking}, True
+
+
+def _separable_missing(result: StructuralResult) -> frozenset[str]:
+    """The prediction distinguishers that could actually be *collected* to separate the classes: the
+    packet's ``D_missing`` minus the uncollectable ``integration_gaps``. An uncollectable id is never a
+    distinguisher at the presentation layer (Invariant 2) — it is only a wire-this-up recommendation."""
+    return frozenset(result.d_missing) - set(result.integration_gaps)
 
 
 @dataclass(frozen=True)
@@ -80,11 +93,11 @@ def structural_packet(
     is given; each carries its localizations, defining signature, observed supporting evidence, its
     ``d_missing`` (why-not-separable), and — when scored — its discrete ``score`` / ``ranker_signal``.
     ``integration_gaps`` and ``next_observations`` are recommendations, kept separate from evidence."""
-    classes = _ordered_classes(result, ranking)
-    score_by_ids = {frozenset(r.hypothesis_ids): r for r in ranking}
+    classes, score_by_ids, _applied = _apply_ranking(result, ranking)
+    gaps = set(result.integration_gaps)
     class_packets = []
     for c in classes:
-        scored = score_by_ids.get(frozenset(c.hypothesis_ids))
+        scored = score_by_ids.get(frozenset(c.hypothesis_ids)) if score_by_ids else None
         class_packets.append({
             "localizations": list(c.localizations),
             "hypothesis_ids": list(c.hypothesis_ids),
@@ -94,7 +107,8 @@ def structural_packet(
                  "expected": e.expected_state, "relation": e.relation}
                 for e in c.evidence
             ],
-            "d_missing": sorted(c.d_missing),
+            # Uncollectable ids are never surfaced as distinguishers at the presentation layer (Inv 2).
+            "d_missing": sorted(set(c.d_missing) - gaps),
             "score": scored.score if scored else None,
             "ranker_signal": scored.ranker_signal if scored else None,
         })
@@ -102,10 +116,11 @@ def structural_packet(
         "outcome": result.outcome.value,
         "localization": list(result.localization),
         "classes": class_packets,
-        # Distinguishers not collected (would separate the surviving classes): why-not-separable.
-        "d_missing": sorted(result.d_missing),
-        # What to collect next: the prediction distinguishers plus the wire-this-up integration gaps
-        # (uncollectable coordinates) — recommendations, never incident evidence (Invariant 2).
+        # Collectable distinguishers not yet collected (why-not-separable). Uncollectable coordinates
+        # are excluded here and surface only under integration_gaps / next_observations (Invariant 2).
+        "d_missing": sorted(_separable_missing(result)),
+        # What to collect next: collectable distinguishers + hard-rule checks + the wire-this-up
+        # integration gaps — recommendations, never incident evidence.
         "next_observations": _next_observations(result),
         "integration_gaps": list(result.integration_gaps),
         "eliminated": [
@@ -118,10 +133,11 @@ def structural_packet(
 
 
 def _next_observations(result: StructuralResult) -> list[str]:
-    """Actionable next observations: the missing prediction distinguishers (``D_missing``), the hard-rule
+    """Actionable next observations: the **collectable** missing distinguishers (bare ids), the hard-rule
     elimination checks (collect X to rule a hypothesis out), and the integration gaps (uncollectable
-    telemetry to wire up). All recommendations — deduplicated, stable-ordered — never incident facts."""
-    obs: list[str] = list(sorted(result.d_missing))
+    telemetry, explicitly labelled). All recommendations — deduplicated, stable-ordered — never incident
+    facts. An uncollectable id appears ONLY under its labelled integration-gap line (Invariant 2)."""
+    obs: list[str] = list(sorted(_separable_missing(result)))
     for chk in result.potential_elimination_checks:
         obs.append(f"{chk.observable_id} (would rule out {chk.hypothesis_id})")
     for gap in result.integration_gaps:
@@ -129,10 +145,19 @@ def _next_observations(result: StructuralResult) -> list[str]:
     return list(dict.fromkeys(obs))  # stable de-dupe
 
 
+def _append_next_observations(lines: list[str], result: StructuralResult) -> None:
+    nxt = _next_observations(result)
+    if nxt:
+        lines.append("Useful next observations:")
+        for o in nxt:
+            lines.append(f"  - {o}")
+
+
 def render_lines(result: StructuralResult, ranking: tuple[ScoredClass, ...] = ()) -> tuple[str, ...]:
-    """The user-facing text layout for a structural result (the #187 template), classes in Phase G
-    order when ``ranking`` is supplied."""
-    classes = _ordered_classes(result, ranking)
+    """The user-facing text layout for a structural result (the #187 template). Competing classes are in
+    Phase G order **only when a valid ranking was supplied** — otherwise the packet's own order, and the
+    header does not claim a support order the list does not have."""
+    classes, _scores, applied = _apply_ranking(result, ranking)
     lines: list[str] = [f"Outcome:   {_OUTCOME_HEADLINE[result.outcome]}"]
 
     if result.outcome is Outcome.NO_COMPATIBLE_HYPOTHESIS:
@@ -140,12 +165,13 @@ def render_lines(result: StructuralResult, ranking: tuple[ScoredClass, ...] = ()
         for e in result.eliminated:
             why = ", ".join(f"{ev.observable_id}={ev.observed_state}" for ev in e.evidence)
             lines.append(f"  - {e.member.localization}" + (f"  (ruled out by {why})" if why else ""))
+        _append_next_observations(lines, result)  # integration gaps still surface here (Inv 2)
         return tuple(lines)
 
     if result.localization:
         lines.append(f"Localization: {', '.join(result.localization)}")
 
-    # Hypotheses (single class -> "Hypothesis"; multiple classes -> competing groups in rank order).
+    # Hypotheses (single class -> "Hypothesis"; multiple classes -> competing groups).
     if len(classes) == 1:
         cls = classes[0]
         label = "Hypothesis" if cls.is_singleton else "Remaining hypotheses"
@@ -153,7 +179,9 @@ def render_lines(result: StructuralResult, ranking: tuple[ScoredClass, ...] = ()
         for loc in cls.localizations:
             lines.append(f"  - {loc}")
     else:
-        lines.append("Competing hypotheses (most-supported first):")
+        # Claim a support order only when a ranking was actually applied.
+        lines.append("Competing hypotheses (most-supported first):" if applied
+                     else "Competing hypotheses:")
         for c in classes:
             lines.append(f"  - {', '.join(c.localizations)}")
 
@@ -164,20 +192,21 @@ def render_lines(result: StructuralResult, ranking: tuple[ScoredClass, ...] = ()
         for e in evidence:
             lines.append(f"  ✓ {e.observable_id} = {e.observed_state}")
 
-    # Why they cannot be separated — D_missing (collected-but-not, or model has no distinguisher).
+    # Why they cannot be separated — collectable distinguishers only (uncollectable ones are an
+    # integration gap, surfaced under "next observations", never presented as a distinguisher).
     if result.outcome is Outcome.NON_IDENTIFIABLE:
         lines.append("Why they cannot be separated:")
-        for d in sorted(result.d_missing):
-            lines.append(f"  ? {d} (not collected)")
+        separable = sorted(_separable_missing(result))
+        if separable:
+            for d in separable:
+                lines.append(f"  ? {d} (not collected)")
+        else:
+            lines.append("  ? the distinguishing telemetry is not collected (see next observations)")
     elif result.outcome is Outcome.IRREDUCIBLE:
         lines.append("Why they cannot be separated:")
         lines.append("  ? no modeled observation distinguishes them (extend the model)")
 
-    nxt = _next_observations(result)
-    if nxt:
-        lines.append("Useful next observations:")
-        for o in nxt:
-            lines.append(f"  - {o}")
+    _append_next_observations(lines, result)
     return tuple(lines)
 
 

@@ -118,7 +118,53 @@ class TestOutcomeLayouts:
         assert not any(ln.startswith("Localization:") for ln in lines)
 
 
+def _non_identifiable_via_uncollectable():
+    # Two hypotheses agree on the usable `sig` and disagree only on `payment.health`, which is
+    # UNCOLLECTABLE. So payment.health lands in BOTH d_missing (predicted differently, not usable) and
+    # integration_gaps (uncollectable) — the exact overlap Invariant 2 must resolve in favor of "gap".
+    h1 = _h("proc", _model(ExpectedObservation("sig", "present", Strength.USUALLY),
+                           ExpectedObservation("payment.health", "present", Strength.MAYBE)),
+            localization="payment process")
+    h2 = _h("edge", _model(ExpectedObservation("sig", "present", Strength.USUALLY),
+                           ExpectedObservation("payment.health", "absent", Strength.MAYBE)),
+            kind=Kind.EDGE, localization="checkout->payment")
+    obs = [observed("sig", "present"), uncollectable("payment.health")]
+    return resolve(partition([h1, h2], obs), observations=obs)
+
+
 class TestInvariant2AtSurface:
+    def test_uncollectable_distinguisher_is_never_shown_as_a_reason(self):
+        r = _non_identifiable_via_uncollectable()
+        assert r.outcome is Outcome.NON_IDENTIFIABLE
+        assert "payment.health" in r.integration_gaps
+        assert "payment.health" in r.d_missing  # structurally it IS a distinguisher...
+
+        packet = structural_packet(r)
+        # ...but the presented packet never surfaces it as one (Invariant 2).
+        assert "payment.health" not in packet["d_missing"]
+        assert all("payment.health" not in c["d_missing"] for c in packet["classes"])
+        assert "payment.health" in packet["integration_gaps"]
+        # In next_observations it appears ONLY with the integration-gap label, never as a bare id.
+        health = [o for o in packet["next_observations"] if "payment.health" in o]
+        assert health == ["payment.health (not collected — integration gap)"]
+
+        lines = render_lines(r)
+        assert "Why they cannot be separated:" in lines
+        assert not any("? payment.health" in ln for ln in lines)  # not a distinguisher line
+        health_lines = [ln for ln in lines if "payment.health" in ln]
+        assert health_lines and all("integration gap" in ln for ln in health_lines)
+
+    def test_no_compatible_still_surfaces_integration_gaps(self):
+        m = _model(ExpectedObservation("a", "present"),
+                   contradictions=(Contradiction("g", frozenset({"true"})),))
+        h = _h("dead", m, localization="payment")
+        obs = [observed("g", "true"), uncollectable("payment.health")]
+        r = resolve(partition([h], obs), observations=obs)
+        assert r.outcome is Outcome.NO_COMPATIBLE_HYPOTHESIS
+        lines = render_lines(r)
+        assert "Useful next observations:" in lines  # early return no longer drops this
+        assert any("payment.health" in ln and "integration gap" in ln for ln in lines)
+
     def test_uncollectable_is_only_a_next_observation(self):
         # payment.err observed (supports); payment.health is uncollectable -> integration gap.
         h = _h("payment", _model(ExpectedObservation("payment.err", "present", Strength.USUALLY)))
@@ -137,6 +183,52 @@ class TestInvariant2AtSurface:
         gap_line = [ln for ln in lines if "payment.health" in ln]
         assert gap_line and all("integration gap" in ln for ln in gap_line)
         assert not any(ln.startswith("  ✓") and "payment.health" in ln for ln in lines)
+
+
+class TestRankingContract:
+    def _uncertain(self):
+        strong = _h("strong", _model(ExpectedObservation("a", "present", Strength.USUALLY)),
+                    localization="A")
+        weak = _h("weak", _model(ExpectedObservation("b", "present", Strength.MAYBE)),
+                  localization="B")
+        p = partition([weak, strong], [observed("a", "present"), observed("b", "present")])
+        return p, resolve(p)
+
+    def test_default_makes_no_support_order_claim(self):
+        _p, r = self._uncertain()
+        lines = render_lines(r)  # no ranking
+        assert "Competing hypotheses:" in lines
+        assert not any("most-supported first" in ln for ln in lines)
+
+    def test_applied_ranking_claims_and_delivers_support_order(self):
+        p, r = self._uncertain()
+        lines = render_lines(r, rank_classes(p))
+        assert "Competing hypotheses (most-supported first):" in lines
+        body = [ln for ln in lines if ln.startswith("  - ")]
+        assert body.index("  - A") < body.index("  - B")
+
+    def test_duplicate_idset_ranking_is_rejected_wholesale(self):
+        p, r = self._uncertain()
+        good = rank_classes(p)
+        bad = (good[0], good[0])  # same length as the packet, but repeats a class and drops the other
+        packet = structural_packet(r, bad)
+        # rejected -> packet order, and NO scores attached from the rejected ranking
+        assert all(c["score"] is None and c["ranker_signal"] is None for c in packet["classes"])
+        assert {tuple(c["hypothesis_ids"]) for c in packet["classes"]} == {("strong",), ("weak",)}
+        lines = render_lines(r, bad)
+        assert "Competing hypotheses:" in lines  # no support-order claim on a rejected ranking
+
+    def test_partial_ranking_attaches_no_scores(self):
+        p, r = self._uncertain()
+        partial = (rank_classes(p)[0],)  # only one of the two classes
+        packet = structural_packet(r, partial)
+        assert all(c["score"] is None for c in packet["classes"])
+
+    def test_valid_ranking_attaches_scores_and_orders(self):
+        p, r = self._uncertain()
+        packet = structural_packet(r, rank_classes(p))
+        assert [c["localizations"][0] for c in packet["classes"]] == ["A", "B"]
+        assert [c["score"] for c in packet["classes"]] == [3, 1]
 
 
 class TestLLMAsRenderer:
