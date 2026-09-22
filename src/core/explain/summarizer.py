@@ -202,10 +202,24 @@ def _explain_window(
     # informational-only and excluded services that were never eligible candidates.
     generated_candidates = sorted(ranked_services) if ranked_services else list(packet.candidate_services)
     # Phase F (#184): absence-derived candidates — services whose span traffic was baselined then
-    # collapsed. Unioned in so a *silent* root cause (no incident spans/logs) is generated even on the
-    # no-ranker path. Empty when nothing disappeared, so this is behaviour-neutral off the fault.
+    # collapsed. These become **product** candidates (root_cause_candidates below), so a *silent* root
+    # cause is emitted by the pipeline itself (API/CLI serialize it), not just counted by eval. Empty
+    # when nothing disappeared, so this is behaviour-neutral off the fault.
     absence_candidates = _absence_candidates(db, scope, window_start, window_end, baseline_window)
     if absence_candidates:
+        absence_entries = [{"service": s, "source": "absence"} for s in absence_candidates]
+        if rca_candidates:  # learned ranker ran: append absence after its ranked candidates
+            rca_candidates = rca_candidates + [
+                e for e in absence_entries if e["service"] not in ranked_services
+            ]
+        else:  # no ranker: build the product candidate list from the log-cluster pool + absence, so
+            # the disappeared service is a real product candidate (top-1 stays the loudest symptom).
+            cluster_entries = [{"service": s, "source": "cluster"} for s in packet.candidate_services]
+            rca_candidates = cluster_entries + absence_entries
+            if predicted_root_cause is None:
+                predicted_root_cause = (
+                    packet.candidate_services[0] if packet.candidate_services else absence_candidates[0]
+                )
         generated_candidates = sorted(set(generated_candidates) | set(absence_candidates))
     # Surface the disappearance in the evidence so a silent failure is visible, not just eval-counted.
     evidence_items = list(packet.evidence_items) + (
@@ -340,7 +354,7 @@ def _absence_candidates(
     from sqlalchemy import select
 
     from src.core.rca.features import detect_absence
-    from src.db.models import TraceSpan
+    from src.db.models import MetricSample, TraceSpan
     from src.utils.time import parse_duration
 
     try:
@@ -354,7 +368,17 @@ def _absence_candidates(
             TraceSpan.start_time <= window_end,
         )
     ).scalars().all()
-    return sorted(detect_absence(span_rows, baseline_start, window_start, window_end))
+    # Independent per-service availability: services still emitting metrics in the incident window are
+    # up and their collection path works, so a *span* collapse is genuine unreachability — not
+    # instrumentation/collector loss. A service span-collapsed AND metric-silent stays UNKNOWN.
+    avail_rows = db.execute(
+        select(MetricSample.service)
+        .where(MetricSample.scope == scope, MetricSample.ts >= window_start, MetricSample.ts <= window_end)
+        .distinct()
+    ).all()
+    available = {r[0] for r in avail_rows if r[0]}
+    return sorted(detect_absence(span_rows, baseline_start, window_start, window_end,
+                                 available_services=available))
 
 
 def _rank_candidates(

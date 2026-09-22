@@ -117,6 +117,7 @@ def detect_absence(
     incident_start: datetime,
     incident_end: datetime,
     *,
+    available_services: set,
     min_baseline_spans: int = 5,
     min_expected_incident: float = 5.0,
     collapse_fraction: float = 0.2,
@@ -131,9 +132,11 @@ def detect_absence(
 
     1. **Baselined** (Invariant 2): a service needs ≥ ``min_baseline_spans`` baseline spans, so a
        service that was *never seen* — missing telemetry — can never become a disappearance signal.
-    2. **Available in the incident**: if the scope emitted **no** incident spans at all, the trace
-       collector was down — a collection outage, not per-service disappearance — so nothing is
-       diagnosed (every silent service would otherwise look vanished).
+    2. **Available in the incident**: the service itself must be in ``available_services`` — an
+       independent per-service availability signal (the caller passes services still emitting incident
+       *metrics*: the service is up and its collection path works, so a *span* collapse means it stopped
+       serving/receiving traffic, not that its instrumentation or the collector failed). Scope-wide
+       activity is *not* enough — an unrelated healthy service does not prove the target was measured.
     3. **Expected**: the baseline rate must predict a meaningful incident count
        (``base_rate × incident_seconds ≥ min_expected_incident``). Five spans spread over a 24h
        baseline predict ~zero spans in a 5-minute incident, so zero is the ordinary outcome, not a
@@ -151,10 +154,10 @@ def detect_absence(
             bc[s] += 1
         elif incident_start <= ts <= incident_end:
             ic[s] += 1
-    if sum(ic.values()) == 0:  # (2) no incident traces at all -> collector unavailable, not evidence
-        return {}
     absent: dict[str, float] = {}
     for s, base in bc.items():
+        if s not in available_services:  # (2) target not independently available this incident -> UNKNOWN
+            continue
         if base < min_baseline_spans:  # (1) not baselined enough to be "expected"
             continue
         base_rate = base / pre

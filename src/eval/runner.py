@@ -42,23 +42,15 @@ def prediction_from_result(result: ExplainResult) -> Prediction:
     # When the learned RCA ranker ran (a model artifact is configured), its ranked
     # services override the log-cluster pick — this is the #118 C2 signal, and it
     # can localise a trace/metric-only root cause with no primary log cluster.
+    # The pipeline's candidate list (root_cause_candidates): the learned ranker's output, or — on the
+    # no-ranker path — the log-cluster pool plus Phase F (#184) absence-derived candidates that
+    # explain_window put there. Deriving the eval prediction from exactly this product field keeps
+    # eval and the API/CLI in agreement (a vanished service is a real product candidate, unranked).
     ranked = [c["service"] for c in getattr(result, "root_cause_candidates", []) if c.get("service")]
     if ranked:
         root_cause = result.predicted_root_cause or ranked[0]
         predicted = ranked
         produced = True
-
-    # Phase F (#184): absence-derived candidates are appended to the actual candidate list — they are
-    # real, selectable candidates (root_cause_hit and the taxonomy read `predicted_services`), just
-    # unranked (a vanished service has no error volume to rank it; that is Phase G's job). They never
-    # displace the top-1 pick. A purely-silent incident (no clusters, no ranker) is now an explanation
-    # whose only candidates are the disappeared services.
-    absence = list(getattr(result, "absence_candidates", []))
-    if absence:
-        produced = True
-        predicted = predicted + [a for a in absence if a not in predicted]
-        if root_cause is None:
-            root_cause = absence[0]
 
     top_trigger_ts = None
     for cand in result.trigger_candidates:

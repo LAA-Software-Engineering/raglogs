@@ -250,20 +250,24 @@ class TestPredictionFromResult:
         pred = prediction_from_result(_result(primary_services=["billing-worker"]))
         assert pred.generated_candidates == ["billing-worker"]  # older result: no full set recorded
 
-    def test_absence_candidates_reach_the_candidate_output_without_displacing_top1(self):
-        # Phase F: a vanished service is appended to the actual candidate list (predicted_services),
-        # but the log-cluster pick stays top-1 (absence is unranked; ranking is Phase G).
+    def test_absence_is_a_product_candidate_via_root_cause_candidates(self):
+        # Phase F: explain_window puts absence into the PRODUCT candidate list (root_cause_candidates),
+        # so eval derives it from the same field the API/CLI serialize — log-cluster pick stays top-1.
         res = _result(primary_services=["checkout"])
-        res.absence_candidates = ["payment"]
+        res.root_cause_candidates = [{"service": "checkout", "source": "cluster"},
+                                     {"service": "payment", "source": "absence"}]
+        res.predicted_root_cause = "checkout"
+        res.generated_candidates = ["checkout", "payment"]
         pred = prediction_from_result(res)
-        assert pred.root_cause_service == "checkout"          # top-1 unchanged
-        assert pred.predicted_services == ["checkout", "payment"]  # vanished cause is a real candidate
+        assert pred.root_cause_service == "checkout"                    # top-1 unchanged
+        assert pred.predicted_services == ["checkout", "payment"]       # vanished cause is a real candidate
         assert "payment" in pred.generated_candidates
 
     def test_purely_silent_incident_localizes_to_the_absence_candidate(self):
-        # no clusters, no ranker — the only evidence is the disappearance
+        # no clusters/ranker: explain_window still emits the disappearance as the product candidate
         res = _result(primary_services=None)
-        res.absence_candidates = ["payment"]
+        res.root_cause_candidates = [{"service": "payment", "source": "absence"}]
+        res.predicted_root_cause = "payment"
         pred = prediction_from_result(res)
         assert pred.produced_explanation is True
         assert pred.root_cause_service == "payment" and pred.predicted_services == ["payment"]

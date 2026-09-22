@@ -24,41 +24,43 @@ def _spans(service, *, baseline, incident, base_start=_BASE):
     return out
 
 
-# A healthy service that keeps emitting in the incident, so traces are demonstrably available
-# (gate 2) — without it, a lone vanished service looks like a whole-collector outage.
-_HEALTHY = _spans("healthy", baseline=60, incident=120)
+def _detect(spans, available, **kw):
+    return detect_absence(spans, _BASE, _INC, _END, available_services=set(available), **kw)
 
 
 class TestDetectAbsence:
     def test_baselined_then_vanished_is_a_candidate(self):
-        spans = _spans("payment", baseline=60, incident=0) + _HEALTHY
-        absent = detect_absence(spans, _BASE, _INC, _END)
-        assert "payment" in absent and absent["payment"] > 0.9  # near-total collapse
+        # payment's spans collapsed, but it is independently available (still emitting metrics)
+        absent = _detect(_spans("payment", baseline=60, incident=0), available={"payment"})
+        assert "payment" in absent and absent["payment"] > 0.9
+
+    def test_target_not_independently_available_stays_unknown(self):
+        # gate 2: payment span-collapsed AND not in available (its metrics also stopped) -> the whole
+        # collection path/instrumentation failed; indistinguishable from disappearance, so UNKNOWN.
+        assert _detect(_spans("payment", baseline=60, incident=0), available=set()) == {}
+
+    def test_unrelated_healthy_service_does_not_make_target_available(self):
+        # an unrelated healthy service emitting is NOT evidence the target was measured (scope-wide
+        # activity is insufficient): payment absent from `available` -> not diagnosed.
+        spans = _spans("payment", baseline=60, incident=0) + _spans("healthy", baseline=60, incident=120)
+        assert "payment" not in _detect(spans, available={"healthy"})
 
     def test_missing_telemetry_is_not_a_disappearance(self):
-        # a service never seen (no baseline spans) must never be an absence candidate (Invariant 2)
-        assert "never-seen" not in detect_absence(_HEALTHY, _BASE, _INC, _END)
+        spans = _spans("healthy", baseline=60, incident=60)
+        assert "never-seen" not in _detect(spans, available={"healthy", "never-seen"})
 
     def test_insufficient_baseline_is_not_a_candidate(self):
-        spans = _spans("blip", baseline=3, incident=0) + _HEALTHY
-        assert "blip" not in detect_absence(spans, _BASE, _INC, _END)
+        assert "blip" not in _detect(_spans("blip", baseline=3, incident=0), available={"blip"})
 
     def test_steady_traffic_is_not_a_collapse(self):
-        spans = _spans("steady", baseline=60, incident=120) + _HEALTHY
-        assert "steady" not in detect_absence(spans, _BASE, _INC, _END)
-
-    def test_collector_outage_is_not_disappearance(self):
-        # gate 2: every service loses incident spans -> the collector stopped, not a per-service
-        # disappearance. Nothing may be diagnosed (else all baselined services look vanished).
-        spans = _spans("a", baseline=60, incident=0) + _spans("b", baseline=60, incident=0)
-        assert detect_absence(spans, _BASE, _INC, _END) == {}
+        assert "steady" not in _detect(_spans("steady", baseline=60, incident=120), available={"steady"})
 
     def test_sparse_service_over_long_baseline_is_not_a_collapse(self):
-        # gate 3: 5 spans over a 24h baseline predict ~zero spans in the incident; zero is normal.
+        # gate 3: 5 spans over a 24h baseline predict ~zero incident spans; zero is normal.
         long_base = _INC - timedelta(hours=24)
-        spans = _spans("cron", baseline=5, incident=0, base_start=long_base) + _HEALTHY
-        assert "cron" not in detect_absence(spans, long_base, _INC, _END)
+        spans = _spans("cron", baseline=5, incident=0, base_start=long_base)
+        assert detect_absence(spans, long_base, _INC, _END, available_services={"cron"}) == {}
 
     def test_empty_when_nothing_disappeared(self):
         spans = _spans("a", baseline=60, incident=60) + _spans("b", baseline=40, incident=50)
-        assert detect_absence(spans, _BASE, _INC, _END) == {}
+        assert _detect(spans, available={"a", "b"}) == {}
