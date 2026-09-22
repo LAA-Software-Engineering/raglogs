@@ -49,13 +49,12 @@ def prediction_from_result(result: ExplainResult) -> Prediction:
         produced = True
 
     # Phase F (#184): absence-derived candidates are their own product field (result.absence_candidates,
-    # serialized by the API/CLI). They join the candidate list for coverage but never become the top-1
-    # (a vanished service has no rank; that is Phase G). Both sources are real product output, so eval
-    # and the product agree; the top-1 pick stays the ranker/cluster choice.
+    # serialized by the API/CLI). They join the candidate *list* for coverage but never become the top-1
+    # and never fabricate ``produced_explanation`` — candidate generation is kept separate from whether
+    # the pipeline actually rendered an explanation (it may still be "insufficient evidence").
     absence = list(getattr(result, "absence_candidates", []))
     if absence:
         predicted = predicted + [a for a in absence if a not in predicted]
-        produced = True  # the pipeline emitted a finding (disappeared services), not nothing
 
     top_trigger_ts = None
     for cand in result.trigger_candidates:

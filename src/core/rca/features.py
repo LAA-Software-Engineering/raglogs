@@ -117,7 +117,6 @@ def detect_absence(
     incident_start: datetime,
     incident_end: datetime,
     *,
-    available_services: set,
     min_baseline_spans: int = 5,
     min_expected_incident: float = 5.0,
     collapse_fraction: float = 0.2,
@@ -127,19 +126,17 @@ def detect_absence(
     incident-window features can't see (``trace_features`` only entries services present in the
     incident). Returns ``{service: collapse_strength in (0, 1]}``.
 
-    These are **candidates to investigate, not proven disappearances**: from traces alone a span
-    collapse cannot be told apart from a trace-exporter/collector gap for that service. Callers must
-    present the result as an ambiguous *"went silent in traces"* signal, not a confirmed causal
-    disappearance. An observation is emitted only under all three of #184's gates, else UNKNOWN
-    (empty):
+    An observation is emitted only under all three of #184's gates, else it stays UNKNOWN (empty) —
+    missing telemetry is never turned into absence evidence:
 
     1. **Baselined** (Invariant 2): a service needs ≥ ``min_baseline_spans`` baseline spans, so a
        service that was *never seen* — missing telemetry — can never become a disappearance signal.
-    2. **Service up in the incident**: the service itself must be in ``available_services`` — an
-       independent per-service signal (the caller passes services still emitting incident *metrics*).
-       This rules out a *full* outage (service gone → nothing to interpret) and scope-wide false
-       positives (an unrelated healthy service does not make the target available), but it does **not**
-       prove the trace signal was collectable — hence the candidate is ambiguous, not proof.
+    2. **Trace measurement available**: at least one baseline **caller** of the service is still
+       emitting incident spans (an independent *edge* signal that the trace-collection path to the
+       service was live this incident). This is the ``measurement available`` gate #184 requires: it
+       rules out a whole-path/collector outage (no active caller → nothing collected → UNKNOWN) and
+       scope-wide false positives (an unrelated healthy service is not on the path). A service with no
+       active baseline caller (a root, or a path that went dark) stays UNKNOWN.
     3. **Expected**: the baseline rate must predict a meaningful incident count
        (``base_rate × incident_seconds ≥ min_expected_incident``). Five spans spread over a 24h
        baseline predict ~zero spans in a 5-minute incident, so zero is the ordinary outcome, not a
@@ -148,6 +145,8 @@ def detect_absence(
     post = _seconds(incident_start, incident_end)
     bc: Counter = Counter()
     ic: Counter = Counter()
+    base_service_of: dict[tuple, str] = {}   # (trace_id, span_id) -> service, baseline spans only
+    incident_active: set[str] = set()
     for sp in spans:
         s = sp.service
         ts = sp.start_time
@@ -155,11 +154,24 @@ def detect_absence(
             continue
         if baseline_start <= ts < incident_start:
             bc[s] += 1
+            if sp.span_id:
+                base_service_of[(sp.trace_id, sp.span_id)] = s
         elif incident_start <= ts <= incident_end:
             ic[s] += 1
+            incident_active.add(s)
+    # Baseline caller->callee edges: which services called each service (for the availability gate).
+    callers: dict[str, set] = defaultdict(set)
+    for sp in spans:
+        ts = sp.start_time
+        if ts is None or not (baseline_start <= ts < incident_start) or not sp.parent_span_id:
+            continue
+        caller = base_service_of.get((sp.trace_id, sp.parent_span_id))
+        if caller and sp.service and caller != sp.service:
+            callers[sp.service].add(caller)
+
     absent: dict[str, float] = {}
     for s, base in bc.items():
-        if s not in available_services:  # (2) target not independently available this incident -> UNKNOWN
+        if not any(c in incident_active for c in callers.get(s, ())):  # (2) trace path not live -> UNKNOWN
             continue
         if base < min_baseline_spans:  # (1) not baselined enough to be "expected"
             continue

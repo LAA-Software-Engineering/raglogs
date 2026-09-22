@@ -644,6 +644,7 @@ def explain_from_cached(
             if isinstance(payload.get("predicted_root_cause_confidence"), (int, float))
             else None
         ),
+        absence_candidates=[s for s in (payload.get("absence_candidates") or []) if isinstance(s, str)],
     )
 
 

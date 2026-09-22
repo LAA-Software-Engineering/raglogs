@@ -18,6 +18,7 @@ from src.api.schemas.v1 import (
     SimilarResponse,
     TimelineResponse,
     explain_from_cached,
+    explain_from_result,
     short_summary,
 )
 from src.core.normalization.patterns import infer_trigger_type
@@ -122,6 +123,39 @@ def test_cached_old_payload_upgrades_to_v1() -> None:
     assert "model" in data["llm"]
     assert "fell_back" in data["llm"]
     assert data["cached"] is True
+
+
+def test_absence_candidates_survive_the_cache_round_trip() -> None:
+    # Phase F (#184): the API surfaces absence-derived candidates in their own field. A cache
+    # hit rebuilds the response from the stored payload, so absence must round-trip through
+    # explain_from_result -> model_dump -> explain_from_cached, not vanish on the second request.
+    result = _explain_result(absence_candidates=["payment"])
+    fresh = explain_from_result(result, no_llm=True, cached=False)
+    assert fresh.absence_candidates == ["payment"]
+
+    # Mirror the route: dump exactly what gets persisted, then rebuild from it.
+    payload = fresh.model_dump(by_alias=True, exclude_unset=True)
+    payload.pop("cached", None)
+    rebuilt = explain_from_cached(
+        payload,
+        window_start=WINDOW_START,
+        window_end=WINDOW_END,
+        no_llm=True,
+        scope="default",
+    )
+    assert rebuilt.absence_candidates == ["payment"]
+
+
+def test_cached_payload_without_absence_defaults_to_empty() -> None:
+    # An older cached payload predates the field; the upgrade must not fail or invent candidates.
+    rebuilt = explain_from_cached(
+        {"window": {"start": WINDOW_START.isoformat(), "end": WINDOW_END.isoformat()}},
+        window_start=WINDOW_START,
+        window_end=WINDOW_END,
+        no_llm=True,
+        scope="default",
+    )
+    assert rebuilt.absence_candidates == []
 
 
 def _openapi_properties(model: dict, components: dict) -> dict:

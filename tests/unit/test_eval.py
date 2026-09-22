@@ -259,14 +259,15 @@ class TestPredictionFromResult:
         assert pred.root_cause_service == "checkout"                    # top-1 unchanged, not fabricated
         assert pred.predicted_services == ["checkout", "payment"]       # vanished cause is a candidate
 
-    def test_absence_is_not_forced_to_top1_on_a_silent_incident(self):
-        # no clusters/ranker, only a disappearance: it is a candidate, produced=True, but no fabricated
-        # top-1 (root_cause stays None — the product's predicted_root_cause is also None).
+    def test_absence_does_not_fabricate_produced_or_top1_on_a_silent_incident(self):
+        # no clusters/ranker (product returned insufficient-evidence): absence joins the candidate list
+        # but must NOT flip produced_explanation or invent a top-1 the product never rendered.
         res = _result(primary_services=None)
         res.absence_candidates = ["payment"]
         pred = prediction_from_result(res)
-        assert pred.produced_explanation is True
-        assert pred.predicted_services == ["payment"] and pred.root_cause_service is None
+        assert pred.produced_explanation is False   # product did not render an explanation
+        assert pred.root_cause_service is None
+        assert "payment" in pred.predicted_services  # still a candidate for coverage
 
 
 class TestOrderedServices:

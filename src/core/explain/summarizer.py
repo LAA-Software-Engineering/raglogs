@@ -346,7 +346,7 @@ def _absence_candidates(
     from sqlalchemy import select
 
     from src.core.rca.features import detect_absence
-    from src.db.models import MetricSample, TraceSpan
+    from src.db.models import TraceSpan
     from src.utils.time import parse_duration
 
     try:
@@ -360,17 +360,9 @@ def _absence_candidates(
             TraceSpan.start_time <= window_end,
         )
     ).scalars().all()
-    # Independent per-service availability: services still emitting metrics in the incident window are
-    # up and their collection path works, so a *span* collapse is genuine unreachability — not
-    # instrumentation/collector loss. A service span-collapsed AND metric-silent stays UNKNOWN.
-    avail_rows = db.execute(
-        select(MetricSample.service)
-        .where(MetricSample.scope == scope, MetricSample.ts >= window_start, MetricSample.ts <= window_end)
-        .distinct()
-    ).all()
-    available = {r[0] for r in avail_rows if r[0]}
-    return sorted(detect_absence(span_rows, baseline_start, window_start, window_end,
-                                 available_services=available))
+    # detect_absence gates trace-measurement availability internally (a baseline caller still emitting
+    # incident spans) — see its docstring; nothing else is needed here.
+    return sorted(detect_absence(span_rows, baseline_start, window_start, window_end))
 
 
 def _rank_candidates(
