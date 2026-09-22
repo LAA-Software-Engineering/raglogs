@@ -48,13 +48,10 @@ def prediction_from_result(result: ExplainResult) -> Prediction:
         predicted = ranked
         produced = True
 
-    # Phase F (#184): absence-derived candidates are their own product field (result.absence_candidates,
-    # serialized by the API/CLI). They join the candidate *list* for coverage but never become the top-1
-    # and never fabricate ``produced_explanation`` — candidate generation is kept separate from whether
-    # the pipeline actually rendered an explanation (it may still be "insufficient evidence").
-    absence = list(getattr(result, "absence_candidates", []))
-    if absence:
-        predicted = predicted + [a for a in absence if a not in predicted]
+    # Phase F (#184) is evidence-only: `result.absence_candidates` ("services that went silent") is a
+    # diagnostic clue surfaced to the user, NOT a causal candidate — silence can't be attributed to a
+    # failed call toward a service without per-edge telemetry. So it deliberately does NOT enter
+    # `predicted_services`, `generated_candidates`, or coverage scoring here.
 
     top_trigger_ts = None
     for cand in result.trigger_candidates:

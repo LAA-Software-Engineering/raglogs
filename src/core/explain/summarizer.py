@@ -1,6 +1,6 @@
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import structlog
@@ -201,19 +201,13 @@ def _explain_window(
     # otherwise the legacy significant-cluster pool. Never `services_affected` — that includes
     # informational-only and excluded services that were never eligible candidates.
     generated_candidates = sorted(ranked_services) if ranked_services else list(packet.candidate_services)
-    # Phase F (#184): absence-derived candidates — services whose span traffic was baselined then
-    # collapsed. These become **product** candidates (root_cause_candidates below), so a *silent* root
-    # cause is emitted by the pipeline itself (API/CLI serialize it), not just counted by eval. Empty
-    # when nothing disappeared, so this is behaviour-neutral off the fault.
-    absence_candidates = _absence_candidates(db, scope, window_start, window_end, baseline_window)
-    if absence_candidates:
-        # `absence_candidates` is its OWN product field with distinct provenance — NOT mixed into the
-        # ranker's `root_cause_candidates` (whose entries carry a learned score). It is also part of
-        # the generated-candidate set for coverage.
-        generated_candidates = sorted(set(generated_candidates) | set(absence_candidates))
-    # Surface the disappearance honestly: a service whose traces collapsed while it stayed otherwise
-    # up is a candidate to investigate, NOT a proven cause — traces alone cannot tell "unreachable"
-    # from "trace-collection gap".
+    # Phase F (#184, evidence-only): services whose span traffic was baselined then collapsed. This is
+    # observed **evidence** ("went silent"), NOT a causal candidate — traces alone cannot attribute the
+    # silence to a failed call toward the service without per-edge telemetry (unreachable vs a
+    # trace-collection gap are indistinguishable). So it is surfaced as an evidence item and its own
+    # `absence_candidates` field ONLY, and is deliberately NOT unioned into `generated_candidates`,
+    # `root_cause_candidates`, or coverage — it must not affect causal prediction/ranking/scoring.
+    absence_candidates = _silent_services(db, scope, window_start, window_end, baseline_window)
     evidence_items = list(packet.evidence_items) + (
         [f"{len(absence_candidates)} service(s) went silent in traces (span traffic collapsed vs "
          f"baseline — unreachable or a trace-collection gap): " + ", ".join(absence_candidates)]
@@ -336,26 +330,22 @@ def _explain_window(
     )
 
 
-def _absence_candidates(
+def _silent_services(
     db: Session, scope: str, window_start: datetime, window_end: datetime, baseline_window: str
 ) -> list[str]:
-    """Services whose span traffic was baselined then collapsed in the incident *and* whose baseline
-    caller recorded an incident failure toward them (#184 Phase F). Empty (no behaviour change) when
-    nothing vanished or there are no traces.
+    """Services whose span traffic was baselined then collapsed in the incident (#184 Phase F,
+    evidence-only). Returns them for the "went silent in traces" **evidence item** — a diagnostic clue,
+    never a causal candidate: silence can't be attributed to a failed call toward the service without
+    per-edge telemetry, so this must not feed candidate generation, ranking, or coverage scoring.
 
-    Bounded on purpose: instead of materializing every span in the (default 24h) baseline window, it
-    runs two per-service **aggregates** (baseline counts; incident counts + a failed-caller flag) and,
-    only for services that actually collapsed, one **edge query restricted to those callees**. So the
-    cost scales with the number of services and collapse candidates, not with all raw spans in a day —
-    and it never loads span ORM rows / JSON attributes into Python."""
-    from sqlalchemy import and_, func, select
-    from sqlalchemy.orm import aliased
+    Two per-service **aggregates** (baseline counts, incident counts) — no span ORM rows / JSON
+    attributes are loaded into Python. Honest cost note: each ``GROUP BY service`` still scans the
+    spans in its ``(scope, time-range)`` at the DB (index-supported range scan, but O(spans in the
+    window)); this is acceptable at current scale and the scale path is maintained per-service
+    time-bucket rollups rather than recomputing from raw spans on every explain."""
+    from sqlalchemy import func, select
 
-    from src.core.rca.features import (
-        _ERROR_STATUS,
-        collapsed_services,
-        confirm_absence,
-    )
+    from src.core.rca.features import collapsed_services
     from src.db.models import TraceSpan
     from src.utils.time import parse_duration
 
@@ -366,57 +356,26 @@ def _absence_candidates(
     baseline_seconds = max((window_start - baseline_start).total_seconds(), 1.0)
     incident_seconds = max((window_end - window_start).total_seconds(), 1.0)
     svc = TraceSpan.service
-    is_error = func.lower(func.trim(TraceSpan.status_code)).in_(_ERROR_STATUS)
 
-    # (1) baseline per-service counts.
-    baseline_counts = {
-        s: n
-        for s, n in db.execute(
-            select(svc, func.count())
-            .where(TraceSpan.scope == scope, svc.isnot(None),
-                   TraceSpan.start_time >= baseline_start, TraceSpan.start_time < window_start)
-            .group_by(svc)
-        ).all()
-    }
-    if not baseline_counts:
+    def _counts(lo: datetime, hi: datetime) -> dict[str, int]:
+        return {
+            s: n
+            for s, n in db.execute(
+                select(svc, func.count())
+                .where(TraceSpan.scope == scope, svc.isnot(None),
+                       TraceSpan.start_time >= lo, TraceSpan.start_time < hi)
+                .group_by(svc)
+            ).all()
+        }
+
+    baseline_counts = _counts(baseline_start, window_start)
+    if not baseline_counts:  # no baseline traces -> nothing could have gone silent
         return []
-
-    # (2) incident per-service counts + which services emitted any error-status span (failed callers).
-    incident_counts: dict[str, int] = {}
-    incident_failed_callers: set[str] = set()
-    for s, n, n_err in db.execute(
-        select(svc, func.count(), func.count().filter(is_error))
-        .where(TraceSpan.scope == scope, svc.isnot(None),
-               TraceSpan.start_time >= window_start, TraceSpan.start_time <= window_end)
-        .group_by(svc)
-    ).all():
-        incident_counts[s] = n
-        if n_err:
-            incident_failed_callers.add(s)
-
-    collapsed = collapsed_services(baseline_counts, incident_counts, baseline_seconds, incident_seconds)
-    if not collapsed:
-        return []
-
-    # (3) baseline caller->callee edges, restricted to the collapsed callees (a small set). A span's
-    # caller is the service of its parent span in the same trace; bounded by the collapse candidates.
-    child = TraceSpan
-    parent = aliased(TraceSpan)
-    baseline_callers: dict[str, set[str]] = {s: set() for s in collapsed}
-    for callee, caller in db.execute(
-        select(child.service, parent.service)
-        .join(parent, and_(parent.scope == scope, parent.trace_id == child.trace_id,
-                           parent.span_id == child.parent_span_id,
-                           parent.start_time >= baseline_start, parent.start_time < window_start))
-        .where(child.scope == scope, child.service.in_(collapsed.keys()),
-               child.parent_span_id.isnot(None),
-               child.start_time >= baseline_start, child.start_time < window_start)
-        .group_by(child.service, parent.service)
-    ).all():
-        if caller and callee and caller != callee:
-            baseline_callers[callee].add(caller)
-
-    return sorted(confirm_absence(collapsed, baseline_callers, incident_failed_callers))
+    # incident window is inclusive of window_end; nudge past it for the half-open helper.
+    incident_counts = _counts(window_start, window_end + timedelta(microseconds=1))
+    return sorted(
+        collapsed_services(baseline_counts, incident_counts, baseline_seconds, incident_seconds)
+    )
 
 
 def _rank_candidates(

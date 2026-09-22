@@ -144,8 +144,8 @@ def explain_cmd(
                     + "[/dim]"
                 )
             console.print()
-        # Absence-derived candidates (#184): distinct from the scored ranker candidates — a
-        # "went silent in traces" signal to investigate, not a proven cause.
+        # Silent-service evidence (#184, evidence-only): a "went silent in traces" clue to
+        # investigate — NOT a causal candidate (does not feed root-cause prediction).
         if result.absence_candidates:
             console.print(
                 "[bold]Went silent in traces[/bold] "

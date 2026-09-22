@@ -1,8 +1,8 @@
-"""Integration test: Phase F (#184) absence-derived candidates end-to-end through explain_window
-(product output) AND eval normalization. A service present in the baseline that goes silent in the
-incident — while its baseline caller stays active and *errors toward it* (the failed-attempt edge) —
-becomes a real product candidate, and the eval prediction derives it from that same field. Skipped
-without Postgres."""
+"""Integration test: Phase F (#184, evidence-only) silent-service detection end-to-end through
+explain_window. A service present in the baseline that goes silent in the incident is surfaced as
+observed *evidence* (`absence_candidates` + an evidence item, serialized by the API) but must NOT
+become a causal candidate — it never enters `generated_candidates`, `root_cause_candidates`, or the
+eval `predicted_services`. Skipped without Postgres."""
 from __future__ import annotations
 
 import os
@@ -57,14 +57,13 @@ def _seed(db):
 
     spans = []
     # checkout calls payment. In the BASELINE both emit spans; in the INCIDENT payment goes silent
-    # (unreachable) while checkout stays active and errors.
+    # while checkout stays active. Silence alone -> evidence, not a causal candidate.
     for i in range(60):
         t = BASELINE_START + timedelta(seconds=i * 5)
         spans.append(_span(f"b{i}", f"c{i}", None, "checkout", t))
         spans.append(_span(f"b{i}", f"p{i}", f"c{i}", "payment", t + timedelta(milliseconds=2)))
-    for i in range(60):  # incident: only checkout emits, and it ERRORS toward the vanished payment
-        spans.append(_span(f"i{i}", f"ic{i}", None, "checkout", INJECT + timedelta(seconds=i * 5),
-                           status_code="2"))
+    for i in range(60):  # incident: only checkout emits (payment vanished)
+        spans.append(_span(f"i{i}", f"ic{i}", None, "checkout", INJECT + timedelta(seconds=i * 5)))
     persist_spans(db, spans, scope=SCOPE)
 
     # checkout error logs (the loud symptom -> a primary cluster / top-1)
@@ -86,7 +85,7 @@ def _seed(db):
     db.flush()
 
 
-def test_absence_candidate_is_a_product_candidate_and_eval_prediction(db_session):
+def test_silent_service_is_evidence_only_not_a_causal_candidate(db_session):
     from src.core.explain.summarizer import explain_window
     from src.eval.runner import prediction_from_result
 
@@ -96,17 +95,19 @@ def test_absence_candidate_is_a_product_candidate_and_eval_prediction(db_session
         no_llm=True, baseline_window_str="300s", scope=SCOPE,
     )
 
-    # PRODUCT: the vanished service is in its own product field (a distinct signal, NOT mixed into the
-    # scored ranker candidates) that the API/CLI serialize.
+    # EVIDENCE: the vanished service is surfaced as observed evidence in its own field...
     assert "payment" in result.absence_candidates
-    assert all(c.get("service") != "payment" for c in result.root_cause_candidates)  # not a ranker entry
+    # ...but is NOT promoted into any causal-candidate surface.
+    assert all(c.get("service") != "payment" for c in result.root_cause_candidates)
+    assert "payment" not in (result.generated_candidates or [])
 
-    # API serialization exposes it truthfully, separate from the scored candidates.
+    # API serialization exposes the evidence, separate from the scored candidates.
     from src.api.schemas.v1 import explain_from_result
     resp = explain_from_result(result, no_llm=True, cached=False, scope=SCOPE)
     assert "payment" in resp.absence_candidates
+    assert all(c.service != "payment" for c in resp.root_cause_candidates)
 
-    # EVAL: the prediction is derived from that same product field — not fabricated in the adapter.
+    # EVAL: silence does not affect the causal prediction / coverage.
     pred = prediction_from_result(result)
-    assert "payment" in pred.predicted_services
-    assert pred.root_cause_service != "payment"  # unranked: the loud symptom stays top-1 (Phase G ranks)
+    assert "payment" not in pred.predicted_services
+    assert "payment" not in (pred.generated_candidates or [])

@@ -157,9 +157,10 @@ class ExplainResponse(BaseModel):
     # Calibrated P(top-1 correct) for the ranker prediction (#118 D / #83); null
     # unless a calibrator model is configured.
     predicted_root_cause_confidence: Optional[float] = None
-    # Absence-derived candidates (#184 Phase F): services whose span traffic collapsed vs baseline
-    # while they stayed otherwise up — a *"went silent in traces"* signal (unreachable or a
-    # trace-collection gap), distinct from the scored ranker candidates above. Empty by default.
+    # Services that went silent in traces (#184 Phase F): span traffic baselined then collapsed —
+    # a *"went silent"* diagnostic clue (unreachable OR a trace-collection gap; the two are
+    # indistinguishable from traces alone). This is observed EVIDENCE, not a causal candidate: it does
+    # not affect `root_cause_candidates`, `predicted_root_cause`, or coverage. Empty by default.
     absence_candidates: list[str] = Field(default_factory=list)
 
 

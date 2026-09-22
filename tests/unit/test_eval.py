@@ -250,24 +250,25 @@ class TestPredictionFromResult:
         pred = prediction_from_result(_result(primary_services=["billing-worker"]))
         assert pred.generated_candidates == ["billing-worker"]  # older result: no full set recorded
 
-    def test_absence_joins_candidate_list_via_its_own_product_field(self):
-        # Phase F: absence_candidates is a distinct product field (API/CLI-serialized). It joins the
-        # candidate list for coverage but never displaces the log-cluster top-1 (unranked; ranking is G).
+    def test_absence_is_evidence_only_and_does_not_affect_prediction(self):
+        # Phase F is evidence-only: absence_candidates ("went silent") is a diagnostic clue, NOT a
+        # causal candidate — it must not enter predicted_services, generated_candidates, or the top-1.
         res = _result(primary_services=["checkout"])
         res.absence_candidates = ["payment"]
         pred = prediction_from_result(res)
-        assert pred.root_cause_service == "checkout"                    # top-1 unchanged, not fabricated
-        assert pred.predicted_services == ["checkout", "payment"]       # vanished cause is a candidate
+        assert pred.root_cause_service == "checkout"
+        assert pred.predicted_services == ["checkout"]          # payment (silent) is NOT a candidate
+        assert "payment" not in (pred.generated_candidates or [])
 
-    def test_absence_does_not_fabricate_produced_or_top1_on_a_silent_incident(self):
-        # no clusters/ranker (product returned insufficient-evidence): absence joins the candidate list
-        # but must NOT flip produced_explanation or invent a top-1 the product never rendered.
+    def test_absence_does_not_produce_a_prediction_on_a_silent_incident(self):
+        # no clusters/ranker (product returned insufficient-evidence): absence must NOT flip
+        # produced_explanation or invent a prediction the product never rendered.
         res = _result(primary_services=None)
         res.absence_candidates = ["payment"]
         pred = prediction_from_result(res)
-        assert pred.produced_explanation is False   # product did not render an explanation
+        assert pred.produced_explanation is False
         assert pred.root_cause_service is None
-        assert "payment" in pred.predicted_services  # still a candidate for coverage
+        assert "payment" not in pred.predicted_services
 
 
 class TestOrderedServices:
