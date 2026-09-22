@@ -88,10 +88,12 @@ def _rare_event_triggers(
     from src.core.rca.linkage import build_service_graph
     from src.core.rca.triggers import rare_event_candidates
 
-    # A trigger is "what changed *before the errors*", so it only means something relative to an
-    # incident onset. With no primary error cluster there is no onset — a healthy window always
-    # contains *some* rare fingerprint, and reporting it as a trigger fires on ~100% of healthy
-    # windows (measured on real OTel: 12/12 negatives). No onset -> no trigger (found=False).
+    # A trigger is "what changed *before the errors*", so it needs an onset to relate to. This closes
+    # only the trivial EMPTY-window case (no clusters at all -> no primary -> no trigger). It does NOT
+    # cover a healthy window with ordinary non-error traffic: `select_primary_cluster` falls back to the
+    # highest-VOLUME cluster even with zero errors, so such a window still has a fallback `primary` with
+    # a real first_seen and still surfaces a trigger (the ~100% unfiltered healthy-window rate that kept
+    # rare_event from being promoted — a real specificity gap, not solved here).
     if primary is None or primary.first_seen is None:
         return [], False, False
     onset = primary.first_seen

@@ -43,8 +43,14 @@ exact frozen gate). RE2/RE3 external measurement remains available via
 
 ### Landed regardless of the default decision
 
-- The **incident/onset gate**: with no primary error cluster there is no onset, so
-  no trigger is reported (a healthy, abstaining window never surfaces one).
+- The **onset gate** (`primary is None or primary.first_seen is None`): closes only
+  the **trivial empty-window case** — a window with *zero* clusters surfaces no
+  trigger. It does **not** cover the realistic healthy case: `select_primary_cluster`
+  falls back to the highest-*volume* cluster even when nothing is error-level, so a
+  window with ordinary non-error traffic still gets a fallback "primary" with a real
+  `first_seen` and still surfaces a trigger. That realistic healthy-noise case — the
+  `100%` unfiltered surfaced-trigger rate in the table above — is exactly why the
+  default was **not** promoted; the onset gate does not solve it.
 - The **combined-set ordering contract**: log + metric candidates are surfaced
   together with linked candidates first, so `candidates[0]` is the most defensible.
 - The **`trigger_found` vs `trigger_explains`** split as separate metadata.
