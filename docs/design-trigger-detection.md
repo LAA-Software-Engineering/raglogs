@@ -1,5 +1,25 @@
 # Trigger detection redesign (#82) — scoped against the multi-modal architecture
 
+## Status (2026-09-22): shipped — `rare_event` is now the default
+
+T1 (rare-event candidates + trace/service linkage), T2 (control comparison + the
+`trigger_found`/`trigger_explains` confidence gate), and T3 (eval) are all done, and
+`settings.trigger_mode` now defaults to **`rare_event`**. The legacy `regex` mode is
+retained only as an explicit opt-out.
+
+**T3 eval delta** (`raglogs eval`, regex vs rare_event, root-cause unchanged in both):
+
+| corpus | cases | trigger-accuracy (regex) | trigger-accuracy (rare_event) |
+|---|---|---|---|
+| trace-loc | 24 | **0%** | **100%** |
+| trace-loc-disappearance | 6 | **0%** | **100%** |
+
+The 12 regexes detect *nothing* on these faults because injected/unannounced faults
+write no deploy/announcement line — exactly failure #1 below. Rare-event correlation
+recovers the trigger onset within tolerance on every case. (RE2/RE3 external
+measurement remains available via `make eval-corpus`; T4 — the confounded OTel
+acceptance case — stays deferred pending #79's live run.)
+
 ## Problem (today)
 
 Trigger detection is **12 regexes + a 30-minute proximity check**, and the causal

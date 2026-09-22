@@ -81,3 +81,12 @@ class TestPrimaryService:
 
     def test_none_primary(self):
         assert _primary_service(None) is None
+
+
+class TestDefaultMode:
+    def test_rare_event_is_the_default(self):
+        # #82 completion: the rare-event detector is authoritative, not the 12 regexes.
+        # Measured trigger-accuracy 0% -> 100% on trace-loc + trace-loc-disappearance.
+        from src.config.settings import Settings
+
+        assert Settings().trigger_mode == "rare_event"

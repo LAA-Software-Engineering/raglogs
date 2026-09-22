@@ -50,12 +50,17 @@ class Settings(BaseSettings):
     # How far before window_start to search for trigger candidates (#76).
     trigger_lookback_minutes: int = 10
 
-    # Trigger detection strategy (#82): "regex" = the legacy TRIGGER_PATTERNS
-    # match (default, behaviour-preserving); "rare_event" = rare-fingerprint
+    # Trigger detection strategy (#82): "rare_event" (default) = rare-fingerprint
     # correlation + trace/service linkage, separating trigger_found from
     # trigger_explains so an unvalidated match no longer manufactures "high"
-    # confidence. Default off until the RE2/RE3 eval delta is measured (T3).
-    trigger_mode: str = "regex"
+    # confidence; "regex" = the legacy TRIGGER_PATTERNS match, retained only as an
+    # explicit opt-out. rare_event is the default because the 12 regexes detect no
+    # trigger on faults that write no deploy/announcement line: measured
+    # trigger-accuracy 0% -> 100% on both trace-loc (24) and trace-loc-disappearance
+    # (6), root-cause unchanged (the regexes' target phrasing simply isn't present
+    # in unannounced/injected faults — #82's core failure). See
+    # docs/design-trigger-detection.md.
+    trigger_mode: str = "rare_event"
     # In rare_event mode, a fingerprint counts as rare when baseline_count == 0 or
     # its change_ratio clears this threshold.
     trigger_rare_change_ratio: float = 5.0
