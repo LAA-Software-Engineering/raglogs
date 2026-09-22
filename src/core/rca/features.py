@@ -111,6 +111,87 @@ def _seconds(delta_start: datetime, delta_end: datetime) -> float:
     return max((delta_end - delta_start).total_seconds(), 1.0)
 
 
+def collapsed_services(
+    baseline_counts: dict[str, int],
+    incident_counts: dict[str, int],
+    baseline_seconds: float,
+    incident_seconds: float,
+    *,
+    min_baseline_spans: int = 5,
+    min_expected_incident: float = 5.0,
+    collapse_fraction: float = 0.2,
+) -> dict[str, float]:
+    """Services whose span *rate* was baselined and then collapsed in the incident, computed from
+    per-service counts alone (aggregatable, no raw spans). Returns ``{service: collapse_strength in
+    (0, 1]}``.
+
+    This is **observed evidence** — "this service went silent" — *not* a causal candidate (#184,
+    Phase F, evidence-only rescope). Span silence is intrinsically ambiguous between "the service was
+    unreachable" and "the service kept serving but its exporter/collector dropped its spans", and bare
+    spans carry no per-edge / call-target status to tell them apart, so this must never be promoted
+    into causal candidate generation, ranking, or coverage scoring — see :func:`detect_absence` and
+    ``summarizer._silent_services``. Two gates keep it honest:
+
+    1. **Baselined** (Invariant 2): ≥ ``min_baseline_spans`` baseline spans, so a *never-seen* service
+       (missing telemetry) can never "collapse".
+    2. **Expected**: the baseline rate must predict a meaningful incident count
+       (``base_rate × incident_seconds ≥ min_expected_incident``) — 5 spans over a 24h baseline predict
+       ~zero incident spans, so zero is the ordinary outcome, not a collapse."""
+    pre = max(baseline_seconds, 1.0)
+    post = max(incident_seconds, 1.0)
+    out: dict[str, float] = {}
+    for s, base in baseline_counts.items():
+        if base < min_baseline_spans:  # (1) not baselined enough to be "expected"
+            continue
+        base_rate = base / pre
+        if base_rate * post < min_expected_incident:  # (2) too sparse to expect incident traffic
+            continue
+        inc_rate = incident_counts.get(s, 0) / post
+        if inc_rate <= collapse_fraction * base_rate:
+            out[s] = round(1.0 - inc_rate / base_rate, 4)
+    return out
+
+
+def detect_absence(
+    spans,
+    baseline_start: datetime,
+    incident_start: datetime,
+    incident_end: datetime,
+    *,
+    min_baseline_spans: int = 5,
+    min_expected_incident: float = 5.0,
+    collapse_fraction: float = 0.2,
+) -> dict[str, float]:
+    """Silent-service **evidence** (#184, Phase F) from raw span rows: services whose span traffic was
+    established in the baseline and collapsed in the incident. Returns ``{service: collapse_strength}``.
+
+    Evidence-only: this is a diagnostic clue ("went silent — unreachable *or* a trace-collection
+    gap"), **never** a causal candidate. Traces alone cannot attribute a service's silence to a failed
+    call toward it — that needs per-edge / call-target telemetry the pipeline does not have — so the
+    result must not feed candidate generation, ranking, or coverage (the summarizer surfaces it as an
+    evidence item only). Pure and span-driven so it stays unit-testable; the DB path computes the same
+    per-service counts server-side via :func:`collapsed_services`."""
+    pre = _seconds(baseline_start, incident_start)
+    post = _seconds(incident_start, incident_end)
+    bc: Counter = Counter()
+    ic: Counter = Counter()
+    for sp in spans:
+        s = sp.service
+        ts = sp.start_time
+        if not s or ts is None:
+            continue
+        if baseline_start <= ts < incident_start:
+            bc[s] += 1
+        elif incident_start <= ts <= incident_end:
+            ic[s] += 1
+    return collapsed_services(
+        dict(bc), dict(ic), pre, post,
+        min_baseline_spans=min_baseline_spans,
+        min_expected_incident=min_expected_incident,
+        collapse_fraction=collapse_fraction,
+    )
+
+
 def log_features(
     entries, incident_start: datetime, incident_end: datetime
 ) -> tuple[dict[str, int], dict[str, int], dict[str, int]]:

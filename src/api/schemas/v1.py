@@ -157,6 +157,11 @@ class ExplainResponse(BaseModel):
     # Calibrated P(top-1 correct) for the ranker prediction (#118 D / #83); null
     # unless a calibrator model is configured.
     predicted_root_cause_confidence: Optional[float] = None
+    # Services that went silent in traces (#184 Phase F): span traffic baselined then collapsed —
+    # a *"went silent"* diagnostic clue (unreachable OR a trace-collection gap; the two are
+    # indistinguishable from traces alone). This is observed EVIDENCE, not a causal candidate: it does
+    # not affect `root_cause_candidates`, `predicted_root_cause`, or coverage. Empty by default.
+    absence_candidates: list[str] = Field(default_factory=list)
 
 
 class TimelineEventModel(BaseModel):
@@ -578,6 +583,7 @@ def explain_from_result(
             if isinstance(result.predicted_root_cause_confidence, (int, float))
             else None
         ),
+        absence_candidates=list(getattr(result, "absence_candidates", []) or []),
     )
 
 
@@ -639,6 +645,7 @@ def explain_from_cached(
             if isinstance(payload.get("predicted_root_cause_confidence"), (int, float))
             else None
         ),
+        absence_candidates=[s for s in (payload.get("absence_candidates") or []) if isinstance(s, str)],
     )
 
 

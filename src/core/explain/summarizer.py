@@ -1,6 +1,6 @@
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import structlog
@@ -61,6 +61,12 @@ class ExplainResult:
     # selected/top-k output above: eval's failure taxonomy uses it to tell "cause never generated"
     # (coverage) from "generated but not selected/ranked" (inference). Instrumentation only.
     generated_candidates: list[str] = field(default_factory=list)
+    # Services that went silent in traces (#184 Phase F, evidence-only): span traffic baselined then
+    # collapsed. This is a diagnostic clue ("unreachable OR a trace-collection gap"), NOT a causal
+    # candidate — silence can't be attributed to a failed call toward the service without per-edge
+    # telemetry. It is surfaced only as this field + an evidence string, and is deliberately NOT a
+    # member of `generated_candidates`, `root_cause_candidates`, or `predicted_services` / coverage.
+    absence_candidates: list[str] = field(default_factory=list)
     # Calibrated P(top-1 correct) for the ranker prediction (#118 D / #83). Set
     # only when a calibrator model is configured; None otherwise.
     predicted_root_cause_confidence: Optional[float] = None
@@ -197,6 +203,18 @@ def _explain_window(
     # otherwise the legacy significant-cluster pool. Never `services_affected` — that includes
     # informational-only and excluded services that were never eligible candidates.
     generated_candidates = sorted(ranked_services) if ranked_services else list(packet.candidate_services)
+    # Phase F (#184, evidence-only): services whose span traffic was baselined then collapsed. This is
+    # observed **evidence** ("went silent"), NOT a causal candidate — traces alone cannot attribute the
+    # silence to a failed call toward the service without per-edge telemetry (unreachable vs a
+    # trace-collection gap are indistinguishable). So it is surfaced as an evidence item and its own
+    # `absence_candidates` field ONLY, and is deliberately NOT unioned into `generated_candidates`,
+    # `root_cause_candidates`, or coverage — it must not affect causal prediction/ranking/scoring.
+    absence_candidates = _silent_services(db, scope, window_start, window_end, baseline_window)
+    evidence_items = list(packet.evidence_items) + (
+        [f"{len(absence_candidates)} service(s) went silent in traces (span traffic collapsed vs "
+         f"baseline — unreachable or a trace-collection gap): " + ", ".join(absence_candidates)]
+        if absence_candidates else []
+    )
 
     # NOTE: a metric/log abstention "gate" (#79) was investigated and shelved as a
     # negative result — no modality on the available dev corpora both calibrates and
@@ -214,13 +232,14 @@ def _explain_window(
             window_end=window_end,
             summary_text=render_insufficient_evidence(window_start, window_end, packet.total_logs),
             confidence="low",
-            evidence_items=packet.evidence_items,
+            evidence_items=evidence_items,
             services_affected=packet.services_affected,
             total_logs=packet.total_logs,
             mode="rules",
             predicted_root_cause=predicted_root_cause,
             root_cause_candidates=rca_candidates,
             generated_candidates=generated_candidates,
+            absence_candidates=absence_candidates,
             predicted_root_cause_confidence=rca_confidence,
         )
 
@@ -265,7 +284,7 @@ def _explain_window(
         window_end=window_end,
         summary_text=summary_text,
         confidence=confidence,
-        evidence_items=packet.evidence_items,
+        evidence_items=evidence_items,
         services_affected=packet.services_affected,
         total_logs=packet.total_logs,
         mode=mode,
@@ -307,8 +326,57 @@ def _explain_window(
         predicted_root_cause=predicted_root_cause,
         root_cause_candidates=rca_candidates,
         generated_candidates=generated_candidates,
+        absence_candidates=absence_candidates,
         predicted_root_cause_confidence=rca_confidence,
         confidence_calibrated=confidence_calibrated,
+    )
+
+
+def _silent_services(
+    db: Session, scope: str, window_start: datetime, window_end: datetime, baseline_window: str
+) -> list[str]:
+    """Services whose span traffic was baselined then collapsed in the incident (#184 Phase F,
+    evidence-only). Returns them for the "went silent in traces" **evidence item** — a diagnostic clue,
+    never a causal candidate: silence can't be attributed to a failed call toward the service without
+    per-edge telemetry, so this must not feed candidate generation, ranking, or coverage scoring.
+
+    Two per-service **aggregates** (baseline counts, incident counts) — no span ORM rows / JSON
+    attributes are loaded into Python. Honest cost note: each ``GROUP BY service`` still scans the
+    spans in its ``(scope, time-range)`` at the DB (index-supported range scan, but O(spans in the
+    window)); this is acceptable at current scale and the scale path is maintained per-service
+    time-bucket rollups rather than recomputing from raw spans on every explain."""
+    from sqlalchemy import func, select
+
+    from src.core.rca.features import collapsed_services
+    from src.db.models import TraceSpan
+    from src.utils.time import parse_duration
+
+    try:
+        baseline_start = window_start - parse_duration(baseline_window)
+    except (ValueError, TypeError):
+        return []
+    baseline_seconds = max((window_start - baseline_start).total_seconds(), 1.0)
+    incident_seconds = max((window_end - window_start).total_seconds(), 1.0)
+    svc = TraceSpan.service
+
+    def _counts(lo: datetime, hi: datetime) -> dict[str, int]:
+        return {
+            s: n
+            for s, n in db.execute(
+                select(svc, func.count())
+                .where(TraceSpan.scope == scope, svc.isnot(None),
+                       TraceSpan.start_time >= lo, TraceSpan.start_time < hi)
+                .group_by(svc)
+            ).all()
+        }
+
+    baseline_counts = _counts(baseline_start, window_start)
+    if not baseline_counts:  # no baseline traces -> nothing could have gone silent
+        return []
+    # incident window is inclusive of window_end; nudge past it for the half-open helper.
+    incident_counts = _counts(window_start, window_end + timedelta(microseconds=1))
+    return sorted(
+        collapsed_services(baseline_counts, incident_counts, baseline_seconds, incident_seconds)
     )
 
 
