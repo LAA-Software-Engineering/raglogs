@@ -84,9 +84,10 @@ class TestPrimaryService:
 
 
 class TestDefaultMode:
-    def test_rare_event_is_the_default(self):
-        # #82 completion: the rare-event detector is authoritative, not the 12 regexes.
-        # Measured trigger-accuracy 0% -> 100% on trace-loc + trace-loc-disappearance.
+    def test_default_stays_regex_pending_a_specificity_signal(self):
+        # #82: rare_event has far higher trigger recall, but its default promotion is DEFERRED —
+        # unfiltered it fires on ~100% of healthy windows, and linkage-gating that dropped ~44% of
+        # real-OTel positives. Default stays regex until a specificity signal that keeps recall.
         from src.config.settings import Settings
 
-        assert Settings().trigger_mode == "rare_event"
+        assert Settings().trigger_mode == "regex"

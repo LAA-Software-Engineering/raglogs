@@ -1,24 +1,54 @@
 # Trigger detection redesign (#82) — scoped against the multi-modal architecture
 
-## Status (2026-09-22): shipped — `rare_event` is now the default
+## Status (2026-09-22): mechanism implemented and measured; default promotion DEFERRED
 
-T1 (rare-event candidates + trace/service linkage), T2 (control comparison + the
-`trigger_found`/`trigger_explains` confidence gate), and T3 (eval) are all done, and
-`settings.trigger_mode` now defaults to **`rare_event`**. The legacy `regex` mode is
-retained only as an explicit opt-out.
+T1 (rare-event candidates + trace/service linkage) and T2 (`trigger_found` /
+`trigger_explains` split + confidence fix) are implemented and `rare_event` is
+available via `settings.trigger_mode`. **The default stays `regex`.** The T3
+measurement below settles why: rare-event detection has excellent *recall*, but no
+current variant has acceptable *specificity* to be the default on real telemetry.
 
-**T3 eval delta** (`raglogs eval`, regex vs rare_event, root-cause unchanged in both):
+**Frozen measurement** (`raglogs eval` + a real-OTel default-safety check;
+root-cause accuracy unchanged and `rare_event` never returns `"high"` throughout):
 
-| corpus | cases | trigger-accuracy (regex) | trigger-accuracy (rare_event) |
+| corpus | signal | regex | rare_event |
 |---|---|---|---|
-| trace-loc | 24 | **0%** | **100%** |
-| trace-loc-disappearance | 6 | **0%** | **100%** |
+| trace-loc (24) | trigger-accuracy | 0% | **100%** |
+| trace-loc-disappearance (6) | trigger-accuracy | 0% | **100%** |
+| otel-fresh (9 pos / 12 neg) | positive `trigger_hit` | 11% | **100%** |
+| otel-fresh negatives | surfaced-trigger rate (want low) | 0% | **100%** (unfiltered) |
+| otel-fresh negatives | surfaced-trigger, linked-only gate | — | 42% |
+| otel-fresh positives | `trigger_hit`, linked-only gate | — | **56%** |
 
-The 12 regexes detect *nothing* on these faults because injected/unannounced faults
-write no deploy/announcement line — exactly failure #1 below. Rare-event correlation
-recovers the trigger onset within tolerance on every case. (RE2/RE3 external
-measurement remains available via `make eval-corpus`; T4 — the confounded OTel
-acceptance case — stays deferred pending #79's live run.)
+The read:
+
+- **Recall is strong and real.** The 12 regexes detect *nothing* on injected /
+  unannounced faults (they write no deploy line — failure #1); rare-event
+  correlation recovers the trigger on 100% of trace-loc and real-OTel positives.
+- **Specificity is the blocker.** Unfiltered, rare-event surfaces a trigger on
+  ~100% of healthy windows (real telemetry always has *some* rare fingerprint).
+- **Linkage is not a usable causal gate — yet.** Requiring a trace-graph link to the
+  erroring service before surfacing a candidate cut the healthy-window rate to 42%,
+  but also **destroyed recall (100% → 56%)**: on ~44% of real-OTel positives the true
+  trigger is on a service the (incomplete) trace graph doesn't connect. So linkage is
+  kept as *evidence attached to a candidate* (`trigger_explains`), never a
+  prerequisite for the candidate to exist.
+
+**Conclusion (a useful negative result):** *rare-event detection has good recall;
+trace linkage currently has inadequate recall to serve as a causal gate.* Default
+promotion is deferred pending a specificity signal that does not sacrifice recall —
+which points back to improving the real-telemetry call-edge model (then rerun this
+exact frozen gate). RE2/RE3 external measurement remains available via
+`make eval-corpus`; T4 (the confounded OTel acceptance case) stays pending #79.
+
+### Landed regardless of the default decision
+
+- The **incident/onset gate**: with no primary error cluster there is no onset, so
+  no trigger is reported (a healthy, abstaining window never surfaces one).
+- The **combined-set ordering contract**: log + metric candidates are surfaced
+  together with linked candidates first, so `candidates[0]` is the most defensible.
+- The **`trigger_found` vs `trigger_explains`** split as separate metadata.
+- The corrected confidence semantics (see §5).
 
 ## Problem (today)
 
@@ -98,10 +128,26 @@ output — a feature, not a gap.
 
 ### 5. Confidence fix (the dangerous gate)
 
-`"high"` requires `trigger_explains`, not merely a regex match. A single
-unvalidated regex hit no longer reaches `"high"` — it may still contribute a small
-tiebreak point, but the gate is the validated (rare + linked + control-clean)
-trigger. All thresholds stay configurable (#116), defaults documented.
+**As shipped, the fix is stricter than "gate high on `trigger_explains`".** T3
+showed a rare (+ often linked) trigger fires on nearly every log-announced incident,
+so it does *not* validate the explanation — gating `"high"` on it over-promoted
+(RE3: 56/90 "high" at 21% accuracy, below base rate). So in `rare_event` mode the
+rare-event trigger contributes **no** confidence points at all, and the label is
+**capped at `"medium-high"` — `rare_event` mode never returns `"high"`** until
+confidence is calibrated against measured accuracy (#83 / Phase D). `trigger_found`
+/ `trigger_explains` are reported as honest evidence signals, not confidence
+inflators. (Legacy `regex` mode keeps the old "high requires a trigger" gate,
+byte-identical.) All thresholds stay configurable (#116).
+
+### 6. Candidate ordering (combined log + metric set)
+
+`_rare_event_triggers` produces one candidate list from two sources — rare log
+fingerprints (ranked by rarity x onset-earliness) and metric anomaly onsets. The
+combined set is ordered by a single documented contract: **a candidate whose
+service is linked to the erroring service sorts first** (stable, so within-group
+order is preserved), so the displayed/evaluated top candidate (`candidates[0]`) is
+a linked one whenever any exists — never an unrelated rare change that merely sorted
+earlier. `trigger_explains` remains "any candidate links to the errors".
 
 ## Phasing
 

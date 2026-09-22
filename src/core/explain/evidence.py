@@ -88,7 +88,13 @@ def _rare_event_triggers(
     from src.core.rca.linkage import build_service_graph
     from src.core.rca.triggers import rare_event_candidates
 
-    onset = primary.first_seen if primary else None
+    # A trigger is "what changed *before the errors*", so it only means something relative to an
+    # incident onset. With no primary error cluster there is no onset — a healthy window always
+    # contains *some* rare fingerprint, and reporting it as a trigger fires on ~100% of healthy
+    # windows (measured on real OTel: 12/12 negatives). No onset -> no trigger (found=False).
+    if primary is None or primary.first_seen is None:
+        return [], False, False
+    onset = primary.first_seen
     # A cluster can't be its own trigger — exclude the primary error cluster from
     # the candidate pool (else its own rarity/onset would "explain" itself).
     pool = [c for c in clusters if c is not primary]
@@ -106,15 +112,27 @@ def _rare_event_triggers(
         scored.append((o.service, TriggerCandidate(
             message=f"{o.metric} anomaly onset", timestamp=o.onset, service=o.service)))
 
-    candidates = [tc for _svc, tc in scored]
-    if not candidates:
-        return candidates, False, False
+    if not scored:
+        return [], False, False
 
+    # Ordering contract for the COMBINED log+metric set: surface ALL rare candidates and sort those
+    # linked to the erroring service first (stable, preserving the within-group rarity x
+    # onset-earliness order), so candidates[0] is a linked one whenever any exists. Linkage is
+    # **evidence attached to a candidate, not a prerequisite for it**: measured on real OTel, using
+    # linkage as a surfacing gate dropped the true trigger on ~44% of positives (the trace graph's
+    # recall is too incomplete for a mandatory visibility gate). `trigger_found` (a rare change
+    # occurred near onset) and `trigger_explains` (at least one is linked) are kept as SEPARATE
+    # metadata so a consumer can tell "correlated anomaly" from "linked causal evidence" without
+    # either gating the other.
     root_service = _primary_service(primary)
     graph = build_service_graph(db, scope, window_start, window_end)
-    explains = any(
-        svc and root_service and graph.linked(svc, root_service) for svc, _tc in scored
-    )
+
+    def _linked(svc: Optional[str]) -> bool:
+        return bool(svc and root_service and graph.linked(svc, root_service))
+
+    scored.sort(key=lambda st: 0 if _linked(st[0]) else 1)  # stable: linked first, all surfaced
+    candidates = [tc for _svc, tc in scored]
+    explains = any(_linked(svc) for svc, _tc in scored)
     return candidates, True, explains
 
 

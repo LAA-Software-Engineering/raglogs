@@ -50,17 +50,19 @@ class Settings(BaseSettings):
     # How far before window_start to search for trigger candidates (#76).
     trigger_lookback_minutes: int = 10
 
-    # Trigger detection strategy (#82): "rare_event" (default) = rare-fingerprint
-    # correlation + trace/service linkage, separating trigger_found from
-    # trigger_explains so an unvalidated match no longer manufactures "high"
-    # confidence; "regex" = the legacy TRIGGER_PATTERNS match, retained only as an
-    # explicit opt-out. rare_event is the default because the 12 regexes detect no
-    # trigger on faults that write no deploy/announcement line: measured
-    # trigger-accuracy 0% -> 100% on both trace-loc (24) and trace-loc-disappearance
-    # (6), root-cause unchanged (the regexes' target phrasing simply isn't present
-    # in unannounced/injected faults — #82's core failure). See
+    # Trigger detection strategy (#82): "regex" (default) = the legacy TRIGGER_PATTERNS
+    # match; "rare_event" = rare-fingerprint correlation + trace/service linkage,
+    # separating trigger_found (a correlated anomaly) from trigger_explains (linked
+    # causal evidence) and never manufacturing "high" confidence.
+    # rare_event has far higher trigger recall (measured: 0%->100% on trace-loc; on
+    # real OTel with healthy negatives, 100% positive recall) BUT its default
+    # promotion is DEFERRED: unfiltered it fires a trigger on ~100% of healthy
+    # windows (poor specificity), and gating on linkage to fix that dropped the true
+    # trigger on ~44% of real-OTel positives (the trace graph's recall is too
+    # incomplete to serve as a causal gate). Promotion awaits a specificity signal
+    # that does not sacrifice recall (better call-edge telemetry). See
     # docs/design-trigger-detection.md.
-    trigger_mode: str = "rare_event"
+    trigger_mode: str = "regex"
     # In rare_event mode, a fingerprint counts as rare when baseline_count == 0 or
     # its change_ratio clears this threshold.
     trigger_rare_change_ratio: float = 5.0
