@@ -40,24 +40,20 @@ def db_session():
         yield db
 
 
-def _span(trace, span_id, parent, service, ts, status_code="0"):
+def _span(trace, span_id, parent, service, ts):
     from src.core.ingestion.telemetry import ParsedSpan
     return ParsedSpan(trace_id=trace, span_id=span_id, parent_span_id=parent, service=service,
-                      operation=f"{service} handle", start_time=ts, duration_ms=5.0,
-                      status_code=status_code)
+                      operation=f"{service} handle", start_time=ts, duration_ms=5.0, status_code="0")
 
 
 def _seed(db):
-    from src.core.ingestion.telemetry import (
-        ParsedMetricSample,
-        persist_metric_samples,
-        persist_spans,
-    )
+    from src.core.ingestion.telemetry import persist_spans
     from src.db.models import LogEntry
 
     spans = []
     # checkout calls payment. In the BASELINE both emit spans; in the INCIDENT payment goes silent
-    # while checkout stays active. Silence alone -> evidence, not a causal candidate.
+    # while checkout KEEPS EMITTING the whole time. Only payment collapsed -> only payment is silence
+    # evidence; checkout (still emitting) must not be flagged. Silence alone -> evidence, not a cause.
     for i in range(60):
         t = BASELINE_START + timedelta(seconds=i * 5)
         spans.append(_span(f"b{i}", f"c{i}", None, "checkout", t))
@@ -73,15 +69,6 @@ def _seed(db):
             raw_message="payment unreachable", normalized_message="payment unreachable",
             fingerprint="co", scope=SCOPE,
         ))
-    # payment still emits metrics in the incident (it is "up" but unreachable). This is deliberately
-    # NOT what the mechanism keys on — availability comes from the failed-attempt edge, not metrics —
-    # and is kept only to show metric presence does not by itself create or suppress the candidate.
-    persist_metric_samples(db, [
-        ParsedMetricSample(service="payment", metric="error_rate", value=0.01,
-                           ts=BASELINE_START + timedelta(seconds=5)),
-        ParsedMetricSample(service="payment", metric="error_rate", value=0.01,
-                           ts=INJECT + timedelta(seconds=30)),
-    ], scope=SCOPE)
     db.flush()
 
 
@@ -95,8 +82,14 @@ def test_silent_service_is_evidence_only_not_a_causal_candidate(db_session):
         no_llm=True, baseline_window_str="300s", scope=SCOPE,
     )
 
-    # EVIDENCE: the vanished service is surfaced as observed evidence in its own field...
-    assert "payment" in result.absence_candidates
+    # EVIDENCE: the SQL aggregate path flags EXACTLY the collapsed service — payment and nothing else.
+    # checkout emitted spans across the whole incident, so a detector that flagged every baselined
+    # service (the failure this locks against) would wrongly include it and fail this equality.
+    assert result.absence_candidates == ["payment"]
+    # It is surfaced as an evidence item naming payment and the unreachable/collection-gap caveat...
+    silence_evidence = [e for e in result.evidence_items if "went silent" in e]
+    assert len(silence_evidence) == 1
+    assert "payment" in silence_evidence[0] and "trace-collection gap" in silence_evidence[0]
     # ...but is NOT promoted into any causal-candidate surface.
     assert all(c.get("service") != "payment" for c in result.root_cause_candidates)
     assert "payment" not in (result.generated_candidates or [])

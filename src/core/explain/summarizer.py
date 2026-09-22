@@ -61,9 +61,11 @@ class ExplainResult:
     # selected/top-k output above: eval's failure taxonomy uses it to tell "cause never generated"
     # (coverage) from "generated but not selected/ranked" (inference). Instrumentation only.
     generated_candidates: list[str] = field(default_factory=list)
-    # Absence-derived candidates (#184 Phase F): services whose span traffic was baselined then
-    # collapsed in the incident — silent failures the incident-window features can't see. Unioned into
-    # `generated_candidates` so a vanished root cause is generated regardless of the learned ranker.
+    # Services that went silent in traces (#184 Phase F, evidence-only): span traffic baselined then
+    # collapsed. This is a diagnostic clue ("unreachable OR a trace-collection gap"), NOT a causal
+    # candidate — silence can't be attributed to a failed call toward the service without per-edge
+    # telemetry. It is surfaced only as this field + an evidence string, and is deliberately NOT a
+    # member of `generated_candidates`, `root_cause_candidates`, or `predicted_services` / coverage.
     absence_candidates: list[str] = field(default_factory=list)
     # Calibrated P(top-1 correct) for the ranker prediction (#118 D / #83). Set
     # only when a calibrator model is configured; None otherwise.
