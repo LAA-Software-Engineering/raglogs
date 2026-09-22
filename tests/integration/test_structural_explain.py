@@ -106,3 +106,26 @@ def test_structural_view_is_opt_in_and_additive(db_session):
     resp_on = explain_from_result(on, no_llm=True, cached=False, scope=SCOPE)
     assert resp_on.structural is not None
     assert "payment" in resp_on.structural["localization"]
+
+
+def test_structural_adapter_failure_does_not_break_the_explanation(db_session, monkeypatch):
+    # The isolation guarantee: an exception anywhere in the structural build must degrade to "no
+    # structural view", never take down the already-computed ordinary explanation.
+    import src.core.rca.structural as structural_mod
+    from src.core.explain.summarizer import explain_window
+
+    _seed(db_session)
+
+    def _boom(*a, **k):
+        raise RuntimeError("simulated structural-model bug")
+
+    monkeypatch.setattr(structural_mod, "build_structural_view", _boom)
+
+    result = explain_window(
+        db=db_session, window_start=INJECT, window_end=WINDOW_END, no_llm=True,
+        baseline_window_str="300s", scope=SCOPE, structural=True,
+    )
+    # Ordinary explanation survives; structural degrades to None.
+    assert result.structural_result is None
+    assert result.summary_text  # the ordinary result is intact, not lost to the adapter crash
+    assert result.services_affected

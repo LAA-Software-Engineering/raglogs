@@ -362,18 +362,26 @@ def _structural_view(
     db: Session, scope: str, window_start: datetime, window_end: datetime, baseline_window: str
 ):
     """Opt-in experimental structural view (#187): build the deterministic A–E result + Phase G ranking
-    from the scope's telemetry, or ``(None, ())`` when nothing usable is available. Isolated so a
-    structural-adapter failure can never break the ordinary explanation."""
+    from the scope's telemetry, or ``(None, ())`` when nothing usable is available.
+
+    Fail-open by design: the ENTIRE build — parse, the two DB queries, and the structural pipeline
+    (which duck-types on externally-fed trace/metric rows and whose Phase A–E dataclasses enforce
+    invariants by *raising*) — is guarded, so an experimental-adapter failure degrades to "no
+    structural view", never taking the already-computed ordinary explanation down with it. The
+    exception is logged (not swallowed silently) so a failing structural path is still diagnosable."""
     from src.utils.time import parse_duration
 
     try:
         baseline_start = window_start - parse_duration(baseline_window)
-    except (ValueError, TypeError):
-        return None, ()
-    from src.core.rca.structural import build_structural_view
+        from src.core.rca.structural import build_structural_view
 
-    built = build_structural_view(db, scope, window_start, window_end, baseline_start)
-    return built if built is not None else (None, ())
+        built = build_structural_view(db, scope, window_start, window_end, baseline_start)
+        return built if built is not None else (None, ())
+    except Exception:
+        # A structural-adapter failure must never break the ordinary explanation (which is already
+        # fully computed by this point). Degrade to no structural view; log for diagnosability.
+        log.warning("structural_view_failed", scope=scope, exc_info=True)
+        return None, ()
 
 
 def _silent_services(
