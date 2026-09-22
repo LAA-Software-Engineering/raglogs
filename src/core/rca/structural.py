@@ -27,7 +27,9 @@ from src.core.rca.structural_model import (
     build_hypotheses,
     build_observables,
     call_edges,
+    combine_signals,
     summarize_metrics,
+    summarize_spans,
 )
 from src.db.models import MetricSample, TraceSpan
 
@@ -53,15 +55,23 @@ def build_structural_view(
             MetricSample.ts <= window_end,
         )
     ).scalars().all()
+    # Spans over [baseline_start, window_end]: the baseline half is needed for span-derived latency
+    # ratios (#209 M1); the incident half also carries the call edges.
     span_rows = db.execute(
         select(TraceSpan).where(
             TraceSpan.scope == scope,
-            TraceSpan.start_time >= window_start,
+            TraceSpan.start_time >= baseline_start,
             TraceSpan.start_time <= window_end,
         )
     ).scalars().all()
 
-    signals = summarize_metrics(metric_rows, window_start)
+    # sig:{service} from spans (latency-first + sparse error-status) combined with the metric sig, so a
+    # service with spans but no error/latency metrics still gets an observable (#209 M1). PRESENT >
+    # ABSENT > UNKNOWN; a service unmeasured in every modality stays UNKNOWN (no fabricated ABSENT).
+    signals = combine_signals(
+        summarize_spans(span_rows, window_start),
+        summarize_metrics(metric_rows, window_start),
+    )
     edges = call_edges(span_rows)
     hypotheses = build_hypotheses(signals, edges)
     if not hypotheses:

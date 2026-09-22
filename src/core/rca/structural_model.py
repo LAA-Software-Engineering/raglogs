@@ -20,7 +20,7 @@ Two deliberate soundness choices (see H2, #186):
 from __future__ import annotations
 
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
@@ -29,6 +29,19 @@ from src.core.rca.expectations import ExpectedObservation, ObservationModel
 from src.core.rca.hypothesis import Hypothesis, Kind, from_observation_model
 from src.core.rca.observable import Observable, State, observed
 from src.core.rca.partition import discretize_rate, discretize_ratio
+
+
+def _mean(xs: list[float]) -> float:
+    return sum(xs) / len(xs) if xs else 0.0
+
+
+# OTel span status: STATUS_CODE_ERROR = 2. Everything else (incl. UNSET/null) is treated as non-error
+# by convention — most OTLP spans leave status unset, so error-status is a sparse *positive* signal.
+_ERROR_STATUS = frozenset({"2", "error", "status_code_error"})
+
+
+def _is_error_status(status) -> bool:
+    return status is not None and str(status).strip().lower() in _ERROR_STATUS
 
 
 @dataclass(frozen=True)
@@ -109,6 +122,89 @@ def summarize_metrics(samples: list, window_start: datetime) -> dict[str, Servic
             sig_state = None
         signals[svc] = ServiceSignal(svc, err, ratio, error_measured, latency_measured, sig_state)
     return signals
+
+
+def summarize_spans(spans: list, window_start: datetime) -> dict[str, ServiceSignal]:
+    """Per-service ``sig`` from raw **span** records (#209 M1) — latency-first, plus sparse error-status.
+
+    On real OTLP, latency is the workhorse: almost every span carries ``duration_ms``, while
+    error-status (``status_code`` == 2) is rare, so a service with spans but no error/latency *metrics*
+    is `UNKNOWN` under the metric-only model. Deriving ``sig`` from spans gives those services an
+    observable. Three-valued availability, exactly mirroring :func:`summarize_metrics`: PRESENT if a
+    *measured* branch is anomalous (error-rate ≥ cutoff, or incident/baseline mean duration ≥2×),
+    ABSENT only when **both** branches are measured-and-normal, else UNKNOWN — missing telemetry never
+    fabricates ABSENT. Records are duck-typed on ``service`` / ``start_time`` / ``duration_ms`` /
+    ``status_code``.
+
+    Note: the error branch counts ``status_code`` == 2 over all incident spans of a service and treats
+    unset/null status as non-error (the OTel convention); it is "measured" when the service has any
+    incident span. The latency branch needs both incident **and** baseline durations (a ratio needs
+    both), and only valid non-negative finite durations are used."""
+    inc_dur: dict[str, list[float]] = defaultdict(list)
+    base_dur: dict[str, list[float]] = defaultdict(list)
+    inc_total: Counter = Counter()
+    inc_err: Counter = Counter()
+    for sp in spans:
+        s = getattr(sp, "service", None)
+        ts = getattr(sp, "start_time", None)
+        if not s or ts is None:
+            continue
+        dur = getattr(sp, "duration_ms", None)
+        valid_dur = dur if (isinstance(dur, (int, float)) and math.isfinite(dur) and dur >= 0) else None
+        if ts >= window_start:
+            inc_total[s] += 1
+            if _is_error_status(getattr(sp, "status_code", None)):
+                inc_err[s] += 1
+            if valid_dur is not None:
+                inc_dur[s].append(float(valid_dur))
+        elif valid_dur is not None:
+            base_dur[s].append(float(valid_dur))
+
+    signals: dict[str, ServiceSignal] = {}
+    for svc in sorted(set(inc_total) | set(base_dur)):
+        total = inc_total.get(svc, 0)
+        err_rate = inc_err.get(svc, 0) / total if total else 0.0
+        error_measured = total > 0
+        base_mean = _mean(base_dur[svc])
+        latency_measured = bool(inc_dur[svc]) and bool(base_dur[svc]) and base_mean > 0
+        ratio = _mean(inc_dur[svc]) / base_mean if latency_measured else 1.0
+
+        error_present = error_measured and discretize_rate(err_rate) == State.PRESENT
+        latency_high = latency_measured and discretize_ratio(ratio) == State.HIGH
+        if error_present or latency_high:
+            sig_state: Optional[str] = State.PRESENT
+        elif error_measured and latency_measured:
+            sig_state = State.ABSENT
+        else:
+            sig_state = None
+        signals[svc] = ServiceSignal(svc, err_rate, ratio, error_measured, latency_measured, sig_state)
+    return signals
+
+
+def combine_signals(*sources: dict[str, ServiceSignal]) -> dict[str, ServiceSignal]:
+    """Merge per-service signals from several modalities (spans + metrics) with **PRESENT > ABSENT >
+    UNKNOWN** priority: a service is anomalous if *any* modality proves it, measured-normal only if
+    some modality measured it normal and none proved it anomalous, else UNKNOWN. Never fabricates
+    ABSENT (a service UNKNOWN in every modality stays UNKNOWN)."""
+    services: set[str] = set()
+    for src in sources:
+        services |= set(src)
+    out: dict[str, ServiceSignal] = {}
+    for svc in sorted(services):
+        sigs = [src[svc] for src in sources if svc in src]
+        states = [s.sig_state for s in sigs]
+        if State.PRESENT in states:
+            state: Optional[str] = State.PRESENT
+        elif State.ABSENT in states:
+            state = State.ABSENT
+        else:
+            state = None
+        rep = next((s for s in sigs if s.sig_state is not None), sigs[0])
+        out[svc] = ServiceSignal(
+            svc, rep.error_rate, rep.latency_ratio,
+            any(s.error_measured for s in sigs), any(s.latency_measured for s in sigs), state,
+        )
+    return out
 
 
 def call_edges(spans: list) -> set[tuple[str, str]]:
