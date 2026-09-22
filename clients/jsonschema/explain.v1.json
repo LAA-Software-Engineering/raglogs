@@ -466,6 +466,13 @@
       ],
       "default": null,
       "title": "Predicted Root Cause Confidence"
+    },
+    "absence_candidates": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Absence Candidates",
+      "type": "array"
     }
   },
   "required": [

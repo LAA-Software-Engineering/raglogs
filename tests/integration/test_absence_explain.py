@@ -91,12 +91,15 @@ def test_absence_candidate_is_a_product_candidate_and_eval_prediction(db_session
         no_llm=True, baseline_window_str="300s", scope=SCOPE,
     )
 
-    # PRODUCT: the vanished service is a real candidate the pipeline emitted (API/CLI serialize this).
+    # PRODUCT: the vanished service is in its own product field (a distinct signal, NOT mixed into the
+    # scored ranker candidates) that the API/CLI serialize.
     assert "payment" in result.absence_candidates
-    product_candidates = [c["service"] for c in result.root_cause_candidates]
-    assert "payment" in product_candidates
-    assert any(c["service"] == "payment" and c.get("source") == "absence"
-               for c in result.root_cause_candidates)
+    assert all(c.get("service") != "payment" for c in result.root_cause_candidates)  # not a ranker entry
+
+    # API serialization exposes it truthfully, separate from the scored candidates.
+    from src.api.schemas.v1 import explain_from_result
+    resp = explain_from_result(result, no_llm=True, cached=False, scope=SCOPE)
+    assert "payment" in resp.absence_candidates
 
     # EVAL: the prediction is derived from that same product field — not fabricated in the adapter.
     pred = prediction_from_result(result)

@@ -207,24 +207,16 @@ def _explain_window(
     # when nothing disappeared, so this is behaviour-neutral off the fault.
     absence_candidates = _absence_candidates(db, scope, window_start, window_end, baseline_window)
     if absence_candidates:
-        absence_entries = [{"service": s, "source": "absence"} for s in absence_candidates]
-        if rca_candidates:  # learned ranker ran: append absence after its ranked candidates
-            rca_candidates = rca_candidates + [
-                e for e in absence_entries if e["service"] not in ranked_services
-            ]
-        else:  # no ranker: build the product candidate list from the log-cluster pool + absence, so
-            # the disappeared service is a real product candidate (top-1 stays the loudest symptom).
-            cluster_entries = [{"service": s, "source": "cluster"} for s in packet.candidate_services]
-            rca_candidates = cluster_entries + absence_entries
-            if predicted_root_cause is None:
-                predicted_root_cause = (
-                    packet.candidate_services[0] if packet.candidate_services else absence_candidates[0]
-                )
+        # `absence_candidates` is its OWN product field with distinct provenance — NOT mixed into the
+        # ranker's `root_cause_candidates` (whose entries carry a learned score). It is also part of
+        # the generated-candidate set for coverage.
         generated_candidates = sorted(set(generated_candidates) | set(absence_candidates))
-    # Surface the disappearance in the evidence so a silent failure is visible, not just eval-counted.
+    # Surface the disappearance honestly: a service whose traces collapsed while it stayed otherwise
+    # up is a candidate to investigate, NOT a proven cause — traces alone cannot tell "unreachable"
+    # from "trace-collection gap".
     evidence_items = list(packet.evidence_items) + (
-        [f"{len(absence_candidates)} service(s) went silent — span traffic collapsed vs baseline: "
-         + ", ".join(absence_candidates)]
+        [f"{len(absence_candidates)} service(s) went silent in traces (span traffic collapsed vs "
+         f"baseline — unreachable or a trace-collection gap): " + ", ".join(absence_candidates)]
         if absence_candidates else []
     )
 

@@ -91,6 +91,7 @@ def explain_cmd(
             "predicted_root_cause": result.predicted_root_cause,
             "predicted_root_cause_confidence": result.predicted_root_cause_confidence,
             "root_cause_candidates": result.root_cause_candidates,
+            "absence_candidates": result.absence_candidates,
         }
         console.print_json(json.dumps(output, default=str))
     elif fmt == "markdown":
@@ -142,4 +143,13 @@ def explain_cmd(
                     + (f"  [{mods}]" if mods else "")
                     + "[/dim]"
                 )
+            console.print()
+        # Absence-derived candidates (#184): distinct from the scored ranker candidates — a
+        # "went silent in traces" signal to investigate, not a proven cause.
+        if result.absence_candidates:
+            console.print(
+                "[bold]Went silent in traces[/bold] "
+                "[dim](span traffic collapsed vs baseline — unreachable or a trace-collection gap):[/dim] "
+                + ", ".join(f"[yellow]{s}[/yellow]" for s in result.absence_candidates)
+            )
             console.print()

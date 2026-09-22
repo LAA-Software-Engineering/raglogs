@@ -127,16 +127,19 @@ def detect_absence(
     incident-window features can't see (``trace_features`` only entries services present in the
     incident). Returns ``{service: collapse_strength in (0, 1]}``.
 
-    An absence is evidence only under all three of #184's gates, else the observation stays UNKNOWN
+    These are **candidates to investigate, not proven disappearances**: from traces alone a span
+    collapse cannot be told apart from a trace-exporter/collector gap for that service. Callers must
+    present the result as an ambiguous *"went silent in traces"* signal, not a confirmed causal
+    disappearance. An observation is emitted only under all three of #184's gates, else UNKNOWN
     (empty):
 
     1. **Baselined** (Invariant 2): a service needs ≥ ``min_baseline_spans`` baseline spans, so a
        service that was *never seen* — missing telemetry — can never become a disappearance signal.
-    2. **Available in the incident**: the service itself must be in ``available_services`` — an
-       independent per-service availability signal (the caller passes services still emitting incident
-       *metrics*: the service is up and its collection path works, so a *span* collapse means it stopped
-       serving/receiving traffic, not that its instrumentation or the collector failed). Scope-wide
-       activity is *not* enough — an unrelated healthy service does not prove the target was measured.
+    2. **Service up in the incident**: the service itself must be in ``available_services`` — an
+       independent per-service signal (the caller passes services still emitting incident *metrics*).
+       This rules out a *full* outage (service gone → nothing to interpret) and scope-wide false
+       positives (an unrelated healthy service does not make the target available), but it does **not**
+       prove the trace signal was collectable — hence the candidate is ambiguous, not proof.
     3. **Expected**: the baseline rate must predict a meaningful incident count
        (``base_rate × incident_seconds ≥ min_expected_incident``). Five spans spread over a 24h
        baseline predict ~zero spans in a 5-minute incident, so zero is the ordinary outcome, not a
