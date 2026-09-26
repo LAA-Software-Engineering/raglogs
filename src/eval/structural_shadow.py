@@ -102,17 +102,19 @@ def shadow_result(case: EvalCase) -> ShadowResult:
     # The same structural-model builder the product path uses (#209 M1): span+metric sig and the
     # incident call graph — one model, not a divergent shadow copy.
     spans = load_spans_jsonl(case.spans_path)
-    signals, edges = structural_signals(spans, load_metrics_jsonl(case.metrics_path), case.window_start)
+    signals, edges, edge_signals = structural_signals(
+        spans, load_metrics_jsonl(case.metrics_path), case.window_start
+    )
     # The service universe is every service seen in telemetry — metric-bearing services and all span
     # services (incl. root-only spans with no edge) — so candidate_ratio's "1.0 = enumerate all" holds.
     n_services = len(service_universe(signals, {sp.service for sp in spans if sp.service}))
-    hypotheses = build_hypotheses(signals, edges)
+    hypotheses = build_hypotheses(signals, edges, edge_signals)
     if not hypotheses:
         # No hypothesis returned -> an abstention, not a zero-abstention success.
         return ShadowResult(case.id, truth, "no_candidates", (), (), False, False, True,
                             n_candidates=0, n_services=n_services)
 
-    result = resolve(partition(hypotheses, build_observables(signals)))
+    result = resolve(partition(hypotheses, build_observables(signals, edge_signals)))
     classes = tuple(ClassInfo(c.localizations, c.signature, c.d_missing) for c in result.classes)
     localizations = result.localization
     return ShadowResult(
