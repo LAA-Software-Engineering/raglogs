@@ -59,10 +59,17 @@ Then generate the infra-fault cases (Chaos-Mesh manifests are in
 # dry-run first (no cluster): logs the apply/delete + emits the 4 case dirs
 python scripts/eval/otel_corpus.py --chaos --dry-run --out-dir /tmp/otel-chaos-dry
 
-# for real (needs kubectl context on the cluster + the Collector export at --otlp-dir)
-python scripts/eval/otel_corpus.py --chaos \
+# for real: name the (non-prod) target context explicitly + the Collector export at --otlp-dir
+python scripts/eval/otel_corpus.py --chaos --kube-context kind-kind \
     --otlp-dir /path/to/collector/export --out-dir data/eval-cases/otel
 ```
+
+**Target safety.** A real `--chaos` run never uses the kubeconfig's current context.
+`--kube-context` is required, and every `kubectl` call passes `--context <it>`. The run
+refuses a context that isn't in the kubeconfig. It also refuses one whose name, cluster
+or API server contains `prod`, `prd` or `live`. If a non-prod context trips that check
+(e.g. `delivery-dev`), repeat its exact name in `--allow-context delivery-dev` to let
+it through. Use a dedicated, disposable cluster.
 
 The driver `kubectl apply`s each manifest, waits the incident window, captures, and
 `kubectl delete`s it. **Before a real run, edit the manifests** in
