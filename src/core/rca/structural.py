@@ -66,12 +66,12 @@ def build_structural_view(
     # The one shared structural-model builder (#209 M1): span-derived sig (latency median + explicit
     # OTLP status only) merged with the metric sig, and the INCIDENT call graph (edges whose child span
     # starts at/after window_start — the baseline half of this load feeds latency ratios, never edges).
-    signals, edges, edge_signals = structural_signals(span_rows, metric_rows, window_start)
-    hypotheses = build_hypotheses(signals, edges, edge_signals)
+    inp = structural_signals(span_rows, metric_rows, window_start)
+    hypotheses = build_hypotheses(inp.signals, inp.edges, inp.edge_signals, inp.util_signals)
     if not hypotheses:
         return None  # no candidate -> abstain, never a fabricated structural result
 
-    observations = build_observables(signals, edge_signals)
+    observations = build_observables(inp.signals, inp.edge_signals, inp.util_signals)
     part = partition(hypotheses, observations)
     result = resolve(part, observations=observations)
     ranking = rank_classes(part)

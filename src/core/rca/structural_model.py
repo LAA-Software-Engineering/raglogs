@@ -24,7 +24,7 @@ import statistics
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
+from typing import NamedTuple, Optional
 
 from src.core.rca.expectations import ExpectedObservation, ObservationModel
 from src.core.rca.hypothesis import Hypothesis, Kind, from_observation_model
@@ -34,6 +34,11 @@ from src.core.rca.partition import discretize_rate, discretize_ratio
 
 def _median(xs: list[float]) -> float:
     return statistics.median(xs) if xs else 0.0
+
+
+def _mean(xs: list[float]) -> float:
+    """For periodic gauge samples (already aggregates), unlike raw per-request durations."""
+    return sum(xs) / len(xs) if xs else 0.0
 
 
 # OTLP span status codes: 0 = UNSET, 1 = OK, 2 = ERROR. Only an EXPLICIT status is a measurement:
@@ -372,27 +377,163 @@ def summarize_edges(
     return out
 
 
-def structural_signals(
-    spans: list, metrics: list, window_start: datetime
-) -> tuple[dict[str, ServiceSignal], set[tuple[str, str]], dict[tuple[str, str], EdgeSignal]]:
+@dataclass(frozen=True)
+class UtilSignal:
+    """A service's resource-utilization summary (#209 M2b) — the observable ``util:{service}:{resource}``,
+    its own coordinate family, never folded into ``sig:{service}``. It recovers *locally silent resource
+    faults*: a CPU-saturated or event-loop-saturated service whose requests still look normal in traces.
+    ``ratio`` is the witness metric's incident/baseline ratio; ``sig_state`` is three-valued."""
+
+    service: str
+    resource: str
+    ratio: float
+    measured: bool
+    sig_state: Optional[str]
+
+    @property
+    def id(self) -> str:
+        return util_observable_id(self.service, self.resource)
+
+
+def util_observable_id(service: str, resource: str) -> str:
+    return f"util:{service}:{resource}"
+
+
+_SELF_TELEMETRY_PREFIXES = ("otel.sdk.", "otelcol")
+
+
+def util_metric_class(metric: Optional[str]) -> Optional[tuple[str, str]]:
+    """Classify a metric by OpenTelemetry semantic-convention **name shape** (never by names picked from
+    a corpus). Returns ``(resource, kind)`` or ``None``:
+
+    * a utilization **gauge** — last dotted segment ends in ``utilization``; the resource is the segment
+      before it (``jvm.cpu.recent_utilization`` → ``cpu``, ``nodejs.eventloop.utilization`` →
+      ``eventloop``, ``system.memory.utilization`` → ``memory``);
+    * a cumulative **CPU-time counter** — name ends ``.cpu.time`` (semconv seconds); resource ``cpu``.
+
+    Collector/SDK self-telemetry (``otel.sdk.*``, ``otelcol*``) is excluded: it measures the telemetry
+    pipeline, not the service, and moves whenever a service simply emits more spans."""
+    if not metric or metric.startswith(_SELF_TELEMETRY_PREFIXES):
+        return None
+    parts = metric.split(".")
+    if len(parts) >= 2 and parts[-1].endswith("utilization"):
+        return parts[-2], "gauge"
+    if metric.endswith(".cpu.time"):
+        return "cpu", "cpu_time"
+    return None
+
+
+def _counter_rate(points: list[tuple[datetime, float]]) -> Optional[float]:
+    if len(points) < 2:
+        return None
+    dt = (points[-1][0] - points[0][0]).total_seconds()
+    return (points[-1][1] - points[0][1]) / dt if dt > 0 else None
+
+
+def summarize_utilization(samples: list, window_start: datetime) -> dict[tuple[str, str], UtilSignal]:
+    """Per ``(service, resource)`` utilization observable from metric-sample records (#209 M2b), duck-typed
+    on ``service`` / ``metric`` / ``value`` / ``ts``.
+
+    Per metric (only classes recognized by :func:`util_metric_class`; unattributed ``service=None``
+    samples contribute nothing):
+
+    * **gauge** — incident mean / baseline mean; measured iff both windows have samples, every raw value
+      is finite and ≥ 0, and the baseline mean is > 0 (a malformed sample leaves the metric unmeasured,
+      never averaged into false-normal evidence — as in :func:`summarize_metrics`).
+    * **cpu_time** — incident rate / baseline rate, rate = (last − first) / Δt. Measured **only for a
+      verifiably single-series, monotonic stream**: at most one sample per timestamp and never decreasing
+      across the whole load. A converter that flattened attribute dimensions interleaves several
+      cumulative series (e.g. ``state=user``/``system``) into one stream, and a rate over that is
+      meaningless — so such a stream is UNKNOWN, not guessed.
+
+    A metric is PRESENT if its ratio ≥ 2× (``discretize_ratio`` HIGH), ABSENT if measured and below,
+    else UNKNOWN. The ``(service, resource)`` signal takes the witness: PRESENT if any metric of that
+    class is PRESENT, else ABSENT if any is measured-normal, else UNKNOWN. A utilization *drop* is ABSENT
+    (not saturated), not an anomaly."""
+    series: dict[tuple[str, str], dict[str, list[tuple[datetime, float]]]] = defaultdict(
+        lambda: {"b": [], "i": []}
+    )
+    invalid: set[tuple[str, str]] = set()
+    for s in samples:
+        svc, metric, value, ts = (getattr(s, "service", None), getattr(s, "metric", None),
+                                  getattr(s, "value", None), getattr(s, "ts", None))
+        if svc is None or value is None or ts is None or util_metric_class(metric) is None:
+            continue
+        key = (svc, metric)
+        v = float(value)
+        if not math.isfinite(v) or v < 0:
+            invalid.add(key)
+            continue
+        series[key]["i" if ts >= window_start else "b"].append((ts, v))
+
+    per_class: dict[tuple[str, str], list[tuple[Optional[str], float, bool]]] = defaultdict(list)
+    for (svc, metric), d in series.items():
+        resource, kind = util_metric_class(metric)
+        ratio, measured = 1.0, False
+        if (svc, metric) not in invalid and d["b"] and d["i"]:
+            if kind == "gauge":
+                base = _mean([v for _, v in d["b"]])
+                if base > 0:
+                    ratio, measured = _mean([v for _, v in d["i"]]) / base, True
+            else:  # cpu_time: single-series + monotonic, or UNKNOWN
+                pts = sorted(d["b"] + d["i"])
+                single = len({t for t, _ in pts}) == len(pts)
+                monotonic = all(b >= a for (_, a), (_, b) in zip(pts, pts[1:]))
+                rb, ri = _counter_rate(sorted(d["b"])), _counter_rate(sorted(d["i"]))
+                if single and monotonic and rb is not None and rb > 0 and ri is not None:
+                    ratio, measured = ri / rb, True
+        if not measured:
+            state: Optional[str] = None
+        elif discretize_ratio(ratio) == State.HIGH:
+            state = State.PRESENT
+        else:
+            state = State.ABSENT
+        per_class[(svc, resource)].append((state, ratio, measured))
+
+    out: dict[tuple[str, str], UtilSignal] = {}
+    for (svc, resource), metrics in sorted(per_class.items()):
+        witness = (next((m for m in metrics if m[0] == State.PRESENT), None)
+                   or next((m for m in metrics if m[0] == State.ABSENT), None)
+                   or metrics[0])
+        out[(svc, resource)] = UtilSignal(svc, resource, witness[1], witness[2], witness[0])
+    return out
+
+
+class StructuralInputs(NamedTuple):
+    """Everything the structural model reads for one ``(scope, window)`` (#209): per-service ``sig``,
+    the incident call graph, per-edge observables (M2a) and per-resource utilization observables (M2b)."""
+
+    signals: dict[str, ServiceSignal]
+    edges: set[tuple[str, str]]
+    edge_signals: dict[tuple[str, str], EdgeSignal]
+    util_signals: dict[tuple[str, str], UtilSignal]
+
+
+def structural_signals(spans: list, metrics: list, window_start: datetime) -> StructuralInputs:
     """The single structural-model input builder shared by the product path
     (:func:`~src.core.rca.structural.build_structural_view`) and the shadow eval
     (``src.eval.structural_shadow.shadow_result``), so both run one model. ``spans`` and ``metrics`` span
-    the baseline *and* incident windows. Returns ``(signals, edges, edge_signals)``: span-derived and
-    metric-derived ``sig`` merged by :func:`combine_signals`, the **incident** call graph, and the
-    per-edge observables (#209 M2a)."""
+    the baseline *and* incident windows. Returns :class:`StructuralInputs`: span-derived and
+    metric-derived ``sig`` merged by :func:`combine_signals`, the **incident** call graph, the per-edge
+    observables (M2a) and the utilization observables (M2b)."""
     signals = combine_signals(summarize_spans(spans, window_start), summarize_metrics(metrics, window_start))
-    return signals, call_edges(spans, since=window_start), summarize_edges(spans, window_start)
+    return StructuralInputs(
+        signals=signals,
+        edges=call_edges(spans, since=window_start),
+        edge_signals=summarize_edges(spans, window_start),
+        util_signals=summarize_utilization(metrics, window_start),
+    )
 
 
 def build_observables(
     signals: dict[str, ServiceSignal],
     edge_signals: Optional[dict[tuple[str, str], EdgeSignal]] = None,
+    util_signals: Optional[dict[tuple[str, str], UtilSignal]] = None,
 ) -> list[Observable]:
     """One ``sig:{service}`` observable per service whose combined signal is *proven* PRESENT or ABSENT
-    (three-valued), plus one ``edge:{caller}->{callee}`` observable per proven call edge. Anything
-    UNKNOWN (a branch unmeasured, or an edge with no incident calls) is omitted — its coordinate stays
-    UNKNOWN, never a fabricated OBSERVED ABSENT."""
+    (three-valued), plus one ``edge:{caller}->{callee}`` per proven call edge and one
+    ``util:{service}:{resource}`` per proven utilization class. Anything UNKNOWN is omitted — its
+    coordinate stays UNKNOWN, never a fabricated OBSERVED ABSENT."""
     obs = [
         observed(f"sig:{svc}", sig.sig_state)
         for svc, sig in sorted(signals.items())
@@ -401,6 +542,9 @@ def build_observables(
     for _key, e in sorted((edge_signals or {}).items()):
         if e.sig_state is not None:
             obs.append(observed(e.id, e.sig_state))
+    for _key, u in sorted((util_signals or {}).items()):
+        if u.sig_state is not None:
+            obs.append(observed(u.id, u.sig_state))
     return obs
 
 
@@ -418,31 +562,36 @@ def build_hypotheses(
     signals: dict[str, ServiceSignal],
     edges: set[tuple[str, str]],
     edge_signals: Optional[dict[tuple[str, str], EdgeSignal]] = None,
+    util_signals: Optional[dict[tuple[str, str], UtilSignal]] = None,
 ) -> list[Hypothesis]:
     """Candidate ``process`` hypotheses: anomalous services, plus a service's callees when its fault is
     not already explained by a visible (anomalous) callee — so a silent downstream root is still
-    generated — plus (#209 M2a) the **callee of every PRESENT edge**: a failing or slow call toward a
-    service is evidence about that service even when it emits nothing itself (the unreachable-callee
-    case). Each hypothesis predicts its own ``sig`` present and, when edge signals are given, every
-    incoming ``edge:{caller}->{svc}`` present. All expectations are soft; dependency direction is **not**
-    a hard rule (an anomalous callee doesn't exclude its caller as root — that stays soft ranking)."""
+    generated — plus (#209 M2a) the **callee of every PRESENT edge**, plus (#209 M2b) **every service with
+    a PRESENT utilization observable** (a locally silent resource fault). Each hypothesis predicts its own
+    ``sig`` present and, when given, every incoming ``edge:{caller}->{svc}`` and every
+    ``util:{svc}:{resource}`` present. All expectations are soft; dependency direction is **not** a hard
+    rule (an anomalous callee doesn't exclude its caller as root — that stays soft ranking)."""
     anomalous = {s for s, sig in signals.items() if sig.anomalous}
     candidates = set(anomalous)
     for s in anomalous:
         callee_set = _callees(s, edges)
         if not any(c in anomalous for c in callee_set):  # fault unexplained by a visible callee
             candidates |= callee_set
-    incoming: dict[str, list[str]] = defaultdict(list)
+    expected_extra: dict[str, list[str]] = defaultdict(list)
     for e in (edge_signals or {}).values():
-        incoming[e.callee].append(e.id)
+        expected_extra[e.callee].append(e.id)
         if e.sig_state == State.PRESENT:
             candidates.add(e.callee)
+    for u in (util_signals or {}).values():
+        expected_extra[u.service].append(u.id)
+        if u.sig_state == State.PRESENT:
+            candidates.add(u.service)
     return [
         from_observation_model(
             f"process:{svc}", Kind.PROCESS, svc,
             ObservationModel(expected=(
                 ExpectedObservation(f"sig:{svc}", State.PRESENT),
-                *(ExpectedObservation(eid, State.PRESENT) for eid in sorted(incoming[svc])),
+                *(ExpectedObservation(oid, State.PRESENT) for oid in sorted(expected_extra[svc])),
             )),
         )
         for svc in sorted(candidates)

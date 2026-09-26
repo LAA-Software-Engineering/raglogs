@@ -156,6 +156,7 @@ class TestIncidentCallGraph:
 class TestSharedBuilder:
     def test_structural_signals_merges_modalities_and_uses_the_incident_graph(self):
         spans = _stream("checkout", inc_ms=40.0) + TestIncidentCallGraph()._spans()
-        signals, edges, _edge_signals = structural_signals(spans, [], _W)
+        inp = structural_signals(spans, [], _W)
+        signals, edges = inp.signals, inp.edges
         assert signals["checkout"].sig_state == State.PRESENT
         assert ("checkout", "fraud") not in edges
