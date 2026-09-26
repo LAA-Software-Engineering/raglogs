@@ -257,27 +257,151 @@ def call_edges(spans: list, since: Optional[datetime] = None) -> set[tuple[str, 
     return edges
 
 
+@dataclass(frozen=True)
+class EdgeSignal:
+    """A caller→callee call edge's incident-vs-baseline summary (#209 M2a) — the per-edge observable
+    ``edge:{caller}->{callee}``, kept separate from either endpoint's ``sig``. Same three-valued
+    semantics as :class:`ServiceSignal`, but measured on the **caller's** spans of the operations that
+    call ``callee``: an unreachable or broken callee is visible here even when it emits nothing itself."""
+
+    caller: str
+    callee: str
+    error_rate: float
+    latency_ratio: float
+    error_measured: bool
+    latency_measured: bool
+    sig_state: Optional[str]
+
+    @property
+    def id(self) -> str:
+        return edge_observable_id(self.caller, self.callee)
+
+
+def edge_observable_id(caller: str, callee: str) -> str:
+    return f"edge:{caller}->{callee}"
+
+
+def learn_call_targets(spans: list, *, dominance: float = 0.9) -> dict[tuple[str, str], str]:
+    """``{(caller_service, operation): callee_service}`` learned from **observed** parent→child
+    relations, never from operation names. A ``(caller, operation)`` pair maps to ``S`` only when at
+    least ``dominance`` of its cross-service children are in ``S``; an operation that fans out to several
+    services (or has no observed cross-service child) is ambiguous and gets no mapping — no evidence
+    rather than a guessed target. Parent lookup is keyed by ``(trace_id, span_id)`` like
+    :func:`call_edges`."""
+    by_id = {
+        (sp.trace_id, sp.span_id): sp
+        for sp in spans if sp.trace_id and sp.span_id and sp.service
+    }
+    counts: dict[tuple[str, str], Counter] = defaultdict(Counter)
+    for sp in spans:
+        if not (sp.trace_id and sp.parent_span_id and sp.service):
+            continue
+        parent = by_id.get((sp.trace_id, sp.parent_span_id))
+        if parent is None or parent.service == sp.service:
+            continue
+        op = getattr(parent, "operation", None)
+        if op:
+            counts[(parent.service, op)][sp.service] += 1
+    targets: dict[tuple[str, str], str] = {}
+    for key, cnt in counts.items():
+        callee, n = cnt.most_common(1)[0]
+        if n / sum(cnt.values()) >= dominance:  # >=0.9 dominance cannot tie, so this is deterministic
+            targets[key] = callee
+    return targets
+
+
+def summarize_edges(
+    spans: list, window_start: datetime, *, dominance: float = 0.9
+) -> dict[tuple[str, str], EdgeSignal]:
+    """Per call edge ``(caller, callee)``, summarize the caller's spans of the operations mapped to
+    ``callee`` by :func:`learn_call_targets` (#209 M2a).
+
+    * **Error branch** — explicit OTLP status only, ``ERROR / (OK + ERROR)`` over the incident spans;
+      UNSET is excluded, exactly as in :func:`summarize_spans`. Measured iff an explicit status exists.
+    * **Latency branch** — median incident duration over median baseline duration; needs both.
+
+    PRESENT if a measured branch is anomalous, ABSENT only if both are measured-and-normal, else
+    UNKNOWN. Only edges with **at least one incident call** are returned: an edge that was simply not
+    called during the incident has no observation (absence of calls is not evidence). A failed call
+    whose callee emitted no span at all is exactly the case this observable exists for."""
+    targets = learn_call_targets(spans, dominance=dominance)
+    inc_calls: Counter = Counter()
+    inc_ok: Counter = Counter()
+    inc_err: Counter = Counter()
+    inc_dur: dict[tuple[str, str], list[float]] = defaultdict(list)
+    base_dur: dict[tuple[str, str], list[float]] = defaultdict(list)
+    for sp in spans:
+        if not sp.service:
+            continue
+        callee = targets.get((sp.service, getattr(sp, "operation", None)))
+        ts = getattr(sp, "start_time", None)
+        if callee is None or ts is None:
+            continue
+        key = (sp.service, callee)
+        dur = getattr(sp, "duration_ms", None)
+        valid_dur = dur if (isinstance(dur, (int, float)) and math.isfinite(dur) and dur >= 0) else None
+        if ts >= window_start:
+            inc_calls[key] += 1
+            status = _status_class(getattr(sp, "status_code", None))
+            if status == "error":
+                inc_err[key] += 1
+            elif status == "ok":
+                inc_ok[key] += 1
+            if valid_dur is not None:
+                inc_dur[key].append(float(valid_dur))
+        elif valid_dur is not None:
+            base_dur[key].append(float(valid_dur))
+
+    out: dict[tuple[str, str], EdgeSignal] = {}
+    for key in sorted(inc_calls):
+        explicit = inc_ok[key] + inc_err[key]
+        error_measured = explicit > 0
+        err_rate = inc_err[key] / explicit if explicit else 0.0
+        base_med = _median(base_dur[key])
+        latency_measured = bool(inc_dur[key]) and bool(base_dur[key]) and base_med > 0
+        ratio = _median(inc_dur[key]) / base_med if latency_measured else 1.0
+        error_present = error_measured and discretize_rate(err_rate) == State.PRESENT
+        latency_high = latency_measured and discretize_ratio(ratio) == State.HIGH
+        if error_present or latency_high:
+            state: Optional[str] = State.PRESENT
+        elif error_measured and latency_measured:
+            state = State.ABSENT
+        else:
+            state = None
+        out[key] = EdgeSignal(key[0], key[1], err_rate, ratio, error_measured, latency_measured, state)
+    return out
+
+
 def structural_signals(
     spans: list, metrics: list, window_start: datetime
-) -> tuple[dict[str, ServiceSignal], set[tuple[str, str]]]:
+) -> tuple[dict[str, ServiceSignal], set[tuple[str, str]], dict[tuple[str, str], EdgeSignal]]:
     """The single structural-model input builder shared by the product path
     (:func:`~src.core.rca.structural.build_structural_view`) and the shadow eval
     (``src.eval.structural_shadow.shadow_result``), so both run one model. ``spans`` and ``metrics`` span
-    the baseline *and* incident windows. Returns ``(signals, edges)``: span-derived and metric-derived
-    ``sig`` merged by :func:`combine_signals`, and the **incident** call graph."""
+    the baseline *and* incident windows. Returns ``(signals, edges, edge_signals)``: span-derived and
+    metric-derived ``sig`` merged by :func:`combine_signals`, the **incident** call graph, and the
+    per-edge observables (#209 M2a)."""
     signals = combine_signals(summarize_spans(spans, window_start), summarize_metrics(metrics, window_start))
-    return signals, call_edges(spans, since=window_start)
+    return signals, call_edges(spans, since=window_start), summarize_edges(spans, window_start)
 
 
-def build_observables(signals: dict[str, ServiceSignal]) -> list[Observable]:
+def build_observables(
+    signals: dict[str, ServiceSignal],
+    edge_signals: Optional[dict[tuple[str, str], EdgeSignal]] = None,
+) -> list[Observable]:
     """One ``sig:{service}`` observable per service whose combined signal is *proven* PRESENT or ABSENT
-    (three-valued). A service whose ``sig`` is UNKNOWN (a branch unmeasured) is omitted — its
-    coordinate stays UNKNOWN, never a fabricated OBSERVED ABSENT."""
-    return [
+    (three-valued), plus one ``edge:{caller}->{callee}`` observable per proven call edge. Anything
+    UNKNOWN (a branch unmeasured, or an edge with no incident calls) is omitted — its coordinate stays
+    UNKNOWN, never a fabricated OBSERVED ABSENT."""
+    obs = [
         observed(f"sig:{svc}", sig.sig_state)
         for svc, sig in sorted(signals.items())
         if sig.sig_state is not None
     ]
+    for _key, e in sorted((edge_signals or {}).items()):
+        if e.sig_state is not None:
+            obs.append(observed(e.id, e.sig_state))
+    return obs
 
 
 def _callees(service: str, edges: set[tuple[str, str]]) -> set[str]:
@@ -291,22 +415,35 @@ def service_universe(signals: dict[str, ServiceSignal], span_services: set[str])
 
 
 def build_hypotheses(
-    signals: dict[str, ServiceSignal], edges: set[tuple[str, str]]
+    signals: dict[str, ServiceSignal],
+    edges: set[tuple[str, str]],
+    edge_signals: Optional[dict[tuple[str, str], EdgeSignal]] = None,
 ) -> list[Hypothesis]:
     """Candidate ``process`` hypotheses: anomalous services, plus a service's callees when its fault is
     not already explained by a visible (anomalous) callee — so a silent downstream root is still
-    generated. Each predicts only its own ``sig`` present; dependency direction is **not** a hard rule
-    (an anomalous callee doesn't exclude its caller as root — that stays soft ranking, Phase G)."""
+    generated — plus (#209 M2a) the **callee of every PRESENT edge**: a failing or slow call toward a
+    service is evidence about that service even when it emits nothing itself (the unreachable-callee
+    case). Each hypothesis predicts its own ``sig`` present and, when edge signals are given, every
+    incoming ``edge:{caller}->{svc}`` present. All expectations are soft; dependency direction is **not**
+    a hard rule (an anomalous callee doesn't exclude its caller as root — that stays soft ranking)."""
     anomalous = {s for s, sig in signals.items() if sig.anomalous}
     candidates = set(anomalous)
     for s in anomalous:
         callee_set = _callees(s, edges)
         if not any(c in anomalous for c in callee_set):  # fault unexplained by a visible callee
             candidates |= callee_set
+    incoming: dict[str, list[str]] = defaultdict(list)
+    for e in (edge_signals or {}).values():
+        incoming[e.callee].append(e.id)
+        if e.sig_state == State.PRESENT:
+            candidates.add(e.callee)
     return [
         from_observation_model(
             f"process:{svc}", Kind.PROCESS, svc,
-            ObservationModel(expected=(ExpectedObservation(f"sig:{svc}", State.PRESENT),)),
+            ObservationModel(expected=(
+                ExpectedObservation(f"sig:{svc}", State.PRESENT),
+                *(ExpectedObservation(eid, State.PRESENT) for eid in sorted(incoming[svc])),
+            )),
         )
         for svc in sorted(candidates)
     ]
