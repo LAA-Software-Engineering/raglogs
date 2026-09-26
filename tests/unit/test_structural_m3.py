@@ -200,11 +200,29 @@ class TestDecisionRules:
         n_loc = int(CANDIDATE_FRACTION_MAX * 10) + 1  # 4/10 > 0.33
         assert decide(_corpus(n_loc=n_loc))["generalization"] == "does_not_generalize"
 
-    def test_bound_is_the_frozen_literal_so_exactly_one_third_fails(self):
-        # otel-fresh M1's median fraction is exactly 1/3; the frozen text is "<= 0.33", applied literally
-        assert decide([
-            _case("otel_a", "a", n_loc=1, n_services=3), _case("otel_b", "b", n_loc=1, n_services=3),
-            *[_healthy(i) for i in range(MIN_HEALTHY_NEGATIVES)]])["generalization"] == "does_not_generalize"
+    @staticmethod
+    def _selectivity(*loc_over_services):
+        pos = [_case(f"otel_p{i}", f"p{i}", n_loc=k, n_services=n) for i, (k, n) in enumerate(loc_over_services)]
+        return decide(pos + [_healthy(i) for i in range(MIN_HEALTHY_NEGATIVES)])
+
+    def test_exactly_one_third_passes(self):
+        # the amended bound (#209): <= 1/3, exact — otel-fresh M1's value is exactly 1/3
+        v = self._selectivity((1, 3), (1, 3))
+        assert v["generalization"] == "generalizes"
+        assert v["generalization_criteria"]["median_candidate_fraction"][1] == "1/3"
+
+    def test_one_third_as_an_even_median_is_exact(self):
+        # median of 1/4 and 5/12 is exactly 1/3; a float average could round either way
+        assert self._selectivity((1, 4), (5, 12))["generalization"] == "generalizes"
+
+    def test_just_above_one_third_fails_and_just_below_passes(self):
+        assert self._selectivity((334, 1000), (334, 1000))["generalization"] == "does_not_generalize"
+        assert self._selectivity((331, 1000), (331, 1000))["generalization"] == "generalizes"
+
+    def test_exact_median_is_reported(self):
+        arm = summarize_arm([_case("otel_a", "a", n_loc=1, n_services=4), _case("otel_b", "b", n_loc=5,
+                                                                                 n_services=12)], FULL_ARM)
+        assert arm["median_candidate_fraction_exact"] == "1/3"
 
     def test_healthy_abstention_below_bound_fails(self):
         generated = MIN_HEALTHY_NEGATIVES - int(HEALTHY_ABSTENTION_MIN * MIN_HEALTHY_NEGATIVES) + 1
