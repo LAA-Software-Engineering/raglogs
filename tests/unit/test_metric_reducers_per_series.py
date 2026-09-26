@@ -55,6 +55,19 @@ class TestTriggerOnsets:
     def test_identity_less_samples_are_one_series_as_before(self):
         assert metric_anomaly_onsets(_strip(_cpu_modes()), _W, _E) == []
 
+    def test_one_candidate_per_metric_so_series_cannot_flood_the_budget(self):
+        # Eight cpu.mode series all move; a different instrument on another service moves less. With
+        # max_candidates=5 the list must hold ONE system.cpu.utilization onset, not five copies of it.
+        modes = ("idle", "user", "system", "nice", "iowait", "irq", "softirq", "steal")
+        samples = []
+        for i, mode in enumerate(modes):
+            samples += _series("h", "system.cpu.utilization", 0.1, 0.5 + 0.01 * i, {"cpu.mode": mode, **_INST})
+        samples += _series("ad", "jvm.cpu.recent_utilization", 0.2, 0.9, _INST)
+        onsets = metric_anomaly_onsets(samples, _W, _E, max_candidates=5)
+        keys = [(o.service, o.metric) for o in onsets]
+        assert keys.count(("h", "system.cpu.utilization")) == 1
+        assert ("ad", "jvm.cpu.recent_utilization") in keys
+
 
 class TestStructuralMetricSig:
     def _routes(self):

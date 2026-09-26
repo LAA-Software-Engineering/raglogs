@@ -1,10 +1,12 @@
 """#209 M2b — utilization observables util:{service}:{resource}. Pure, no DB.
 
-Pins the semantics: a metric is measured only when it is ONE verified series — every sample carries
-series identity (datapoint attributes + reporting instance), all samples belong to exactly one series,
-no two share a timestamp, and the declared instrument (metric_type) is the one the reducer needs.
-Anything else is UNKNOWN, never a measured ABSENT: in particular a per-state gauge
-(system.cpu.utilization by cpu.mode) is never averaged into "normal"."""
+Pins the semantics: a metric is measured only when every sample carries series identity that NAMES
+its reporting instance, all samples share ONE datapoint signature (one mode), and the declared
+instrument (metric_type) is the one the reducer needs. Each named instance is then its own series
+(no timestamp collisions within it): PRESENT if ANY replica is saturated, ABSENT only if EVERY replica
+is measured and below. Anything else is UNKNOWN, never a measured ABSENT — in particular a per-mode
+gauge (system.cpu.utilization by cpu.mode) is never averaged into "normal", and unnamed replicas are
+never blended."""
 from datetime import datetime, timedelta, timezone
 
 from src.core.rca.observable import State
