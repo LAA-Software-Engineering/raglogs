@@ -26,10 +26,7 @@ from src.core.rca.scoring import ScoredClass, rank_classes
 from src.core.rca.structural_model import (
     build_hypotheses,
     build_observables,
-    call_edges,
-    combine_signals,
-    summarize_metrics,
-    summarize_spans,
+    structural_signals,
 )
 from src.db.models import MetricSample, TraceSpan
 
@@ -55,8 +52,9 @@ def build_structural_view(
             MetricSample.ts <= window_end,
         )
     ).scalars().all()
-    # Spans over [baseline_start, window_end]: the baseline half is needed for span-derived latency
-    # ratios (#209 M1); the incident half also carries the call edges.
+    # Spans over [baseline_start, window_end]. The baseline half feeds span-derived latency ratios and
+    # lets a baseline parent resolve for an incident child; call edges are emitted only for incident
+    # children (structural_signals -> call_edges(since=window_start)).
     span_rows = db.execute(
         select(TraceSpan).where(
             TraceSpan.scope == scope,
@@ -65,14 +63,10 @@ def build_structural_view(
         )
     ).scalars().all()
 
-    # sig:{service} from spans (latency-first + sparse error-status) combined with the metric sig, so a
-    # service with spans but no error/latency metrics still gets an observable (#209 M1). PRESENT >
-    # ABSENT > UNKNOWN; a service unmeasured in every modality stays UNKNOWN (no fabricated ABSENT).
-    signals = combine_signals(
-        summarize_spans(span_rows, window_start),
-        summarize_metrics(metric_rows, window_start),
-    )
-    edges = call_edges(span_rows)
+    # The one shared structural-model builder (#209 M1): span-derived sig (latency median + explicit
+    # OTLP status only) merged with the metric sig, and the INCIDENT call graph (edges whose child span
+    # starts at/after window_start — the baseline half of this load feeds latency ratios, never edges).
+    signals, edges = structural_signals(span_rows, metric_rows, window_start)
     hypotheses = build_hypotheses(signals, edges)
     if not hypotheses:
         return None  # no candidate -> abstain, never a fabricated structural result

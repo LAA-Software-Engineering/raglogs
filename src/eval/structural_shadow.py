@@ -42,6 +42,7 @@ from src.core.rca.structural_model import (
     build_observables,
     call_edges,
     service_universe,
+    structural_signals,
     summarize_metrics,
 )
 from src.eval.case import EvalCase
@@ -98,9 +99,10 @@ def shadow_result(case: EvalCase) -> ShadowResult:
         # No telemetry -> no localization -> an abstention (returned nothing).
         return ShadowResult(case.id, truth, "no_telemetry", (), (), False, False, True)
 
-    signals = summarize_metrics(load_metrics_jsonl(case.metrics_path), case.window_start)
+    # The same structural-model builder the product path uses (#209 M1): span+metric sig and the
+    # incident call graph — one model, not a divergent shadow copy.
     spans = load_spans_jsonl(case.spans_path)
-    edges = call_edges(spans)
+    signals, edges = structural_signals(spans, load_metrics_jsonl(case.metrics_path), case.window_start)
     # The service universe is every service seen in telemetry — metric-bearing services and all span
     # services (incl. root-only spans with no edge) — so candidate_ratio's "1.0 = enumerate all" holds.
     n_services = len(service_universe(signals, {sp.service for sp in spans if sp.service}))
