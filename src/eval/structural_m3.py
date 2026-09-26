@@ -12,6 +12,10 @@ encodes it so the measurement cannot be shaped by the data:
   (:func:`~src.core.rca.structural.load_structural_rows`), so series identity is exercised exactly
   as it is in production, not on a hand-built sample list.
 * The verdicts (:func:`decide`) apply the thresholds fixed in the protocol; none of them is a tunable.
+* Each gated statistic is computed exactly as the otel-fresh reference numbers the thresholds came
+  from: the service universe is every service seen in span *or* metric rows; a positive is
+  *generated* when any hypothesis exists; selectivity is over generated positives (an empty
+  compatible set counts as 0); healthy abstention is *no hypothesis generated*.
 
 Pure: no DB. ``scripts/eval/m3_structural.py`` ingests a corpus and feeds rows in."""
 from __future__ import annotations
@@ -24,11 +28,10 @@ from typing import Optional
 
 from src.core.rca.metric_series import instance_identity
 from src.core.rca.observable import State
-from src.core.rca.partition import discretize_rate
+from src.core.rca.partition import discretize_rate, discretize_ratio
 from src.core.rca.structural import resolve_structural
 from src.core.rca.structural_model import (
     StructuralInputs,
-    service_universe,
     structural_signals,
     util_metric_class,
 )
@@ -63,10 +66,9 @@ class ArmResult:
     localization: tuple[str, ...]
 
     @property
-    def claims(self) -> bool:
-        """Did this arm localize anything? An empty localization (no hypotheses, or none compatible)
-        is an abstention."""
-        return bool(self.localization)
+    def generated(self) -> bool:
+        """Did this arm generate any hypothesis? Not generating is the (reference) abstention."""
+        return self.outcome != "no_candidates"
 
 
 @dataclass(frozen=True)
@@ -81,9 +83,11 @@ class CaseEval:
     cause_families: tuple[str, ...] = ()
     util_measured_for_cause: bool = False
     util_present: tuple[str, ...] = ()
-    edges_measured: int = 0
-    edges_present: int = 0
-    edges_present_latency_only: int = 0
+    edges_measured: int = 0           # edges whose sig is PRESENT or ABSENT
+    edges_present: int = 0            # ... PRESENT (error >= cutoff OR latency >= 2x)
+    edges_latency_measured: int = 0   # edges with a measured latency branch
+    edges_latency_high: int = 0       # ... at >= 2x, whether or not the error branch also fired
+    edges_error_present: int = 0      # edges whose explicit-status error rate crossed the cutoff
     util_samples: int = 0             # utilization-class metric samples in the rows
     util_samples_named: int = 0       # ... of which name their reporting instance
     notes: list[str] = field(default_factory=list)
@@ -93,11 +97,20 @@ class CaseEval:
 
     @property
     def retained_via(self) -> tuple[str, ...]:
-        """Families that witnessed the retained truth under the frozen model; ``topology`` when the
-        cause was retained with no PRESENT observable about it (a callee of an unexplained anomaly)."""
+        """PRESENT families about the retained truth under the frozen model — what *witnessed* it, not
+        what retained it (see :attr:`retained_by_util`); ``topology`` when no PRESENT observable concerns
+        the cause (a callee of an unexplained anomaly)."""
         if not self.retained(FULL_ARM):
             return ()
         return self.cause_families or ("topology",)
+
+    @property
+    def retained_by_util(self) -> bool:
+        """Retained *via* ``util:`` — the arm delta: the frozen model retains the cause, the same inputs
+        without util (M2a) do not, and a ``util:`` observable on the cause is PRESENT. A measured util
+        observable is already a named-instance series (``summarize_utilization`` will not emit
+        PRESENT/ABSENT without one)."""
+        return self.retained(FULL_ARM) and not self.retained("M2a") and "util" in self.cause_families
 
 
 def scenario_of(case_id: str) -> str:
@@ -109,7 +122,9 @@ def evaluate_case(case_id: str, cause: Optional[str], positive: bool, spans: lis
                   window_start: datetime) -> CaseEval:
     """Run every arm on one case's rows (spans + metrics over ``[baseline_start, window_end]``)."""
     inp = structural_signals(spans, metrics, window_start)
-    universe = service_universe(inp.signals, {sp.service for sp in spans if sp.service})
+    # every service seen in span OR metric rows (the reference denominator)
+    universe = ({sp.service for sp in spans if sp.service}
+                | {m.service for m in metrics if getattr(m, "service", None)})
     arms: dict[str, ArmResult] = {}
     for arm in ARMS:
         resolved = resolve_structural(arm_inputs(inp, arm))
@@ -130,9 +145,8 @@ def evaluate_case(case_id: str, cause: Optional[str], positive: bool, spans: lis
             families.append("util")
 
     edges = list(inp.edge_signals.values())
-    present_edges = [e for e in edges if e.sig_state == State.PRESENT]
-    latency_only = [e for e in present_edges
-                    if not (e.error_measured and discretize_rate(e.error_rate) == State.PRESENT)]
+    latency_high = [e for e in edges if e.latency_measured and discretize_ratio(e.latency_ratio) == State.HIGH]
+    error_present = [e for e in edges if e.error_measured and discretize_rate(e.error_rate) == State.PRESENT]
     util_rows = [m for m in metrics if util_metric_class(getattr(m, "metric", None)) is not None]
     named = [m for m in util_rows if instance_identity(getattr(m, "attributes", None)) is not None]
     return CaseEval(
@@ -143,8 +157,10 @@ def evaluate_case(case_id: str, cause: Optional[str], positive: bool, spans: lis
             u.service == cause and u.sig_state is not None for u in inp.util_signals.values()),
         util_present=tuple(sorted(u.id for u in inp.util_signals.values() if u.sig_state == State.PRESENT)),
         edges_measured=sum(e.sig_state is not None for e in edges),
-        edges_present=len(present_edges),
-        edges_present_latency_only=len(latency_only),
+        edges_present=sum(e.sig_state == State.PRESENT for e in edges),
+        edges_latency_measured=sum(e.latency_measured for e in edges),
+        edges_latency_high=len(latency_high),
+        edges_error_present=len(error_present),
         util_samples=len(util_rows), util_samples_named=len(named),
     )
 
@@ -158,22 +174,24 @@ def summarize_arm(cases: list[CaseEval], arm: str) -> dict:
     pos = [c for c in cases if c.positive]
     neg = [c for c in cases if not c.positive]
     pos_tel = [c for c in pos if c.cause_has_telemetry]
-    claiming = [c for c in pos if c.arms[arm].claims]
-    fractions = [len(c.arms[arm].localization) / c.n_services for c in claiming if c.n_services]
+    generated = [c for c in pos if c.arms[arm].generated]
+    fractions = [len(c.arms[arm].localization) / max(c.n_services, 1) for c in generated]
     identified = [c for c in cases if c.arms[arm].outcome == "identified"]
     ident_correct = [c for c in identified if c.positive and c.arms[arm].localization == (c.cause,)]
     return {
         "positives": len(pos),
-        "generated": sum(c.arms[arm].outcome != "no_candidates" for c in pos),
+        "generated": len(generated),
         "truth_retained_all": [sum(c.retained(arm) for c in pos), len(pos)],
         "truth_retained_cause_has_telemetry": [sum(c.retained(arm) for c in pos_tel), len(pos_tel)],
         "truth_retained_cause_has_telemetry_rate": _rate(sum(c.retained(arm) for c in pos_tel), len(pos_tel)),
-        "median_candidates": statistics.median([len(c.arms[arm].localization) for c in claiming])
-        if claiming else None,
+        "median_candidates": statistics.median([len(c.arms[arm].localization) for c in generated])
+        if generated else None,
         "median_candidate_fraction": statistics.median(fractions) if fractions else None,
         "negatives": len(neg),
-        "healthy_abstained": [sum(not c.arms[arm].claims for c in neg), len(neg)],
-        "healthy_abstention_rate": _rate(sum(not c.arms[arm].claims for c in neg), len(neg)),
+        "healthy_abstained": [sum(not c.arms[arm].generated for c in neg), len(neg)],
+        "healthy_abstention_rate": _rate(sum(not c.arms[arm].generated for c in neg), len(neg)),
+        # secondary, not gated: healthy windows with no localization claim at all (incl. NO_COMPATIBLE)
+        "healthy_no_claim": [sum(not c.arms[arm].localization for c in neg), len(neg)],
         "outcomes": dict(sorted(Counter(c.arms[arm].outcome for c in cases).items())),
         "identified_precision": [len(ident_correct), len(identified)],
         "identified_on_healthy": sum(not c.positive for c in identified),
@@ -181,14 +199,18 @@ def summarize_arm(cases: list[CaseEval], arm: str) -> dict:
 
 
 def edge_specificity(cases: list[CaseEval]) -> dict:
-    """Healthy-window flagged-edge rate at the unchanged M2a cutoff (reported, never recalibrated here)."""
+    """Healthy-window edge flags at the unchanged M2a cutoffs (reported, never recalibrated here). The
+    >=2x latency rate is counted on its own — including edges whose error branch also fired — so the
+    rate the protocol asks for is exact; the error branch and the combined PRESENT are reported too."""
     neg = [c for c in cases if not c.positive]
-    measured = sum(c.edges_measured for c in neg)
-    present = sum(c.edges_present for c in neg)
     return {
+        "healthy_windows_with_latency_high_edge": [sum(c.edges_latency_high > 0 for c in neg), len(neg)],
+        "healthy_latency_high_over_latency_measured_edges": [sum(c.edges_latency_high for c in neg),
+                                                              sum(c.edges_latency_measured for c in neg)],
+        "healthy_windows_with_error_present_edge": [sum(c.edges_error_present > 0 for c in neg), len(neg)],
         "healthy_windows_with_present_edge": [sum(c.edges_present > 0 for c in neg), len(neg)],
-        "healthy_present_over_measured_edges": [present, measured],
-        "healthy_present_edges_latency_only": [sum(c.edges_present_latency_only for c in neg), present],
+        "healthy_present_over_measured_edges": [sum(c.edges_present for c in neg),
+                                                sum(c.edges_measured for c in neg)],
     }
 
 
@@ -218,13 +240,17 @@ def decide(cases: list[CaseEval]) -> dict:
     else:
         generalizes = "does_not_generalize"
 
+    # M2b, as frozen: not validated if util fires on a healthy window; untestable only when series-
+    # identity coverage is ~0 (exactly: no named utilization sample — otel-fresh was 0/37282);
+    # validated iff a resource-fault positive is retained via util (the arm delta); else not validated.
     resource = [c for c in cases if c.positive and scenario_of(c.case_id) in RESOURCE_FAULT_SCENARIOS]
     healthy_util = sorted(c.case_id for c in cases if not c.positive and c.util_present)
+    coverage = identity_coverage(cases)["rate"]
     if healthy_util:
-        m2b = "not_validated"           # util PRESENT on a healthy window
-    elif not any(c.util_measured_for_cause for c in resource):
-        m2b = "untestable"              # no resource fault's cause has a measured util observable
-    elif any("util" in c.retained_via for c in resource):
+        m2b = "not_validated"
+    elif coverage is None or coverage == 0.0:
+        m2b = "untestable"
+    elif any(c.retained_by_util for c in resource):
         m2b = "validated"
     else:
         m2b = "not_validated"
@@ -240,7 +266,11 @@ def decide(cases: list[CaseEval]) -> dict:
         "generalization": generalizes,
         "generalization_criteria": criteria,
         "m2b": m2b,
+        "m2b_identity_coverage": coverage,
         "m2b_resource_cases": {c.case_id: {"util_measured_for_cause": c.util_measured_for_cause,
+                                           "retained_M2a": c.retained("M2a"),
+                                           "retained_full": c.retained(FULL_ARM),
+                                           "retained_by_util": c.retained_by_util,
                                            "retained_via": list(c.retained_via)} for c in resource},
         "m2b_healthy_util_present": healthy_util,
         "protocol_deviations": deviations,
@@ -258,7 +288,8 @@ def build_m3_report(cases: list[CaseEval]) -> dict:
              "cause_has_telemetry": c.cause_has_telemetry,
              "arms": {a: {"outcome": r.outcome, "localization": list(r.localization),
                           "retained": c.retained(a)} for a, r in c.arms.items()},
-             "retained_via": list(c.retained_via), "util_present": list(c.util_present)}
+             "retained_via": list(c.retained_via), "retained_by_util": c.retained_by_util,
+             "util_present": list(c.util_present)}
             for c in cases
         ],
     }
@@ -290,7 +321,8 @@ def render_markdown(report: dict, *, provenance: dict) -> str:
         ("truth retained (cause has telemetry)", lambda a: _frac(a["truth_retained_cause_has_telemetry"])),
         ("median candidates", lambda a: str(a["median_candidates"])),
         ("median candidate fraction", lambda a: _num(a["median_candidate_fraction"])),
-        ("healthy abstention", lambda a: _frac(a["healthy_abstained"])),
+        ("healthy abstention (no hypothesis)", lambda a: _frac(a["healthy_abstained"])),
+        ("healthy no localization claim", lambda a: _frac(a["healthy_no_claim"])),
         ("IDENTIFIED precision", lambda a: f"{a['identified_precision'][0]}/{a['identified_precision'][1]}"),
         ("IDENTIFIED on healthy", lambda a: str(a["identified_on_healthy"])),
         ("outcomes", lambda a: ", ".join(f"{k}={n}" for k, n in a["outcomes"].items())),
@@ -300,15 +332,19 @@ def render_markdown(report: dict, *, provenance: dict) -> str:
     es, ic = report["edge_specificity"], report["identity_coverage"]
     lines += [
         "",
-        f"- Edge specificity (healthy): windows with a PRESENT edge "
-        f"{_frac(es['healthy_windows_with_present_edge'])}; PRESENT/measured edges "
-        f"{_frac(es['healthy_present_over_measured_edges'])}; latency-only "
-        f"{_frac(es['healthy_present_edges_latency_only'])}",
+        f"- Edge specificity (healthy), latency >= 2x: windows "
+        f"{_frac(es['healthy_windows_with_latency_high_edge'])}, edges "
+        f"{_frac(es['healthy_latency_high_over_latency_measured_edges'])} of latency-measured; error "
+        f"branch: windows {_frac(es['healthy_windows_with_error_present_edge'])}; any PRESENT edge: windows "
+        f"{_frac(es['healthy_windows_with_present_edge'])}, edges "
+        f"{_frac(es['healthy_present_over_measured_edges'])} of measured",
         f"- Series-identity coverage: {ic['named_instance']}/{ic['util_samples']} utilization samples name "
         f"their instance ({_num(ic['rate'])})",
         "",
-        "| case | cause | " + " | ".join(ARMS) + " | retained via | util PRESENT |",
-        "|---|---|" + "---|" * len(ARMS) + "---|---|",
+        "Unobservable = no telemetry from the cause service at all; listed as such, not a model failure.",
+        "",
+        "| case | cause | cause telemetry | " + " | ".join(ARMS) + " | witnessed by | util PRESENT |",
+        "|---|---|---|" + "---|" * len(ARMS) + "---|---|",
     ]
     for c in report["cases"]:
         cells = []
@@ -316,6 +352,8 @@ def render_markdown(report: dict, *, provenance: dict) -> str:
             r = c["arms"][arm]
             mark = ("✓ " if r["retained"] else "✗ ") if c["positive"] else ""
             cells.append(f"{mark}{r['outcome']} ({len(r['localization'])})")
-        lines.append(f"| {c['id']} | {c['cause'] or '—'} | " + " | ".join(cells)
-                     + f" | {', '.join(c['retained_via']) or '—'} | {', '.join(c['util_present']) or '—'} |")
+        tel = "—" if not c["positive"] else ("yes" if c["cause_has_telemetry"] else "**UNOBSERVABLE**")
+        via = ", ".join(c["retained_via"]) + (" (util retained it)" if c["retained_by_util"] else "")
+        lines.append(f"| {c['id']} | {c['cause'] or '—'} | {tel} | " + " | ".join(cells)
+                     + f" | {via or '—'} | {', '.join(c['util_present']) or '—'} |")
     return "\n".join(lines) + "\n"
