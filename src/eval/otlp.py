@@ -39,6 +39,24 @@ def _service(resource: dict) -> Optional[str]:
     return _attr((resource or {}).get("attributes"), "service.name")
 
 
+def _attr_value(v: dict):
+    for k in ("stringValue", "stringvalue", "intValue", "intvalue", "doubleValue", "doublevalue",
+              "boolValue", "boolvalue"):
+        if k in v:
+            return str(v[k])
+    return None
+
+
+def _attrs(attributes) -> dict[str, str]:
+    """Flatten an OTLP attribute list to ``{key: str(value)}`` (scalar values only)."""
+    out: dict[str, str] = {}
+    for a in attributes or []:
+        key, val = a.get("key"), _attr_value(a.get("value") or {})
+        if key and val is not None:
+            out[key] = val
+    return out
+
+
 def _dt(unix_nano: object) -> Optional[datetime]:
     """OTLP timestamps are unsigned nanoseconds since epoch (JSON strings)."""
     if unix_nano is None:
@@ -119,6 +137,7 @@ def parse_otlp_metrics(objs: list[dict], window: Window = None) -> list[ParsedMe
     for obj in objs:
         for rm in obj.get("resourceMetrics") or []:
             service = _service(rm.get("resource") or {})
+            instance = _attr((rm.get("resource") or {}).get("attributes"), "service.instance.id")
             for sm in rm.get("scopeMetrics") or []:
                 for metric in sm.get("metrics") or []:
                     name = metric.get("name")
@@ -132,8 +151,16 @@ def parse_otlp_metrics(objs: list[dict], window: Window = None) -> list[ParsedMe
                         value = float(dp["count"]) if mtype == "histogram" and dp.get("count") is not None else _num(dp)
                         if value is None:
                             continue
+                        # Series identity (#209 M2b): the datapoint attributes (e.g. cpu.mode,
+                        # system.memory.state) plus the reporting instance. Always a dict for
+                        # OTLP-derived samples — {} means "this datapoint had no attributes",
+                        # which is different from a source that never recorded them (None).
+                        series = _attrs(dp.get("attributes"))
+                        if instance:
+                            series["service.instance.id"] = instance
                         samples.append(ParsedMetricSample(
-                            service=service, metric=name, value=value, ts=ts, metric_type=mtype
+                            service=service, metric=name, value=value, ts=ts, metric_type=mtype,
+                            attributes=series,
                         ))
     return samples
 

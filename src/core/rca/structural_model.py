@@ -19,6 +19,7 @@ Two deliberate soundness choices (see H2, #186):
 """
 from __future__ import annotations
 
+import json
 import math
 import statistics
 from collections import Counter, defaultdict
@@ -403,13 +404,16 @@ _SELF_TELEMETRY_PREFIXES = ("otel.sdk.", "otelcol")
 
 
 def util_metric_class(metric: Optional[str]) -> Optional[tuple[str, str]]:
-    """Classify a metric by OpenTelemetry semantic-convention **name shape** (never by names picked from
-    a corpus). Returns ``(resource, kind)`` or ``None``:
+    """Map a metric name to ``(resource, required_instrument)`` by OpenTelemetry semantic-convention
+    **name shape**, or ``None``. The name only says *which resource* the metric is about and *which
+    instrument it must be* for the reducer to apply; whether it actually **is** that instrument is read
+    from the sample's ``metric_type``, never inferred from the name:
 
-    * a utilization **gauge** — last dotted segment ends in ``utilization``; the resource is the segment
-      before it (``jvm.cpu.recent_utilization`` → ``cpu``, ``nodejs.eventloop.utilization`` →
-      ``eventloop``, ``system.memory.utilization`` → ``memory``);
-    * a cumulative **CPU-time counter** — name ends ``.cpu.time`` (semconv seconds); resource ``cpu``.
+    * last dotted segment ends in ``utilization`` → the preceding segment is the resource
+      (``jvm.cpu.recent_utilization`` → ``cpu``, ``nodejs.eventloop.utilization`` → ``eventloop``,
+      ``system.memory.utilization`` → ``memory``); required instrument ``"gauge"``;
+    * name ends ``.cpu.time`` → resource ``cpu``; required instrument ``"counter"`` (a cumulative
+      monotonic sum).
 
     Collector/SDK self-telemetry (``otel.sdk.*``, ``otelcol*``) is excluded: it measures the telemetry
     pipeline, not the service, and moves whenever a service simply emits more spans."""
@@ -419,7 +423,7 @@ def util_metric_class(metric: Optional[str]) -> Optional[tuple[str, str]]:
     if len(parts) >= 2 and parts[-1].endswith("utilization"):
         return parts[-2], "gauge"
     if metric.endswith(".cpu.time"):
-        return "cpu", "cpu_time"
+        return "cpu", "counter"
     return None
 
 
@@ -430,57 +434,75 @@ def _counter_rate(points: list[tuple[datetime, float]]) -> Optional[float]:
     return (points[-1][1] - points[0][1]) / dt if dt > 0 else None
 
 
+def _series_key(attributes) -> Optional[str]:
+    """Canonical series identity of a sample, or ``None`` when the source never recorded it."""
+    if attributes is None:
+        return None
+    return json.dumps(attributes, sort_keys=True, default=str)
+
+
+def _instrument(metric_type: Optional[str]) -> str:
+    """``MetricSample`` convention: a null ``metric_type`` is a gauge."""
+    return metric_type or "gauge"
+
+
 def summarize_utilization(samples: list, window_start: datetime) -> dict[tuple[str, str], UtilSignal]:
     """Per ``(service, resource)`` utilization observable from metric-sample records (#209 M2b), duck-typed
-    on ``service`` / ``metric`` / ``value`` / ``ts``.
+    on ``service`` / ``metric`` / ``value`` / ``ts`` / ``metric_type`` / ``attributes``.
 
-    Per metric (only classes recognized by :func:`util_metric_class`; unattributed ``service=None``
-    samples contribute nothing):
+    **A measurement requires one verified series.** A metric's samples form a series only when the
+    source recorded series identity (``attributes`` — datapoint attributes such as ``cpu.mode`` plus
+    the reporting instance). A metric is **measured only if** every one of its samples carries identity,
+    they all belong to **exactly one** series, no two samples share a timestamp, and the declared
+    instrument (``metric_type``) is the one the reducer requires. Otherwise it is UNKNOWN:
 
-    * **gauge** — incident mean / baseline mean; measured iff both windows have samples, every raw value
-      is finite and ≥ 0, and the baseline mean is > 0 (a malformed sample leaves the metric unmeasured,
-      never averaged into false-normal evidence — as in :func:`summarize_metrics`).
-    * **cpu_time** — incident rate / baseline rate, rate = (last − first) / Δt. Measured **only for a
-      verifiably single-series, monotonic stream**: at most one sample per timestamp and never decreasing
-      across the whole load. A converter that flattened attribute dimensions interleaves several
-      cumulative series (e.g. ``state=user``/``system``) into one stream, and a rate over that is
-      meaningless — so such a stream is UNKNOWN, not guessed.
+    * no identity — the samples cannot be told apart, so a per-state instrument
+      (``system.cpu.utilization`` per ``cpu.mode``, ``system.memory.utilization`` per state) or several
+      reporting instances would be averaged (or, after a lossy ingest, reduced to whichever row landed
+      first) into a number that is not one resource's utilization — never emitted as ABSENT;
+    * several series — there are no per-mode semantics yet, so the reducer neither averages nor picks;
+    * wrong instrument — a ``*.cpu.time`` that is not declared a cumulative counter is not rated.
 
-    A metric is PRESENT if its ratio ≥ 2× (``discretize_ratio`` HIGH), ABSENT if measured and below,
-    else UNKNOWN. The ``(service, resource)`` signal takes the witness: PRESENT if any metric of that
-    class is PRESENT, else ABSENT if any is measured-normal, else UNKNOWN. A utilization *drop* is ABSENT
-    (not saturated), not an anomaly."""
-    series: dict[tuple[str, str], dict[str, list[tuple[datetime, float]]]] = defaultdict(
-        lambda: {"b": [], "i": []}
-    )
-    invalid: set[tuple[str, str]] = set()
+    Reducers: a **gauge** compares incident mean / baseline mean (periodic aggregates; every raw value
+    finite and ≥ 0, baseline mean > 0); a **counter** compares incident rate / baseline rate, and a
+    decrease inside the series is a **reset**, so that series is UNKNOWN. Unattributed samples
+    (``service`` None) and self-telemetry contribute nothing.
+
+    Per metric: PRESENT if ratio ≥ 2× (``discretize_ratio`` HIGH), ABSENT if measured and below, else
+    UNKNOWN. The ``(service, resource)`` signal takes the witness (PRESENT > ABSENT > UNKNOWN). A
+    utilization *drop* is ABSENT (not saturated), not an anomaly."""
+    groups: dict[tuple[str, str], list] = defaultdict(list)
     for s in samples:
-        svc, metric, value, ts = (getattr(s, "service", None), getattr(s, "metric", None),
-                                  getattr(s, "value", None), getattr(s, "ts", None))
-        if svc is None or value is None or ts is None or util_metric_class(metric) is None:
+        svc, metric = getattr(s, "service", None), getattr(s, "metric", None)
+        if svc is None or getattr(s, "value", None) is None or getattr(s, "ts", None) is None:
             continue
-        key = (svc, metric)
-        v = float(value)
-        if not math.isfinite(v) or v < 0:
-            invalid.add(key)
+        if util_metric_class(metric) is None:
             continue
-        series[key]["i" if ts >= window_start else "b"].append((ts, v))
+        groups[(svc, metric)].append(s)
 
     per_class: dict[tuple[str, str], list[tuple[Optional[str], float, bool]]] = defaultdict(list)
-    for (svc, metric), d in series.items():
-        resource, kind = util_metric_class(metric)
+    for (svc, metric), rows in groups.items():
+        resource, required = util_metric_class(metric)
+        keys = {_series_key(getattr(r, "attributes", None)) for r in rows}
+        values = [(r.ts, float(r.value)) for r in rows]
+        single_series = None not in keys and len(keys) == 1
+        distinct_ts = len({t for t, _ in values}) == len(values)
+        right_instrument = all(_instrument(getattr(r, "metric_type", None)) == required for r in rows)
+        well_formed = all(math.isfinite(v) and v >= 0 for _, v in values)
+        base = sorted(p for p in values if p[0] < window_start)
+        inc = sorted(p for p in values if p[0] >= window_start)
+
         ratio, measured = 1.0, False
-        if (svc, metric) not in invalid and d["b"] and d["i"]:
-            if kind == "gauge":
-                base = _mean([v for _, v in d["b"]])
-                if base > 0:
-                    ratio, measured = _mean([v for _, v in d["i"]]) / base, True
-            else:  # cpu_time: single-series + monotonic, or UNKNOWN
-                pts = sorted(d["b"] + d["i"])
-                single = len({t for t, _ in pts}) == len(pts)
-                monotonic = all(b >= a for (_, a), (_, b) in zip(pts, pts[1:]))
-                rb, ri = _counter_rate(sorted(d["b"])), _counter_rate(sorted(d["i"]))
-                if single and monotonic and rb is not None and rb > 0 and ri is not None:
+        if single_series and distinct_ts and right_instrument and well_formed and base and inc:
+            if required == "gauge":
+                bmean = _mean([v for _, v in base])
+                if bmean > 0:
+                    ratio, measured = _mean([v for _, v in inc]) / bmean, True
+            else:
+                pts = sorted(values)
+                no_reset = all(b >= a for (_, a), (_, b) in zip(pts, pts[1:]))
+                rb, ri = _counter_rate(base), _counter_rate(inc)
+                if no_reset and rb is not None and rb > 0 and ri is not None:
                     ratio, measured = ri / rb, True
         if not measured:
             state: Optional[str] = None
