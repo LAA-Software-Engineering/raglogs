@@ -13,6 +13,12 @@ Prereqs (see docs/eval-otel-demo.md and deploy/otel-demo/): the OTel Demo runnin
 with flagd reachable at --flagd-url and its Collector writing OTLP-JSON to
 --otlp-dir (logs.json / traces.json / metrics.json).
 
+`--chaos` mutates a cluster (`kubectl apply/delete`), so it never uses the kubeconfig's
+current context: a real chaos run requires an explicit `--kube-context`, refuses any
+context whose name, cluster or API server looks like production (prod / prd / live),
+and passes `--context` to every kubectl call. A non-prod context that merely contains
+one of those markers can be let through with `--allow-context <exact same name>`.
+
 Real runs are serial and slow — each case waits `baseline + post` seconds for its
 windows to accrue (≈15 min/case at the 300/600 defaults). Use --dry-run first to
 validate wiring and case emission without a cluster (no HTTP, no waiting).
@@ -20,12 +26,12 @@ validate wiring and case emission without a cluster (no HTTP, no waiting).
 from __future__ import annotations
 
 import argparse
+import json
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-
-import subprocess
 
 from src.eval.otel_demo import (
     CHAOS_SCENARIOS,
@@ -83,13 +89,67 @@ def _export_reset(otlp_dir: Path):
     return reset
 
 
-def _kubectl_chaos_hooks(chaos_dir: Path):
-    """apply/delete a Chaos Mesh experiment via `kubectl` from a per-scenario
-    manifest (deploy/otel-demo/chaos/<scenario.name>.yaml)."""
+# Substrings that mark a kube context, its cluster or its API server as production. Fail closed:
+# a non-prod context that merely contains one (e.g. "delivery-dev") needs --allow-context.
+_PROD_MARKERS = ("prod", "prd", "live")
+
+
+class KubeContextRefused(Exception):
+    """The capture will not run kubectl against this target."""
+
+
+def _kube_context_facts(context: str) -> tuple[str, str] | None:
+    """(cluster name, API server) that ``context`` points at in the local kubeconfig, or None
+    if no such context exists. Read-only: ``kubectl config view`` never contacts a cluster."""
+    try:
+        out = subprocess.run(["kubectl", "config", "view", "-o", "json"],
+                             capture_output=True, text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise KubeContextRefused(f"cannot read kubeconfig: {exc}") from exc
+    cfg = json.loads(out or "{}")
+    ctx = next((c for c in cfg.get("contexts") or [] if c.get("name") == context), None)
+    if ctx is None:
+        return None
+    cluster = (ctx.get("context") or {}).get("cluster") or ""
+    server = next(((c.get("cluster") or {}).get("server") or ""
+                   for c in cfg.get("clusters") or [] if c.get("name") == cluster), "")
+    return cluster, server
+
+
+def resolve_kube_context(context: str | None, allow: str | None, facts=_kube_context_facts) -> str:
+    """The kube context a mutating capture may target, or raise KubeContextRefused.
+
+    There is no implicit fallback to the kubeconfig's current context: the target must be named.
+    It must exist, and neither its name, its cluster nor its API server may carry a production
+    marker — unless ``allow`` repeats the exact same context name (an affirmative override for a
+    non-prod context whose name happens to match)."""
+    if not context:
+        raise KubeContextRefused("--kube-context is required: a chaos capture never uses the current context")
+    if allow is not None and allow != context:
+        raise KubeContextRefused(f"--allow-context {allow!r} does not match --kube-context {context!r}")
+    found = facts(context)
+    if found is None:
+        raise KubeContextRefused(f"kube context {context!r} is not in the kubeconfig")
+    cluster, server = found
+    hits = sorted({m for name in (context, cluster, server) for m in _PROD_MARKERS if m in name.lower()})
+    if hits and allow != context:
+        raise KubeContextRefused(
+            f"kube context {context!r} (cluster {cluster!r}, server {server!r}) looks like production "
+            f"({', '.join(hits)}); if it is not, pass --allow-context {context}")
+    print(f"kube target: context={context} cluster={cluster} server={server}"
+          + (" (allowed by --allow-context)" if hits else ""), flush=True)
+    return context
+
+
+def _kubectl_chaos_hooks(chaos_dir: Path, context: str):
+    """apply/delete a Chaos Mesh experiment via `kubectl --context <context>` from a per-scenario
+    manifest (deploy/otel-demo/chaos/<scenario.name>.yaml). ``context`` comes from
+    ``resolve_kube_context``; every call names it, so the current context is never used."""
     def _run(verb: str, sc, extra=()):
         manifest = chaos_dir / f"{sc.name}.yaml"
-        subprocess.run(["kubectl", verb, "-f", str(manifest), *extra], check=(verb == "apply"))
-        print(f"    kubectl {verb}: {sc.kind}={sc.name}", flush=True)
+        subprocess.run(["kubectl", "--context", context, verb, "-f", str(manifest), *extra],
+                       check=(verb == "apply"))
+        print(f"    kubectl --context {context} {verb}: {sc.kind}={sc.name}", flush=True)
 
     return (lambda sc: _run("apply", sc)), (lambda sc: _run("delete", sc, ("--ignore-not-found",)))
 
@@ -118,12 +178,23 @@ def main() -> int:
                     help="generate Chaos-Mesh infra-fault cases (kubectl apply/delete); needs k8s")
     ap.add_argument("--chaos-dir", type=Path, default=Path("deploy/otel-demo/chaos"),
                     help="dir of Chaos-Mesh manifests, one per scenario name")
+    ap.add_argument("--kube-context", default=None,
+                    help="kube context a real --chaos run targets (required; the current context is never used)")
+    ap.add_argument("--allow-context", default=None,
+                    help="exact --kube-context name to allow even though it matches a prod/live marker")
     ap.add_argument("--dry-run", action="store_true", help="no cluster: validate the loop + case emission")
     args = ap.parse_args()
 
     if not args.dry_run and args.otlp_dir is None:
         print("--otlp-dir is required unless --dry-run", file=sys.stderr)
         return 2
+    context = None
+    if args.chaos and not args.dry_run:
+        try:
+            context = resolve_kube_context(args.kube_context, args.allow_context)
+        except KubeContextRefused as exc:
+            print(f"refusing to run chaos: {exc}", file=sys.stderr)
+            return 2
 
     capture = _dry_capture if args.dry_run else capture_from_otlp_dir(args.otlp_dir)
     sleep = (lambda _s: None) if args.dry_run else time.sleep
@@ -136,7 +207,8 @@ def main() -> int:
     # Chaos-Mesh infra faults (k8s + Chaos Mesh) — a separate mode from the
     # flag/negative corpus. Reads deploy/otel-demo/chaos/<scenario>.yaml.
     if args.chaos:
-        apply_chaos, delete_chaos = _dry_chaos_hooks() if args.dry_run else _kubectl_chaos_hooks(args.chaos_dir)
+        apply_chaos, delete_chaos = (_dry_chaos_hooks() if args.dry_run
+                                     else _kubectl_chaos_hooks(args.chaos_dir, context))
         for sc in CHAOS_SCENARIOS:
             case_id = f"otel_chaos_{sc.name}"
             print(f"[{len(written)+1}] chaos {sc.kind}={sc.name} ({sc.service})", flush=True)
