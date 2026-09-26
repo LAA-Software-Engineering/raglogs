@@ -146,7 +146,8 @@ def _metric_onsets(db: Session, scope: str, window_start: datetime, window_end: 
 
     lookback = window_end - window_start
     rows = db.execute(
-        select(MetricSample.service, MetricSample.metric, MetricSample.value, MetricSample.ts).where(
+        select(MetricSample.service, MetricSample.metric, MetricSample.value, MetricSample.ts,
+               MetricSample.attributes).where(
             MetricSample.scope == scope,
             MetricSample.ts >= window_start - lookback,
             MetricSample.ts <= window_end,

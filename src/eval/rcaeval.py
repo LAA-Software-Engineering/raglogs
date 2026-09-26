@@ -387,6 +387,11 @@ def _metric_to_jsonl(m) -> dict:
     mtype = getattr(m, "metric_type", None)
     if mtype is not None:
         d["metric_type"] = mtype
+    # Series identity (#209 M2b): only emitted when the source recorded it, so identity-less
+    # sources stay byte-identical and a loaded sample never pretends to have identity it lacks.
+    attrs = getattr(m, "attributes", None)
+    if attrs is not None:
+        d["attributes"] = attrs
     return d
 
 
@@ -434,6 +439,7 @@ def load_metrics_jsonl(path: Path) -> list:
                 value=d.get("value"),
                 ts=datetime.fromisoformat(ts) if ts else None,
                 metric_type=d.get("metric_type"),
+                attributes=d.get("attributes"),
             ))
     return samples
 

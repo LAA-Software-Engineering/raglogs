@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 from src.core.ingestion.telemetry import ParsedMetricSample, ParsedSpan
+from src.core.rca.metric_series import instance_attributes
 from src.eval.rcaeval import _infer_level
 
 Window = Optional[tuple[datetime, datetime]]
@@ -37,6 +38,24 @@ def _attr(attributes, key: str) -> Optional[str]:
 
 def _service(resource: dict) -> Optional[str]:
     return _attr((resource or {}).get("attributes"), "service.name")
+
+
+def _attr_value(v: dict):
+    for k in ("stringValue", "stringvalue", "intValue", "intvalue", "doubleValue", "doublevalue",
+              "boolValue", "boolvalue"):
+        if k in v:
+            return str(v[k])
+    return None
+
+
+def _attrs(attributes) -> dict[str, str]:
+    """Flatten an OTLP attribute list to ``{key: str(value)}`` (scalar values only)."""
+    out: dict[str, str] = {}
+    for a in attributes or []:
+        key, val = a.get("key"), _attr_value(a.get("value") or {})
+        if key and val is not None:
+            out[key] = val
+    return out
 
 
 def _dt(unix_nano: object) -> Optional[datetime]:
@@ -119,6 +138,7 @@ def parse_otlp_metrics(objs: list[dict], window: Window = None) -> list[ParsedMe
     for obj in objs:
         for rm in obj.get("resourceMetrics") or []:
             service = _service(rm.get("resource") or {})
+            instance = instance_attributes(_attrs((rm.get("resource") or {}).get("attributes")))
             for sm in rm.get("scopeMetrics") or []:
                 for metric in sm.get("metrics") or []:
                     name = metric.get("name")
@@ -132,8 +152,15 @@ def parse_otlp_metrics(objs: list[dict], window: Window = None) -> list[ParsedMe
                         value = float(dp["count"]) if mtype == "histogram" and dp.get("count") is not None else _num(dp)
                         if value is None:
                             continue
+                        # Series identity (#209 M2b): the datapoint attributes (e.g. cpu.mode,
+                        # system.memory.state) plus whichever resource attributes name the
+                        # reporting instance (see metric_series). Always a dict for OTLP-derived
+                        # samples; None is reserved for sources that never recorded identity. A
+                        # dict with no instance attribute ({} included) is NOT a verified series.
+                        series = {**_attrs(dp.get("attributes")), **instance}
                         samples.append(ParsedMetricSample(
-                            service=service, metric=name, value=value, ts=ts, metric_type=mtype
+                            service=service, metric=name, value=value, ts=ts, metric_type=mtype,
+                            attributes=series,
                         ))
     return samples
 

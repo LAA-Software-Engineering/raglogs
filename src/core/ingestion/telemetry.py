@@ -13,6 +13,7 @@ without adding a unique index.
 """
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -62,8 +63,16 @@ def span_pk(scope: str, s: ParsedSpan) -> uuid.UUID:
 
 
 def metric_pk(scope: str, m: ParsedMetricSample) -> uuid.UUID:
-    """Deterministic id for a metric sample — (scope, service, metric, ts)."""
+    """Deterministic id for a metric sample — (scope, service, metric, ts[, series attributes]).
+
+    When the source recorded series identity (``attributes`` is a dict — datapoint attributes such as
+    ``cpu.mode`` plus the reporting ``service.instance.id``), it is part of the key, so two series of
+    one metric sampled at the same timestamp are two rows rather than one silently dropped on
+    conflict. Sources without series identity (``attributes`` None) keep the original key, so their
+    idempotent re-ingest is unchanged."""
     key = f"{scope}|{m.service}|{m.metric}|{m.ts}"
+    if m.attributes is not None:
+        key += "|" + json.dumps(m.attributes, sort_keys=True, default=str)
     return uuid.uuid5(_NS, key)
 
 

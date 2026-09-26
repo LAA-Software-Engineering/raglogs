@@ -133,16 +133,29 @@ def metric_anomaly_onsets(
     rel_threshold: float = 0.5,
     max_candidates: int = 5,
 ) -> list[AnomalyOnset]:
-    """Earliest per-(service, metric) deviation from baseline, as onset candidates.
+    """At most one onset per ``(service, metric)``, as trigger candidates.
 
     ``samples`` are duck-typed rows with ``service`` / ``metric`` / ``value`` /
-    ``ts``. Baseline = points with ``ts < incident_start`` (needs ``min_baseline``
+    ``ts`` (and optionally ``attributes``). Detection runs **per series** —
+    ``(service, metric, series_key(attributes))`` (#209 M2b) — so several series of
+    one instrument (per ``cpu.mode``, per replica, …) are never averaged into a flat
+    line; samples without recorded identity form one series per ``(service, metric)``,
+    as before. Baseline = points with ``ts < incident_start`` (needs ``min_baseline``
     of them); a point in ``[incident_start, incident_end]`` is anomalous when it is
     more than ``z_threshold`` baseline sigmas from the baseline mean, or — when the
     baseline is flat (sigma ~ 0) — more than ``rel_threshold`` of |mean| away. The
-    earliest anomalous point per series is its onset; ranked by earliness x
-    magnitude. This surfaces the injection time on faults that never log.
+    earliest anomalous point per series is that series' onset, scored by earliness x
+    magnitude.
+
+    The candidate is then **one per (service, metric)**: its strongest series (highest
+    score — the max, never a mean). An onset carries only service and metric, so
+    several series of one instrument would otherwise be indistinguishable copies that
+    spend the whole ``max_candidates`` budget (eight ``cpu.mode`` series of
+    ``system.cpu.utilization``) and push a different instrument off the list. This
+    surfaces the injection time on faults that never log.
     """
+    from src.core.rca.metric_series import series_key
+
     baseline: dict[tuple, list[float]] = {}
     incident: dict[tuple, list[tuple[datetime, float]]] = {}
     for m in samples:
@@ -152,7 +165,7 @@ def metric_anomaly_onsets(
         value = getattr(m, "value", None)
         if metric is None or ts is None or value is None:
             continue
-        key = (service, metric)
+        key = (service, metric, series_key(getattr(m, "attributes", None)))
         if ts < incident_start:
             baseline.setdefault(key, []).append(float(value))
         elif incident_start <= ts <= incident_end:
@@ -182,5 +195,12 @@ def metric_anomaly_onsets(
                 ))
                 break  # earliest anomalous point per series is the onset
 
-    onsets.sort(key=lambda o: (-o.score, _epoch(o.onset)))
-    return onsets[:max_candidates]
+    # One candidate per (service, metric): keep the strongest series' onset.
+    best: dict[tuple, AnomalyOnset] = {}
+    for o in onsets:
+        k = (o.service, o.metric)
+        cur = best.get(k)
+        if cur is None or (-o.score, _epoch(o.onset)) < (-cur.score, _epoch(cur.onset)):
+            best[k] = o
+    ranked = sorted(best.values(), key=lambda o: (-o.score, _epoch(o.onset)))
+    return ranked[:max_candidates]

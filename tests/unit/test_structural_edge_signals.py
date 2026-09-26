@@ -148,13 +148,13 @@ class TestUnreachableCalleeEndToEnd:
         return spans
 
     def test_m2a_retains_the_unreachable_callee(self):
-        signals, edges, edge_signals = structural_signals(self._spans(), [], _W)
+        signals, edges, edge_signals, _ = structural_signals(self._spans(), [], _W)
         assert "payment" not in {c for _, c in edges}  # no incident payment span -> not in call graph
         res = resolve(partition(build_hypotheses(signals, edges, edge_signals),
                                 build_observables(signals, edge_signals)))
         assert "payment" in res.localization
 
     def test_m1_model_alone_cannot(self):
-        signals, edges, _ = structural_signals(self._spans(), [], _W)
+        signals, edges, _, _ = structural_signals(self._spans(), [], _W)
         hyps = build_hypotheses(signals, edges)  # no edge signals = the M1 model
         assert "payment" not in {h.localization for h in hyps}
