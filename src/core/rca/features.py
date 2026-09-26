@@ -301,17 +301,24 @@ def trace_symptoms(
 def metric_features(
     samples, baseline_start: datetime, incident_start: datetime, incident_end: datetime
 ) -> dict[str, float]:
-    """Per service, the max over its metrics of the incident-vs-baseline mean
-    change ratio. ``samples`` have ``service`` / ``metric`` / ``value`` / ``ts``."""
-    base: dict[tuple[str, str], list[float]] = defaultdict(list)
-    inc: dict[tuple[str, str], list[float]] = defaultdict(list)
+    """Per service, the max over its metric **series** of the incident-vs-baseline mean change ratio.
+    ``samples`` have ``service`` / ``metric`` / ``value`` / ``ts`` (and optionally ``attributes``).
+
+    A series is ``(service, metric, series_key(attributes))`` (#209 M2b): an instrument that emits
+    several series (per ``cpu.mode``, per replica, …) is reduced per series, never averaged into a
+    number that describes none of them. Samples without recorded identity form one group per
+    ``(service, metric)``, exactly as before identity existed."""
+    from src.core.rca.metric_series import series_key
+
+    base: dict[tuple, list[float]] = defaultdict(list)
+    inc: dict[tuple, list[float]] = defaultdict(list)
     for m in samples:
         s = m.service
         ts = m.ts
         v = m.value
         if not s or ts is None or v is None:
             continue
-        key = (s, m.metric)
+        key = (s, m.metric, series_key(getattr(m, "attributes", None)))
         if baseline_start <= ts < incident_start:
             base[key].append(float(v))
         elif incident_start <= ts <= incident_end:

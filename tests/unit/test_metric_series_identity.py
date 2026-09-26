@@ -38,10 +38,24 @@ class TestConverterRecordsSeriesIdentity:
         ]
         assert {s.metric_type for s in samples} == {"gauge"}
 
-    def test_attribute_free_datapoint_still_records_identity(self):
+    def test_attribute_free_datapoint_without_an_instance_is_recorded_but_unverified(self):
+        from src.core.rca.metric_series import instance_identity
         metric = {"name": "jvm.cpu.recent_utilization", "gauge": {"dataPoints": [_dp(0.5)]}}
         (s,) = parse_otlp_metrics(_otlp(metric, instance=None))
-        assert s.attributes == {}  # "this datapoint had no attributes" — not None ("never recorded")
+        assert s.attributes == {}                   # identity recorded (not None) ...
+        assert instance_identity(s.attributes) is None  # ... but it names no instance: not verified
+
+    def test_every_semconv_instance_attribute_is_recorded(self):
+        metric = {"name": "jvm.cpu.recent_utilization", "gauge": {"dataPoints": [_dp(0.5)]}}
+        objs = _otlp(metric, instance=None)
+        objs[0]["resourceMetrics"][0]["resource"]["attributes"] += [
+            {"key": "container.id", "value": {"stringValue": "c1"}},
+            {"key": "host.name", "value": {"stringValue": "h"}},
+            {"key": "process.pid", "value": {"intValue": "42"}},
+            {"key": "deployment.environment", "value": {"stringValue": "prod"}},  # not an instance attr
+        ]
+        (s,) = parse_otlp_metrics(objs)
+        assert s.attributes == {"container.id": "c1", "host.name": "h", "process.pid": "42"}
 
     def test_cumulative_monotonic_sum_is_declared_a_counter(self):
         metric = {"name": "jvm.cpu.time",

@@ -90,11 +90,39 @@ class TestOneVerifiedSeriesGauge:
                    + _gauge("h", "system.memory.utilization", 0.7, 0.1, attributes={"system.memory.state": "free"}))
         assert _state(samples, ("h", "memory")) is None
 
-    def test_two_reporting_instances_are_unknown(self):
-        samples = (_gauge("ad", "jvm.cpu.recent_utilization", 0.01, 0.9, attributes={"service.instance.id": "a"})
-                   + _gauge("ad", "jvm.cpu.recent_utilization", 0.01, 0.02,
-                            attributes={"service.instance.id": "b"}, offset=3))
+    def test_replicas_without_a_named_instance_are_unknown(self):
+        # The reviewer's case: two replicas whose resource names no instance (identity {}), offset by
+        # 5s. Replica A 0.40->0.45, replica B 0.40->0.90: blended 0.40->0.675 (1.69x) would read as
+        # measured-normal while B is saturated. An unnamed instance is not a verified series -> UNKNOWN.
+        samples = (_gauge("ad", "jvm.cpu.recent_utilization", 0.40, 0.45, attributes={})
+                   + _gauge("ad", "jvm.cpu.recent_utilization", 0.40, 0.90, attributes={}, offset=5))
         assert _state(samples, ("ad", "cpu")) is None
+
+    def test_named_replicas_are_measured_per_instance(self):
+        a = {"service.instance.id": "a"}
+        b = {"service.instance.id": "b"}
+        calm_plus_pegged = (_gauge("ad", "jvm.cpu.recent_utilization", 0.40, 0.45, attributes=a)
+                            + _gauge("ad", "jvm.cpu.recent_utilization", 0.40, 0.90, attributes=b, offset=5))
+        assert _state(calm_plus_pegged, ("ad", "cpu")) == State.PRESENT  # replica B alone is 2.25x
+        both_calm = (_gauge("ad", "jvm.cpu.recent_utilization", 0.40, 0.45, attributes=a)
+                     + _gauge("ad", "jvm.cpu.recent_utilization", 0.40, 0.42, attributes=b, offset=5))
+        assert _state(both_calm, ("ad", "cpu")) == State.ABSENT
+
+    def test_absent_needs_every_replica_measured(self):
+        a = {"service.instance.id": "a"}
+        b = {"service.instance.id": "b"}
+        calm = _gauge("ad", "jvm.cpu.recent_utilization", 0.40, 0.45, attributes=a)
+        b_incident_only = [m for m in _gauge("ad", "jvm.cpu.recent_utilization", 0.4, 0.4, attributes=b, offset=5)
+                           if m.ts >= _W]
+        assert _state(calm + b_incident_only, ("ad", "cpu")) is None
+
+    def test_instance_can_be_named_by_any_semconv_instance_attribute(self):
+        for attrs in ({"k8s.pod.uid": "u1"}, {"container.id": "c1"}, {"host.name": "h", "process.pid": "7"}):
+            assert _state(_gauge("ad", "jvm.cpu.recent_utilization", 0.01, 0.9, attributes=attrs),
+                          ("ad", "cpu")) == State.PRESENT, attrs
+        # a host name alone repeats across processes on that host -> not an instance
+        assert _state(_gauge("ad", "jvm.cpu.recent_utilization", 0.01, 0.9, attributes={"host.name": "h"}),
+                      ("ad", "cpu")) is None
 
     def test_samples_without_series_identity_are_never_measured(self):
         assert _state(_gauge("ad", "jvm.cpu.recent_utilization", 0.01, 0.9, attributes=None), ("ad", "cpu")) is None

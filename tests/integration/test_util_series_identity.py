@@ -94,3 +94,47 @@ def test_identity_less_rows_are_never_measured(db_session):
     persist_metric_samples(db_session, _series("ad", "jvm.cpu.recent_utilization", 0.01, 0.9, None), scope=SCOPE)
     db_session.flush()
     assert build_structural_view(db_session, SCOPE, W, END, BASE) is None  # no evidence claimed
+
+
+def _replicas_without_instance(offset_s=5):
+    """Two replicas whose resource names no instance (identity {}), offset timestamps: A calm, B pegged."""
+    from src.core.ingestion.telemetry import ParsedMetricSample
+    out = []
+    for value_base, value_inc, off in ((0.40, 0.45, 0), (0.40, 0.90, offset_s)):
+        for i in range(1, 6):
+            out.append(ParsedMetricSample(service="ad", metric="jvm.cpu.recent_utilization", value=value_base,
+                                          ts=W - timedelta(seconds=30 * i - off), metric_type="gauge",
+                                          attributes={}))
+            out.append(ParsedMetricSample(service="ad", metric="jvm.cpu.recent_utilization", value=value_inc,
+                                          ts=W + timedelta(seconds=30 * i + off), metric_type="gauge",
+                                          attributes={}))
+    return out
+
+
+def test_replicas_without_a_named_instance_are_unknown_from_the_db(db_session):
+    from src.core.ingestion.telemetry import persist_metric_samples
+    from src.core.rca.structural_model import structural_signals
+
+    persist_metric_samples(db_session, _replicas_without_instance(), scope=SCOPE)
+    db_session.flush()
+    rows = _rows(db_session)
+    assert len(rows) == 20  # both replicas stored (distinct timestamps)
+    assert structural_signals([], rows, W).util_signals[("ad", "cpu")].sig_state is None
+
+
+def test_default_path_reducers_see_every_series_from_the_db(db_session):
+    """The trigger onsets and ranker features (default explain path) read the rows metric_pk now keeps
+    per series; they must reduce per series, not average cpu.mode idle/user into a flat 0.5."""
+    from src.core.explain.evidence import _metric_onsets
+    from src.core.ingestion.telemetry import persist_metric_samples
+    from src.core.rca.features import compute_features
+
+    inst = {"service.instance.id": "pod-1"}
+    persist_metric_samples(db_session, _series("host", "system.cpu.utilization", 0.9, 0.1, {"cpu.mode": "idle", **inst})
+                           + _series("host", "system.cpu.utilization", 0.1, 0.9, {"cpu.mode": "user", **inst}),
+                           scope=SCOPE)
+    db_session.flush()
+    onsets = _metric_onsets(db_session, SCOPE, W, END)
+    assert any(o.service == "host" and o.metric == "system.cpu.utilization" for o in onsets)
+    table = compute_features(db_session, SCOPE, incident_start=W, incident_end=END, baseline_start=BASE)
+    assert {f.service: f.met_anom for f in table.services}["host"] > 1.0

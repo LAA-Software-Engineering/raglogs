@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 from src.core.ingestion.telemetry import ParsedMetricSample, ParsedSpan
+from src.core.rca.metric_series import instance_attributes
 from src.eval.rcaeval import _infer_level
 
 Window = Optional[tuple[datetime, datetime]]
@@ -137,7 +138,7 @@ def parse_otlp_metrics(objs: list[dict], window: Window = None) -> list[ParsedMe
     for obj in objs:
         for rm in obj.get("resourceMetrics") or []:
             service = _service(rm.get("resource") or {})
-            instance = _attr((rm.get("resource") or {}).get("attributes"), "service.instance.id")
+            instance = instance_attributes(_attrs((rm.get("resource") or {}).get("attributes")))
             for sm in rm.get("scopeMetrics") or []:
                 for metric in sm.get("metrics") or []:
                     name = metric.get("name")
@@ -152,12 +153,11 @@ def parse_otlp_metrics(objs: list[dict], window: Window = None) -> list[ParsedMe
                         if value is None:
                             continue
                         # Series identity (#209 M2b): the datapoint attributes (e.g. cpu.mode,
-                        # system.memory.state) plus the reporting instance. Always a dict for
-                        # OTLP-derived samples — {} means "this datapoint had no attributes",
-                        # which is different from a source that never recorded them (None).
-                        series = _attrs(dp.get("attributes"))
-                        if instance:
-                            series["service.instance.id"] = instance
+                        # system.memory.state) plus whichever resource attributes name the
+                        # reporting instance (see metric_series). Always a dict for OTLP-derived
+                        # samples; None is reserved for sources that never recorded identity. A
+                        # dict with no instance attribute ({} included) is NOT a verified series.
+                        series = {**_attrs(dp.get("attributes")), **instance}
                         samples.append(ParsedMetricSample(
                             service=service, metric=name, value=value, ts=ts, metric_type=mtype,
                             attributes=series,

@@ -19,7 +19,6 @@ Two deliberate soundness choices (see H2, #186):
 """
 from __future__ import annotations
 
-import json
 import math
 import statistics
 from collections import Counter, defaultdict
@@ -93,14 +92,22 @@ def summarize_metrics(samples: list, window_start: datetime) -> dict[str, Servic
     ``error_rate`` exists; a latency branch only when both incident **and** baseline ``latency_ms``
     exist (a ratio needs both). ``sig`` is ``PRESENT`` if a measured branch is anomalous, ``ABSENT``
     only if both branches are measured-and-normal, else UNKNOWN. Records are duck-typed on
-    ``service`` / ``value`` / ``ts`` / ``metric``."""
-    inc: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
-    base: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+    ``service`` / ``value`` / ``ts`` / ``metric`` (and optionally ``attributes``).
+
+    Each branch is reduced **per series** — ``(service, metric, series_key(attributes))`` (#209 M2b) —
+    never averaged across the series of one instrument (per route, per replica, …): a branch is
+    anomalous if **any** series is, and measured-normal only if **every** series is measured and
+    normal. Samples without recorded identity form one series per ``(service, metric)``, so for them
+    this is exactly the single-series computation."""
+    from src.core.rca.metric_series import series_key
+
+    inc: dict[str, dict[tuple, list[float]]] = defaultdict(lambda: defaultdict(list))
+    base: dict[str, dict[tuple, list[float]]] = defaultdict(lambda: defaultdict(list))
     for s in samples:
         if s.service is None or s.value is None or s.ts is None:
             continue
         bucket = inc if s.ts >= window_start else base
-        bucket[s.service][s.metric].append(float(s.value))
+        bucket[s.service][(s.metric, series_key(getattr(s, "attributes", None)))].append(float(s.value))
 
     def mean(xs: list[float]) -> float:
         return sum(xs) / len(xs) if xs else 0.0
@@ -113,31 +120,34 @@ def summarize_metrics(samples: list, window_start: datetime) -> dict[str, Servic
 
     signals: dict[str, ServiceSignal] = {}
     for svc in sorted(set(inc) | set(base)):
-        inc_err = inc[svc].get("error_rate", [])
-        inc_lat = inc[svc].get("latency_ms", [])
-        base_lat = base[svc].get("latency_ms", [])
-        base_lat_mean = mean(base_lat)
-
+        keys = set(inc[svc]) | set(base[svc])
         # Validate every RAW sample, not just the aggregate — an in-range mean does not prove valid
         # inputs (e.g. incident latency [-10, 30] averages to a normal-looking 10). Any malformed
-        # sample leaves that branch UNKNOWN (unmeasured), never averaged into false-normal evidence.
-        # A rate must be finite in [0,1]; a latency needs valid non-negative incident + positive
-        # baseline samples (30/0 is UNKNOWN, not normal).
-        error_measured = bool(inc_err) and all_valid_rates(inc_err)
-        latency_measured = (
-            bool(inc_lat) and all_nonneg(inc_lat)
-            and bool(base_lat) and all_nonneg(base_lat) and base_lat_mean > 0
-        )
-        err = mean(inc_err)
-        ratio = mean(inc_lat) / base_lat_mean if latency_measured else 1.0
+        # sample leaves that series unmeasured, never averaged into false-normal evidence. A rate must
+        # be finite in [0,1]; a latency needs valid non-negative incident + positive baseline samples
+        # (30/0 is UNKNOWN, not normal).
+        err_series: list[tuple[bool, float]] = []  # (measured, rate)
+        for key in sorted(k for k in keys if k[0] == "error_rate"):
+            xs = inc[svc].get(key, [])
+            err_series.append((bool(xs) and all_valid_rates(xs), mean(xs)))
+        lat_series: list[tuple[bool, float]] = []  # (measured, ratio)
+        for key in sorted(k for k in keys if k[0] == "latency_ms"):
+            ix, bx = inc[svc].get(key, []), base[svc].get(key, [])
+            ok = bool(ix) and all_nonneg(ix) and bool(bx) and all_nonneg(bx) and mean(bx) > 0
+            lat_series.append((ok, mean(ix) / mean(bx) if ok else 1.0))
 
-        error_present = error_measured and discretize_rate(err) == State.PRESENT
-        latency_high = latency_measured and discretize_ratio(ratio) == State.HIGH
-        if error_present or latency_high:          # a measured branch proves the anomaly
+        err_hit = [r for m, r in err_series if m and discretize_rate(r) == State.PRESENT]
+        lat_hit = [r for m, r in lat_series if m and discretize_ratio(r) == State.HIGH]
+        error_measured = bool(err_series) and all(m for m, _ in err_series)
+        latency_measured = bool(lat_series) and all(m for m, _ in lat_series)
+        err = max(err_hit) if err_hit else max((r for m, r in err_series if m), default=0.0)
+        ratio = max(lat_hit) if lat_hit else max((r for m, r in lat_series if m), default=1.0)
+
+        if err_hit or lat_hit:                     # a measured series proves the anomaly
             sig_state: Optional[str] = State.PRESENT
-        elif error_measured and latency_measured:  # both measured and normal -> proven absent
+        elif error_measured and latency_measured:  # every series measured and normal -> proven absent
             sig_state = State.ABSENT
-        else:                                       # some branch unmeasured, nothing proves present
+        else:                                       # some series unmeasured, nothing proves present
             sig_state = None
         signals[svc] = ServiceSignal(svc, err, ratio, error_measured, latency_measured, sig_state)
     return signals
@@ -434,43 +444,61 @@ def _counter_rate(points: list[tuple[datetime, float]]) -> Optional[float]:
     return (points[-1][1] - points[0][1]) / dt if dt > 0 else None
 
 
-def _series_key(attributes) -> Optional[str]:
-    """Canonical series identity of a sample, or ``None`` when the source never recorded it."""
-    if attributes is None:
-        return None
-    return json.dumps(attributes, sort_keys=True, default=str)
-
-
 def _instrument(metric_type: Optional[str]) -> str:
     """``MetricSample`` convention: a null ``metric_type`` is a gauge."""
     return metric_type or "gauge"
+
+
+def _measure_series(points: list[tuple[datetime, float]], required: str,
+                    window_start: datetime) -> tuple[Optional[str], float, bool]:
+    """``(state, ratio, measured)`` for ONE fully identified series (a single instance of a single mode)."""
+    values = sorted(points)
+    base = [p for p in values if p[0] < window_start]
+    inc = [p for p in values if p[0] >= window_start]
+    ok = (len({t for t, _ in values}) == len(values)             # no timestamp collision in a series
+          and all(math.isfinite(v) and v >= 0 for _, v in values)  # well-formed
+          and bool(base) and bool(inc))
+    ratio, measured = 1.0, False
+    if ok and required == "gauge":
+        bmean = _mean([v for _, v in base])
+        if bmean > 0:
+            ratio, measured = _mean([v for _, v in inc]) / bmean, True
+    elif ok:  # counter: a decrease inside the series is a reset -> not rated
+        no_reset = all(b >= a for (_, a), (_, b) in zip(values, values[1:]))
+        rb, ri = _counter_rate(base), _counter_rate(inc)
+        if no_reset and rb is not None and rb > 0 and ri is not None:
+            ratio, measured = ri / rb, True
+    if not measured:
+        return None, ratio, False
+    return (State.PRESENT if discretize_ratio(ratio) == State.HIGH else State.ABSENT), ratio, True
 
 
 def summarize_utilization(samples: list, window_start: datetime) -> dict[tuple[str, str], UtilSignal]:
     """Per ``(service, resource)`` utilization observable from metric-sample records (#209 M2b), duck-typed
     on ``service`` / ``metric`` / ``value`` / ``ts`` / ``metric_type`` / ``attributes``.
 
-    **A measurement requires one verified series.** A metric's samples form a series only when the
-    source recorded series identity (``attributes`` — datapoint attributes such as ``cpu.mode`` plus
-    the reporting instance). A metric is **measured only if** every one of its samples carries identity,
-    they all belong to **exactly one** series, no two samples share a timestamp, and the declared
-    instrument (``metric_type``) is the one the reducer requires. Otherwise it is UNKNOWN:
+    **A measurement requires fully identified series** (see :mod:`src.core.rca.metric_series`). For one
+    ``(service, metric)``, the metric is UNKNOWN — never a measured ABSENT — unless:
 
-    * no identity — the samples cannot be told apart, so a per-state instrument
-      (``system.cpu.utilization`` per ``cpu.mode``, ``system.memory.utilization`` per state) or several
-      reporting instances would be averaged (or, after a lossy ingest, reduced to whichever row landed
-      first) into a number that is not one resource's utilization — never emitted as ABSENT;
-    * several series — there are no per-mode semantics yet, so the reducer neither averages nor picks;
-    * wrong instrument — a ``*.cpu.time`` that is not declared a cumulative counter is not rated.
+    * every sample carries recorded identity (``attributes`` is not None);
+    * every sample **names its reporting instance** (``service.instance.id``, ``k8s.pod.uid``,
+      ``container.id``, or ``host.name`` + ``process.pid``) — an empty or instance-less identity cannot
+      tell two replicas apart, so they would be blended (a calm replica plus a pegged one reading as
+      normal);
+    * all samples share **one datapoint signature** — several signatures are several *modes* of the
+      instrument (``cpu.mode`` idle/user, ``system.memory.state`` used/free) whose direction differs,
+      and there are no per-mode semantics yet, so the reducer neither averages nor picks;
+    * the declared instrument (``metric_type``) is the one the reducer needs (gauge; cumulative counter
+      for ``*.cpu.time``) — the name gives the resource, never the instrument.
 
-    Reducers: a **gauge** compares incident mean / baseline mean (periodic aggregates; every raw value
-    finite and ≥ 0, baseline mean > 0); a **counter** compares incident rate / baseline rate, and a
-    decrease inside the series is a **reset**, so that series is UNKNOWN. Unattributed samples
-    (``service`` None) and self-telemetry contribute nothing.
+    Under one mode, each named instance is its own series, measured separately (:func:`_measure_series`:
+    gauge incident/baseline mean ratio, or counter incident/baseline rate ratio with reset detection; no
+    timestamp collisions). The metric is PRESENT if **any** instance is saturated (ratio ≥ 2×), ABSENT
+    only if **every** instance is measured and below, else UNKNOWN. A utilization *drop* is ABSENT (not
+    saturated). Unattributed samples (``service`` None) and self-telemetry contribute nothing. The
+    ``(service, resource)`` signal takes the witness metric (PRESENT > ABSENT > UNKNOWN)."""
+    from src.core.rca.metric_series import datapoint_signature, instance_identity
 
-    Per metric: PRESENT if ratio ≥ 2× (``discretize_ratio`` HIGH), ABSENT if measured and below, else
-    UNKNOWN. The ``(service, resource)`` signal takes the witness (PRESENT > ABSENT > UNKNOWN). A
-    utilization *drop* is ABSENT (not saturated), not an anomaly."""
     groups: dict[tuple[str, str], list] = defaultdict(list)
     for s in samples:
         svc, metric = getattr(s, "service", None), getattr(s, "metric", None)
@@ -483,34 +511,25 @@ def summarize_utilization(samples: list, window_start: datetime) -> dict[tuple[s
     per_class: dict[tuple[str, str], list[tuple[Optional[str], float, bool]]] = defaultdict(list)
     for (svc, metric), rows in groups.items():
         resource, required = util_metric_class(metric)
-        keys = {_series_key(getattr(r, "attributes", None)) for r in rows}
-        values = [(r.ts, float(r.value)) for r in rows]
-        single_series = None not in keys and len(keys) == 1
-        distinct_ts = len({t for t, _ in values}) == len(values)
-        right_instrument = all(_instrument(getattr(r, "metric_type", None)) == required for r in rows)
-        well_formed = all(math.isfinite(v) and v >= 0 for _, v in values)
-        base = sorted(p for p in values if p[0] < window_start)
-        inc = sorted(p for p in values if p[0] >= window_start)
-
-        ratio, measured = 1.0, False
-        if single_series and distinct_ts and right_instrument and well_formed and base and inc:
-            if required == "gauge":
-                bmean = _mean([v for _, v in base])
-                if bmean > 0:
-                    ratio, measured = _mean([v for _, v in inc]) / bmean, True
-            else:
-                pts = sorted(values)
-                no_reset = all(b >= a for (_, a), (_, b) in zip(pts, pts[1:]))
-                rb, ri = _counter_rate(base), _counter_rate(inc)
-                if no_reset and rb is not None and rb > 0 and ri is not None:
-                    ratio, measured = ri / rb, True
-        if not measured:
-            state: Optional[str] = None
-        elif discretize_ratio(ratio) == State.HIGH:
-            state = State.PRESENT
+        attrs = [getattr(r, "attributes", None) for r in rows]
+        instances = [instance_identity(a) for a in attrs]
+        identified = (all(a is not None for a in attrs) and None not in instances
+                      and len({datapoint_signature(a) for a in attrs}) == 1
+                      and all(_instrument(getattr(r, "metric_type", None)) == required for r in rows))
+        if not identified:
+            per_class[(svc, resource)].append((None, 1.0, False))
+            continue
+        by_instance: dict[str, list[tuple[datetime, float]]] = defaultdict(list)
+        for r, inst in zip(rows, instances):
+            by_instance[inst].append((r.ts, float(r.value)))
+        results = [_measure_series(pts, required, window_start) for _, pts in sorted(by_instance.items())]
+        hit = [x for x in results if x[0] == State.PRESENT]
+        if hit:
+            per_class[(svc, resource)].append(max(hit, key=lambda x: x[1]))
+        elif all(m for _, _, m in results):
+            per_class[(svc, resource)].append((State.ABSENT, max(x[1] for x in results), True))
         else:
-            state = State.ABSENT
-        per_class[(svc, resource)].append((state, ratio, measured))
+            per_class[(svc, resource)].append((None, 1.0, False))
 
     out: dict[tuple[str, str], UtilSignal] = {}
     for (svc, resource), metrics in sorted(per_class.items()):

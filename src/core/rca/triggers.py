@@ -136,13 +136,19 @@ def metric_anomaly_onsets(
     """Earliest per-(service, metric) deviation from baseline, as onset candidates.
 
     ``samples`` are duck-typed rows with ``service`` / ``metric`` / ``value`` /
-    ``ts``. Baseline = points with ``ts < incident_start`` (needs ``min_baseline``
+    ``ts`` (and optionally ``attributes``). A series is ``(service, metric,
+    series_key(attributes))`` (#209 M2b): several series of one instrument (per
+    ``cpu.mode``, per replica, …) are detected separately, never averaged into a
+    flat line; samples without recorded identity form one series per
+    ``(service, metric)``, as before. Baseline = points with ``ts < incident_start`` (needs ``min_baseline``
     of them); a point in ``[incident_start, incident_end]`` is anomalous when it is
     more than ``z_threshold`` baseline sigmas from the baseline mean, or — when the
     baseline is flat (sigma ~ 0) — more than ``rel_threshold`` of |mean| away. The
     earliest anomalous point per series is its onset; ranked by earliness x
     magnitude. This surfaces the injection time on faults that never log.
     """
+    from src.core.rca.metric_series import series_key
+
     baseline: dict[tuple, list[float]] = {}
     incident: dict[tuple, list[tuple[datetime, float]]] = {}
     for m in samples:
@@ -152,7 +158,7 @@ def metric_anomaly_onsets(
         value = getattr(m, "value", None)
         if metric is None or ts is None or value is None:
             continue
-        key = (service, metric)
+        key = (service, metric, series_key(getattr(m, "attributes", None)))
         if ts < incident_start:
             baseline.setdefault(key, []).append(float(value))
         elif incident_start <= ts <= incident_end:
