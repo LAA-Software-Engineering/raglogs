@@ -41,8 +41,9 @@ FULL_ARM = "M2a+M2b"
 
 # Pre-registered on #209 (M3 protocol), from the otel-fresh results; fixed before capture.
 TRUTH_RETAINED_MIN = 0.50       # cause-has-telemetry truth retained (M2a's trace-only ceiling)
-CANDIDATE_FRACTION_MAX = 0.33   # median |candidates| / |services| over positives that returned any
-HEALTHY_ABSTENTION_MIN = 0.58   # healthy windows with no localization claim (7/12 on otel-fresh)
+CANDIDATE_FRACTION_MAX = 0.33   # median |localization| / |services| over GENERATED positives (empty = 0); literal
+HEALTHY_ABSTENTION_MIN = 0.58   # healthy windows with NO HYPOTHESIS GENERATED (7/12 on otel-fresh);
+                                # not the ungated healthy_no_claim, which also counts NO_COMPATIBLE
 MIN_HEALTHY_NEGATIVES = 12
 # Positives whose cause is a resource fault — the cases M2b exists to recover.
 RESOURCE_FAULT_SCENARIOS = ("adHighCpu", "recommendationCpuStress")

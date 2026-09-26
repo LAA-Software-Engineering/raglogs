@@ -47,6 +47,27 @@ def corpus_hash(cases_dir: Path) -> str:
     return h.hexdigest()
 
 
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def load_artifacts(ranker: str, calibrator: str) -> dict | str:
+    """Resolve and load the ranker + calibrator with the product loaders. Returns provenance (absolute
+    paths, sha256, ``*_loaded``) or, if either fails to load, the reason to refuse the run."""
+    from src.core.rca.calibration import load_calibrator
+    from src.core.rca.ranker import load_ranker
+
+    out: dict = {}
+    for name, raw, loader in (("ranker", ranker, load_ranker), ("calibrator", calibrator, load_calibrator)):
+        path = Path(raw).resolve()
+        if loader(str(path)) is None:
+            return f"{name} artifact {path} did not load (missing or unparseable); the default path would fall back"
+        out[name] = str(path)
+        out[f"{name}_sha256"] = _sha256(path)
+        out[f"{name}_loaded"] = True
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cases", type=Path, help="captured case directory (one sub-dir per case)")
@@ -64,13 +85,22 @@ def main() -> int:
               "(--allow-dirty for a non-canonical run)", file=sys.stderr)
         return 2
 
-    # The default explain path as pre-registered: learned ranker + rare_event trigger.
+    # The default explain path as pre-registered: learned ranker + rare_event trigger. The product
+    # loaders fail open (None -> volume selector / ordinal confidence), which on a one-shot run would
+    # be a false result, so both artifacts must load here or the run is refused before any DB work.
+    artifacts = load_artifacts(args.ranker, args.calibrator)
+    if isinstance(artifacts, str):
+        print(f"refusing: {artifacts}", file=sys.stderr)
+        return 2
     os.environ["TRIGGER_MODE"] = "rare_event"
-    os.environ["RCA_RANKER_MODEL_PATH"] = args.ranker
-    os.environ["RCA_CALIBRATOR_MODEL_PATH"] = args.calibrator
+    os.environ["RCA_RANKER_MODEL_PATH"] = artifacts["ranker"]
+    os.environ["RCA_CALIBRATOR_MODEL_PATH"] = artifacts["calibrator"]
     from src.config import reload_settings
 
     settings = reload_settings()
+    if settings.trigger_mode != "rare_event" or settings.rca_ranker_model_path != artifacts["ranker"]:
+        print("refusing: settings did not take the pre-registered trigger mode / ranker path", file=sys.stderr)
+        return 2
 
     from sqlalchemy import text
 
@@ -92,8 +122,7 @@ def main() -> int:
         "corpus_sha256": corpus_hash(args.cases),
         "n_cases": len(cases),
         "trigger_mode": settings.trigger_mode,
-        "ranker": args.ranker,
-        "calibrator": args.calibrator,
+        **artifacts,
     }
 
     with get_db() as db:
@@ -119,7 +148,9 @@ def main() -> int:
 
     md = render_markdown(report, provenance=provenance)
     r = default["raglogs"]
-    md += ("\n**Default path (learned ranker + rare_event):** "
+    heading = ("learned ranker + rare_event" if provenance.get("ranker_loaded")
+               else "RANKER NOT LOADED — volume selector")
+    md += (f"\n**Default path ({heading}):** "
            + ", ".join(f"{k}={r[k]}" for k in sorted(r) if not isinstance(r[k], (dict, list)))
            + f"\n\nLift over baseline: {default['lift_over_baseline']}\n")
     args.md.write_text(md)
