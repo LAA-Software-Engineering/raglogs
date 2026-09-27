@@ -199,7 +199,7 @@ def summarize_arm(cases: list[CaseEval], arm: str) -> dict:
         "median_candidates": statistics.median([len(c.arms[arm].localization) for c in generated])
         if generated else None,
         "median_candidate_fraction": None if fraction is None else float(fraction),
-        "median_candidate_fraction_exact": None if fraction is None else f"{fraction.numerator}/{fraction.denominator}",
+        "median_candidate_fraction_exact": _ratio(fraction),
         "negatives": len(neg),
         "healthy_abstained": [sum(not c.arms[arm].generated for c in neg), len(neg)],
         "healthy_abstention_rate": _rate(sum(not c.arms[arm].generated for c in neg), len(neg)),
@@ -242,7 +242,8 @@ def decide(cases: list[CaseEval]) -> dict:
     abstention = full["healthy_abstention_rate"]
     criteria = {
         "truth_retained_cause_has_telemetry": [retained, TRUTH_RETAINED_MIN, ">="],
-        "median_candidate_fraction": [full["median_candidate_fraction"], str(CANDIDATE_FRACTION_MAX), "<="],
+        # the operands the gate compares: the exact median ratio against the exact bound
+        "median_candidate_fraction": [_ratio(fraction), _ratio(CANDIDATE_FRACTION_MAX), "<="],
         "healthy_abstention": [abstention, HEALTHY_ABSTENTION_MIN, ">="],
     }
     if retained is None or abstention is None:
@@ -313,6 +314,16 @@ def _frac(pair: list) -> str:
     return f"{k}/{n}" + (f" ({k / n:.0%})" if n else "")
 
 
+def _ratio(v: Optional[Fraction]) -> Optional[str]:
+    """An exact ratio as ``"n/d"`` — the form the gate compares and the post prints."""
+    return None if v is None else f"{v.numerator}/{v.denominator}"
+
+
+def _exact(v: Optional[str]) -> str:
+    """Print an exact ``"n/d"`` ratio with its decimal beside it, never the rounded decimal alone."""
+    return "n/a" if v is None else f"{v} (≈{float(Fraction(v)):.4f})"
+
+
 def _num(v: Optional[float]) -> str:
     return "n/a" if v is None else f"{v:.2f}"
 
@@ -324,7 +335,8 @@ def render_markdown(report: dict, *, provenance: dict) -> str:
     v = report["verdicts"]
     lines += ["", f"**Generalization:** `{v['generalization']}` · **M2b:** `{v['m2b']}`", ""]
     for name, (value, bound, op) in v["generalization_criteria"].items():
-        lines.append(f"- {name}: {_num(value)} (pre-registered {op} {bound})")
+        shown = _exact(value) if isinstance(value, str) else _num(value)
+        lines.append(f"- {name}: {shown} (pre-registered {op} {bound})")
     if v["protocol_deviations"]:
         lines += ["", "**Protocol deviations:** " + "; ".join(v["protocol_deviations"])]
     lines += ["", "| metric | " + " | ".join(ARMS) + " |", "|---|" + "---|" * len(ARMS)]
@@ -333,7 +345,7 @@ def render_markdown(report: dict, *, provenance: dict) -> str:
         ("truth retained (all)", lambda a: _frac(a["truth_retained_all"])),
         ("truth retained (cause has telemetry)", lambda a: _frac(a["truth_retained_cause_has_telemetry"])),
         ("median candidates", lambda a: str(a["median_candidates"])),
-        ("median candidate fraction", lambda a: _num(a["median_candidate_fraction"])),
+        ("median candidate fraction", lambda a: _exact(a["median_candidate_fraction_exact"])),
         ("healthy abstention (no hypothesis)", lambda a: _frac(a["healthy_abstained"])),
         ("healthy no localization claim", lambda a: _frac(a["healthy_no_claim"])),
         ("IDENTIFIED precision", lambda a: f"{a['identified_precision'][0]}/{a['identified_precision'][1]}"),

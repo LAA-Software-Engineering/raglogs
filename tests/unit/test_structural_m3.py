@@ -3,6 +3,7 @@
 The arms are nested views of one set of inputs (M1 ⊂ M2a ⊂ M2a+M2b); each family must recover exactly
 the fault it exists for, and the verdicts must apply the thresholds frozen in the M3 protocol."""
 from datetime import datetime, timedelta, timezone
+from fractions import Fraction
 
 import pytest
 
@@ -218,6 +219,26 @@ class TestDecisionRules:
     def test_just_above_one_third_fails_and_just_below_passes(self):
         assert self._selectivity((334, 1000), (334, 1000))["generalization"] == "does_not_generalize"
         assert self._selectivity((331, 1000), (331, 1000))["generalization"] == "generalizes"
+
+    def test_criterion_records_and_posts_the_exact_operands(self):
+        # 1/3 and 331/1000 pass, 167/500 fails; all three round to 0.33, so the post must show the ratio
+        posts = {}
+        for k, n in ((1, 3), (331, 1000), (334, 1000)):
+            v = self._selectivity((k, n), (k, n))
+            value, bound, op = v["generalization_criteria"]["median_candidate_fraction"]
+            assert (value, bound, op) == (str(Fraction(k, n)), "1/3", "<=")
+            md = render_markdown({**build_m3_report([]), "verdicts": v}, provenance={})
+            posts[value] = next(line for line in md.splitlines() if line.startswith("- median_candidate_fraction"))
+        assert len(set(posts.values())) == 3
+        assert posts["1/3"].startswith("- median_candidate_fraction: 1/3 (≈0.3333)")
+        assert posts["167/500"].startswith("- median_candidate_fraction: 167/500 (≈0.3340)")
+
+    def test_selectivity_row_prints_the_exact_ratio(self):
+        cases = [_case("otel_a", "a", n_loc=1, n_services=4), _case("otel_b", "b", n_loc=5, n_services=12),
+                 *[_healthy(i) for i in range(MIN_HEALTHY_NEGATIVES)]]
+        md = render_markdown(build_m3_report(cases), provenance={})
+        row = next(line for line in md.splitlines() if line.startswith("| median candidate fraction"))
+        assert row.count("1/3 (≈0.3333)") == len(ARMS)
 
     def test_exact_median_is_reported(self):
         arm = summarize_arm([_case("otel_a", "a", n_loc=1, n_services=4), _case("otel_b", "b", n_loc=5,
