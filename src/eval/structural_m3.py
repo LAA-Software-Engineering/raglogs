@@ -21,6 +21,7 @@ Pure: no DB. ``scripts/eval/m3_structural.py`` ingests a corpus and feeds rows i
 from __future__ import annotations
 
 import statistics
+from fractions import Fraction
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -41,7 +42,9 @@ FULL_ARM = "M2a+M2b"
 
 # Pre-registered on #209 (M3 protocol), from the otel-fresh results; fixed before capture.
 TRUTH_RETAINED_MIN = 0.50       # cause-has-telemetry truth retained (M2a's trace-only ceiling)
-CANDIDATE_FRACTION_MAX = 0.33   # median |localization| / |services| over GENERATED positives (empty = 0); literal
+# median |localization| / |services| over GENERATED positives (empty = 0), compared in exact rational
+# arithmetic. Amended before capture from the rounded "0.33" (#209): otel-fresh M1 is exactly 1/3.
+CANDIDATE_FRACTION_MAX = Fraction(1, 3)
 HEALTHY_ABSTENTION_MIN = 0.58   # healthy windows with NO HYPOTHESIS GENERATED (7/12 on otel-fresh);
                                 # not the ungated healthy_no_claim, which also counts NO_COMPATIBLE
 MIN_HEALTHY_NEGATIVES = 12
@@ -170,13 +173,21 @@ def _rate(k: int, n: int) -> Optional[float]:
     return k / n if n else None
 
 
+def median_candidate_fraction(cases: list[CaseEval], arm: str) -> Optional[Fraction]:
+    """Exact median of |localization| / |services| over generated positives — a ratio of integers, so the
+    ``<= 1/3`` gate is never decided by float rounding."""
+    fractions = [Fraction(len(c.arms[arm].localization), max(c.n_services, 1))
+                 for c in cases if c.positive and c.arms[arm].generated]
+    return statistics.median(fractions) if fractions else None
+
+
 def summarize_arm(cases: list[CaseEval], arm: str) -> dict:
     """The pre-registered per-arm metrics."""
     pos = [c for c in cases if c.positive]
     neg = [c for c in cases if not c.positive]
     pos_tel = [c for c in pos if c.cause_has_telemetry]
     generated = [c for c in pos if c.arms[arm].generated]
-    fractions = [len(c.arms[arm].localization) / max(c.n_services, 1) for c in generated]
+    fraction = median_candidate_fraction(cases, arm)
     identified = [c for c in cases if c.arms[arm].outcome == "identified"]
     ident_correct = [c for c in identified if c.positive and c.arms[arm].localization == (c.cause,)]
     return {
@@ -187,7 +198,8 @@ def summarize_arm(cases: list[CaseEval], arm: str) -> dict:
         "truth_retained_cause_has_telemetry_rate": _rate(sum(c.retained(arm) for c in pos_tel), len(pos_tel)),
         "median_candidates": statistics.median([len(c.arms[arm].localization) for c in generated])
         if generated else None,
-        "median_candidate_fraction": statistics.median(fractions) if fractions else None,
+        "median_candidate_fraction": None if fraction is None else float(fraction),
+        "median_candidate_fraction_exact": _ratio(fraction),
         "negatives": len(neg),
         "healthy_abstained": [sum(not c.arms[arm].generated for c in neg), len(neg)],
         "healthy_abstention_rate": _rate(sum(not c.arms[arm].generated for c in neg), len(neg)),
@@ -226,11 +238,12 @@ def decide(cases: list[CaseEval]) -> dict:
     """Apply the pre-registered decision rules to the frozen model (the full arm)."""
     full = summarize_arm(cases, FULL_ARM)
     retained = full["truth_retained_cause_has_telemetry_rate"]
-    fraction = full["median_candidate_fraction"]
+    fraction = median_candidate_fraction(cases, FULL_ARM)  # exact, for the gate
     abstention = full["healthy_abstention_rate"]
     criteria = {
         "truth_retained_cause_has_telemetry": [retained, TRUTH_RETAINED_MIN, ">="],
-        "median_candidate_fraction": [fraction, CANDIDATE_FRACTION_MAX, "<="],
+        # the operands the gate compares: the exact median ratio against the exact bound
+        "median_candidate_fraction": [_ratio(fraction), _ratio(CANDIDATE_FRACTION_MAX), "<="],
         "healthy_abstention": [abstention, HEALTHY_ABSTENTION_MIN, ">="],
     }
     if retained is None or abstention is None:
@@ -301,6 +314,16 @@ def _frac(pair: list) -> str:
     return f"{k}/{n}" + (f" ({k / n:.0%})" if n else "")
 
 
+def _ratio(v: Optional[Fraction]) -> Optional[str]:
+    """An exact ratio as ``"n/d"`` — the form the gate compares and the post prints."""
+    return None if v is None else f"{v.numerator}/{v.denominator}"
+
+
+def _exact(v: Optional[str]) -> str:
+    """Print an exact ``"n/d"`` ratio with its decimal beside it, never the rounded decimal alone."""
+    return "n/a" if v is None else f"{v} (≈{float(Fraction(v)):.4f})"
+
+
 def _num(v: Optional[float]) -> str:
     return "n/a" if v is None else f"{v:.2f}"
 
@@ -312,7 +335,8 @@ def render_markdown(report: dict, *, provenance: dict) -> str:
     v = report["verdicts"]
     lines += ["", f"**Generalization:** `{v['generalization']}` · **M2b:** `{v['m2b']}`", ""]
     for name, (value, bound, op) in v["generalization_criteria"].items():
-        lines.append(f"- {name}: {_num(value)} (pre-registered {op} {bound})")
+        shown = _exact(value) if isinstance(value, str) else _num(value)
+        lines.append(f"- {name}: {shown} (pre-registered {op} {bound})")
     if v["protocol_deviations"]:
         lines += ["", "**Protocol deviations:** " + "; ".join(v["protocol_deviations"])]
     lines += ["", "| metric | " + " | ".join(ARMS) + " |", "|---|" + "---|" * len(ARMS)]
@@ -321,7 +345,7 @@ def render_markdown(report: dict, *, provenance: dict) -> str:
         ("truth retained (all)", lambda a: _frac(a["truth_retained_all"])),
         ("truth retained (cause has telemetry)", lambda a: _frac(a["truth_retained_cause_has_telemetry"])),
         ("median candidates", lambda a: str(a["median_candidates"])),
-        ("median candidate fraction", lambda a: _num(a["median_candidate_fraction"])),
+        ("median candidate fraction", lambda a: _exact(a["median_candidate_fraction_exact"])),
         ("healthy abstention (no hypothesis)", lambda a: _frac(a["healthy_abstained"])),
         ("healthy no localization claim", lambda a: _frac(a["healthy_no_claim"])),
         ("IDENTIFIED precision", lambda a: f"{a['identified_precision'][0]}/{a['identified_precision'][1]}"),
